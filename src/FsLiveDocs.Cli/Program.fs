@@ -18,6 +18,7 @@ type Arguments =
     | [<CliPrefix(CliPrefix.None)>] Test of projectPath:string
     | [<CliPrefix(CliPrefix.None)>] Build of projectPath:string
     | [<CliPrefix(CliPrefix.None)>] Watch of projectPath:string
+    | [<CliPrefix(CliPrefix.None)>] Theme of string
     interface IArgParserTemplate with
         member s.Usage =
             match s with
@@ -27,15 +28,16 @@ type Arguments =
             | Test _ -> "Run all verified docstrings and snippets."
             | Build _ -> "Render the final static site."
             | Watch _ -> "Start a dev server with file watching."
+            | Theme _ -> "Set the visual theme (default: light)."
 
 module Program =
 
-    let buildAction (projectPath: string) =
+    let buildAction (projectPath: string) (theme: string) =
         AnsiConsole.Status().Start("Building site...", fun ctx ->
             let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
             let pages = ContentProvider.scanDocs "docs" (Path.GetDirectoryName(projectPath)) package
             if not (Directory.Exists(".livedocs/history")) then Directory.CreateDirectory(".livedocs/history") |> ignore
-            SiteBuilder.buildAll ".livedocs/history" package pages "output"
+            SiteBuilder.buildAll ".livedocs/history" package pages theme "output"
             
             try
                 let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
@@ -52,6 +54,7 @@ module Program =
         let parser = ArgumentParser.Create<Arguments>(programName = "livedocs")
         try
             let results = parser.Parse(args)
+            let theme = results.GetResult(Theme, defaultValue = "light")
             
             if results.Contains Init then
                 AnsiConsole.MarkupLine("[green]Initializing LiveDocs...[/]")
@@ -78,7 +81,8 @@ jobs:
       - name: Build Docs
         run: |
           dotnet build
-          dotnet run --project FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj -- build YourProject.fsproj
+          ./scripts/publish.sh
+          ./artifacts/livedocs build YourProject.fsproj
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
@@ -111,18 +115,18 @@ jobs:
 
             elif results.Contains Build then
                 let projectPath = results.GetResult Build
-                buildAction projectPath
+                buildAction projectPath theme
 
             elif results.Contains Watch then
                 let projectPath = results.GetResult Watch
-                buildAction projectPath
+                buildAction projectPath theme
                 
                 let watcher = new FileSystemWatcher(Path.GetDirectoryName(projectPath))
                 watcher.IncludeSubdirectories <- true
                 watcher.EnableRaisingEvents <- true
                 watcher.Changed.Add(fun _ -> 
                     AnsiConsole.MarkupLine("[yellow]Change detected, rebuilding...[/]")
-                    try buildAction projectPath with e -> AnsiConsole.WriteException(e)
+                    try buildAction projectPath theme with e -> AnsiConsole.WriteException(e)
                 )
 
                 let builder = WebApplication.CreateBuilder()
