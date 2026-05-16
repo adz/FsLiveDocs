@@ -12,10 +12,18 @@ type ExampleModel = {
     Scenario: string option
 }
 
+type ParameterModel = {
+    Name: string
+    Type: string
+    DescriptionHtml: string
+}
+
 type MemberModel = {
     Id: string
     Name: string
     Signature: string
+    Parameters: ParameterModel list
+    ReturnType: string
     SummaryHtml: string
     RemarksHtml: string
     Examples: ExampleModel list
@@ -31,9 +39,15 @@ type EntityModel = {
     Entities: EntityModel list
 }
 
-type PackageModel = {
-    Version: string
+type ScenarioModel = {
+    Name: string
+    MethodId: string
+}
+
+type PackageModel = { 
+    Version: string 
     Entities: EntityModel list
+    Scenarios: ScenarioModel list
 }
 
 [<CLIMutable>]

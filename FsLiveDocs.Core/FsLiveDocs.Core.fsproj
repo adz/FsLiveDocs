@@ -16,6 +16,7 @@
     <PackageReference Include="FSharp.Compiler.Service" Version="43.12.204" />
     <PackageReference Include="Markdig" Version="1.2.0" />
     <PackageReference Include="YamlDotNet" Version="17.1.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
 </Project>
