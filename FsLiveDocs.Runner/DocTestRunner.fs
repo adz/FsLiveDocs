@@ -20,7 +20,7 @@ module DocTestRunner =
             "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
             "  <PropertyGroup>\n" +
             "    <OutputType>Exe</OutputType>\n" +
-            "    <TargetFramework>net9.0</TargetFramework>\n" +
+            "    <TargetFramework>net10.0</TargetFramework>\n" +
             "  </PropertyGroup>\n" +
             "  <ItemGroup>\n" +
             "    " + refNodes + "\n" +
