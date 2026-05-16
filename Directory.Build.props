@@ -5,6 +5,6 @@
     <LangVersion>preview</LangVersion>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="FSharp.Core" Version="11.0.101-preview4.26230.115" />
+    <PackageReference Include="FSharp.Core" Version="10.1.204" />
   </ItemGroup>
 </Project>

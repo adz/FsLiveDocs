@@ -24,7 +24,7 @@ module DocTestRunner =
             "    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>\n" +
             "  </PropertyGroup>\n" +
             "  <ItemGroup>\n" +
-            "    <PackageReference Include=\"FSharp.Core\" Version=\"11.0.101-preview4.26230.115\" />\n" +
+            "    <PackageReference Include=\"FSharp.Core\" Version=\"10.1.204\" />\n" +
             "    <ProjectReference Include=\"" + Path.GetFullPath(projectPath) + "\" />\n" +
             "    " + refNodes + "\n" +
             "  </ItemGroup>\n" +
