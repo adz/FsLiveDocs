@@ -12,13 +12,21 @@ open Microsoft.AspNetCore.Hosting
 open Microsoft.Extensions.FileProviders
 open Microsoft.AspNetCore.Http
 
+/// <summary>Defines the supported command-line arguments for the livedocs tool.</summary>
 type Arguments =
+    /// <summary>Scaffolds a new LiveDocs project structure.</summary>
     | [<CliPrefix(CliPrefix.None)>] Init
+    /// <summary>Generates CI/CD templates for GitHub Actions.</summary>
     | [<CliPrefix(CliPrefix.None)>] CI
+    /// <summary>Extracts symbol metadata from projects into JSON snapshots.</summary>
     | [<CliPrefix(CliPrefix.None)>] Extract of projectPaths:string list
+    /// <summary>Runs verified code examples found in docstrings.</summary>
     | [<CliPrefix(CliPrefix.None)>] Test of projectPaths:string list
+    /// <summary>Builds the full static documentation site.</summary>
     | [<CliPrefix(CliPrefix.None)>] Build of projectPaths:string list
+    /// <summary>Starts a development server with live-rebuild capabilities.</summary>
     | [<CliPrefix(CliPrefix.None)>] Watch of projectPaths:string list
+    /// <summary>Sets the DaisyUI visual theme.</summary>
     | [<Inherit; AltCommandLine("-t")>] Theme of string
     interface IArgParserTemplate with
         member s.Usage =
@@ -31,8 +39,10 @@ type Arguments =
             | Watch _ -> "Start a dev server with file watching."
             | Theme _ -> "Set the visual theme (default: light)."
 
+/// <summary>The main entry point module for the CLI application.</summary>
 module Program =
 
+    /// <summary>Loads and merges multiple project models into a unified package.</summary>
     let getUnifiedPackage (projectPaths: string list) = async {
         let! packages = 
             projectPaths 
@@ -41,11 +51,12 @@ module Program =
         return SymbolLister.merge (Seq.toList packages)
     }
 
+    /// <summary>Orchestrates the build process for one or more projects.</summary>
     let buildAction (projectPaths: string list) (theme: string) =
         AnsiConsole.Status().Start("Building site...", fun ctx ->
             let package = getUnifiedPackage projectPaths |> Async.RunSynchronously
             let sourceDir = Directory.GetCurrentDirectory() 
-            let pages = ContentProvider.scanDocs "docs" sourceDir package
+            let pages = ContentProvider.scanDocs "docs" sourceDir package ""
             
             let historyDir = ".livedocs/history"
             if not (Directory.Exists(historyDir)) then Directory.CreateDirectory(historyDir) |> ignore
@@ -62,6 +73,7 @@ module Program =
         )
         AnsiConsole.MarkupLine("[green]Build complete: output/[/]")
 
+    /// <summary>CLI entry point.</summary>
     [<EntryPoint>]
     let main args =
         let parser = ArgumentParser.Create<Arguments>(programName = "livedocs")
@@ -85,6 +97,7 @@ module Program =
                     if not (File.Exists("docs/index.md")) then
                         File.WriteAllText("docs/index.md", "---\ntitle: Home\nweight: 1\n---\n# Welcome to FsLiveDocs\n\nEdit this file to get started.")
                     AnsiConsole.MarkupLine("[green]Done![/]")
+                    0
 
                 elif results.Contains CI then
                     AnsiConsole.MarkupLine("[green]Generating GitHub Actions workflow...[/]")
@@ -113,6 +126,7 @@ jobs:
 """
                     File.WriteAllText(".github/workflows/livedocs.yml", workflow)
                     AnsiConsole.MarkupLine("[green]Done: .github/workflows/livedocs.yml[/]")
+                    0
 
                 elif results.Contains Extract then
                     let projectPaths = results.GetResult Extract
@@ -124,9 +138,11 @@ jobs:
                         File.WriteAllText(fileName, json)
                     )
                     AnsiConsole.MarkupLine("[green]Extraction complete: .livedocs/history/[/]")
+                    0
 
                 elif results.Contains Test then
                     let projectPaths = results.GetResult Test
+                    let mutable allPassed = true
                     for projectPath in projectPaths do
                         AnsiConsole.MarkupLine($"[blue]Testing project: {projectPath}[/]")
                         AnsiConsole.Status().Start($"Running tests for {projectPath}...", fun ctx ->
@@ -134,12 +150,16 @@ jobs:
                             let results = DocTestRunner.verifyExamples package projectPath [] |> Async.RunSynchronously
                             for (name, success, output) in results do
                                 if success then AnsiConsole.MarkupLine($"  [green]PASS:[/] {Markup.Escape(name)}")
-                                else AnsiConsole.MarkupLine($"  [red]FAIL:[/] {Markup.Escape(name)} - {Markup.Escape(output)}")
+                                else 
+                                    AnsiConsole.MarkupLine($"  [red]FAIL:[/] {Markup.Escape(name)} - {Markup.Escape(output)}")
+                                    allPassed <- false
                         )
+                    if allPassed then 0 else 1
 
                 elif results.Contains Build then
                     let projectPaths = results.GetResult Build
                     buildAction projectPaths theme
+                    0
 
                 elif results.Contains Watch then
                     let projectPaths = results.GetResult Watch
@@ -150,12 +170,13 @@ jobs:
                         watcher.IncludeSubdirectories <- true
                         watcher.EnableRaisingEvents <- true
                         watcher.Changed.Add(fun _ -> 
-                            AnsiConsole.MarkupLine($"[yellow]Change detected in {projectPath}, rebuilding...[/]")
+                            AnsiConsole.MarkupLine("[yellow]Change detected in {projectPath}, rebuilding...[/]")
                             try buildAction projectPaths theme with e -> AnsiConsole.WriteException(e)
                         )
 
                     let builder = WebApplication.CreateBuilder()
                     let app = builder.Build()
+                    
                     app.UseDefaultFiles() |> ignore
                     let outputDir = Path.Combine(Directory.GetCurrentDirectory(), "output")
                     app.UseStaticFiles(StaticFileOptions(
@@ -173,10 +194,11 @@ jobs:
 
                     AnsiConsole.MarkupLine("[blue]Starting dev server at http://localhost:5000[/]")
                     app.Run("http://localhost:5000")
+                    0
                 
                 else 
                     printUsage (Some "No command specified.")
-                0
+                    0
             with 
             | :? ArguParseException as e ->
                 AnsiConsole.WriteLine(e.Message)

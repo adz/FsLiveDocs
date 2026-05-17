@@ -12,11 +12,12 @@ PROJECTS=(
 
 echo "--- FsLiveDocs: Documentation Preview ---"
 
-# 1. Build and Publish the livedocs tool if not exists or forced
-if [ ! -f "./artifacts/livedocs" ]; then
-  echo "=> Building livedocs tool..."
-  ./scripts/publish.sh
-fi
+# Kill previous server if running
+pkill -f livedocs || true
+
+# 1. Rebuild the tool to ensure latest changes are included
+echo "=> Rebuilding livedocs tool..."
+./scripts/publish.sh
 
 # 2. Run Verification Tests
 echo "=> Verifying docstrings..."

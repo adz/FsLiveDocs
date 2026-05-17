@@ -5,8 +5,10 @@ open System.IO
 open System.Diagnostics
 open FsLiveDocs.Core
 
+/// <summary>The execution engine for verified docstrings (DocTests).</summary>
 module DocTestRunner =
 
+    /// <summary>Generates a temporary .fsproj and Program.fs to execute code examples.</summary>
     let generateTestProject (examples: ExampleModel list) (scenarios: ScenarioModel list) (projectPath: string) (references: string list) (tempDir: string) =
         let projectFile = Path.Combine(tempDir, "LiveDocs.Generated.Tests.fsproj")
         let programFile = Path.Combine(tempDir, "Program.fs")
@@ -35,7 +37,7 @@ module DocTestRunner =
             
         File.WriteAllText(projectFile, projectContent)
 
-        let testCases = 
+        let testFuncs = 
             examples 
             |> List.mapi (fun i ex -> 
                 let scenarioCall = 
@@ -46,25 +48,37 @@ module DocTestRunner =
                         | None -> ""
                     | None -> ""
                 
-                let indentedContent = 
+                let body = 
                     ex.Content.Split([|'\n'; '\r'|], StringSplitOptions.RemoveEmptyEntries) 
-                    |> Array.map (fun l -> "    " + l) 
+                    |> Array.map (fun l -> "        " + l.Trim()) 
                     |> String.concat "\n"
                 
-                sprintf "\nprintfn \"--- TEST: %s ---\"\ntry\n%s%s\n    printfn \"--- END TEST ---\"\nwith e ->\n    printfn \"ERROR: %%s\" e.Message\n    printfn \"--- END TEST ---\"\n" ex.Name scenarioCall indentedContent)
+                sprintf "let test%d () =\n%s\n    let _ =\n%s\n        ()\n    ()\n" i scenarioCall body)
             |> String.concat "\n"
 
-        let namespaces = 
+        let testCalls =
+            examples
+            |> List.mapi (fun i ex ->
+                sprintf "    printfn \"--- TEST: %s ---\"\n    try test%d() with e -> printfn \"ERROR: %%s\" e.Message\n    printfn \"--- END TEST ---\"\n" ex.Name i)
+            |> String.concat "\n"
+
+        let scenarioNamespaces = 
             scenarios |> List.map (fun s -> 
                 let lastDot = s.MethodId.LastIndexOf('.')
                 if lastDot <> -1 then s.MethodId.Substring(0, lastDot) else ""
             )
             |> List.filter (fun s -> s <> "")
+
+        // Also add the project name as a potential namespace
+        let projNamespace = Path.GetFileNameWithoutExtension(projectPath)
+        
+        let allNamespaces = 
+            projNamespace :: scenarioNamespaces
             |> List.distinct
             |> List.map (fun ns -> "open " + ns)
             |> String.concat "\n"
 
-        let programContent = "open System\n" + namespaces + "\n" + testCases
+        let programContent = sprintf "module GeneratedTests\nopen System\n%s\n\n%s\n\n[<EntryPoint>]\nlet main _ =\n%s\n    0" allNamespaces testFuncs testCalls
         File.WriteAllText(programFile, programContent)
         projectFile
 
@@ -112,7 +126,7 @@ module DocTestRunner =
                             else results <- (ex.Name, false, sprintf "Expected: %s, Actual: %s" expected actual) :: results
                         | None -> results <- (ex.Name, true, actual) :: results
                     else
-                        results <- (ex.Name, false, "Test timed out or crashed") :: results
+                        results <- (ex.Name, false, "Test crashed or timed out") :: results
                 else
                     results <- (ex.Name, false, "Test did not run. Output:\n" + output) :: results
             return List.rev results

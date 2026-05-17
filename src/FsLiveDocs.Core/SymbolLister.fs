@@ -7,19 +7,25 @@ open FSharp.Compiler.Symbols
 open FSharp.Compiler.EditorServices
 open FSharp.Compiler.Xml
 
+/// <summary>Provides capabilities to scan F# projects and extract symbols, signatures, and docstrings.</summary>
 module SymbolLister =
 
+    /// <summary>The shared compiler checker instance.</summary>
     let checker = FSharpChecker.Create(keepAssemblyContents = true)
 
+    /// <summary>Normalizes F# compiler names (removes 'Module' suffix and generic backticks).</summary>
     let normalizeName (name: string) =
         name.Replace("Module", "")
             .Replace("`1", "")
             .Replace("`2", "")
+            .Replace("`3", "")
             .Trim()
 
+    /// <summary>Formats a member signature into a readable F# string.</summary>
     let getSignature (m: FSharpMemberOrFunctionOrValue) =
         m.FullType.Format(FSharpDisplayContext.Empty)
 
+    /// <summary>Extracts parameters from a member, including their types.</summary>
     let getParameters (m: FSharpMemberOrFunctionOrValue) =
         [ for group in m.CurriedParameterGroups do
             for p in group do
@@ -30,6 +36,7 @@ module SymbolLister =
                 }
         ]
 
+    /// <summary>Extracts &lt;example&gt; tags from XML documentation for verification and transclusion.</summary>
     let extractExamples (xmlDoc: string) =
         let pattern = @"<example(?:\s+name=""(?<name>[^""]+)"")?(?:\s+scenario=""(?<scenario>[^""]+)"")?>(?<code>.*?)<\/example>"
         let matches = System.Text.RegularExpressions.Regex.Matches(xmlDoc, pattern, System.Text.RegularExpressions.RegexOptions.Singleline)
@@ -46,16 +53,31 @@ module SymbolLister =
             }
         ]
 
+    /// <summary>Extracts raw text from an FSharpXmlDoc instance.</summary>
     let getXmlText (xmlDoc: FSharpXmlDoc) =
         match xmlDoc with
         | FSharpXmlDoc.None -> ""
         | FSharpXmlDoc.FromXmlText (doc) -> 
-            doc.UnprocessedLines |> String.concat "\n"
+            try doc.UnprocessedLines |> String.concat "\n" with _ -> ""
         | _ -> ""
 
+    /// <summary>Recursively maps an FSharpEntity to an EntityModel, extracting members, fields, and scenarios.</summary>
     let rec mapEntity (e: FSharpEntity) : EntityModel * ScenarioModel list =
         let xmlDoc = getXmlText e.XmlDoc
+        
+        let introPath = Path.Combine("docs", "api", e.FullName + ".md")
+        let summary = 
+            if File.Exists(introPath) then
+                let content = File.ReadAllText(introPath)
+                if content.StartsWith("---") then
+                    let parts = content.Split([| "---" |], StringSplitOptions.RemoveEmptyEntries)
+                    if parts.Length > 1 then String.concat "---" parts.[1..] else content
+                else content
+            else xmlDoc
+
         let mutable scenarios = []
+        
+        // 1. Extract standard members
         let members = 
             e.MembersFunctionsAndValues 
             |> Seq.filter (fun m -> not m.IsCompilerGenerated)
@@ -82,7 +104,45 @@ module SymbolLister =
                     Location = { File = m.DeclarationLocation.FileName; Line = m.DeclarationLocation.StartLine }
                 }
             ) |> Seq.toList
-        
+
+        // 2. Extract record fields if any
+        let fields =
+            if e.IsFSharpRecord then
+                e.FSharpFields
+                |> Seq.map (fun f -> 
+                    {
+                        Id = e.FullName + "." + f.Name
+                        Name = f.Name
+                        Signature = f.FieldType.Format(FSharpDisplayContext.Empty)
+                        Parameters = []
+                        ReturnType = f.FieldType.Format(FSharpDisplayContext.Empty)
+                        SummaryHtml = getXmlText f.XmlDoc
+                        RemarksHtml = ""
+                        Examples = []
+                        Location = { File = f.DeclarationLocation.FileName; Line = f.DeclarationLocation.StartLine }
+                    }
+                ) |> Seq.toList
+            else []
+
+        // 3. Extract union cases if any
+        let cases =
+            if e.IsFSharpUnion then
+                e.UnionCases
+                |> Seq.map (fun c -> 
+                    {
+                        Id = e.FullName + "." + c.Name
+                        Name = c.Name
+                        Signature = c.Name // Union cases don't have a standard signature in the same way
+                        Parameters = []
+                        ReturnType = e.DisplayName
+                        SummaryHtml = getXmlText c.XmlDoc
+                        RemarksHtml = ""
+                        Examples = []
+                        Location = { File = c.DeclarationLocation.FileName; Line = c.DeclarationLocation.StartLine }
+                    }
+                ) |> Seq.toList
+            else []
+
         let nested = e.NestedEntities |> Seq.map mapEntity |> Seq.toList
         let nestedEntities = nested |> List.map fst
         let nestedScenarios = nested |> List.collect snd
@@ -90,13 +150,14 @@ module SymbolLister =
         let entity = {
             Id = e.FullName
             Name = normalizeName e.DisplayName
-            Kind = if e.IsFSharpModule then "Module" else "Type"
-            SummaryHtml = xmlDoc
-            Members = members
+            Kind = if e.IsFSharpModule then "Module" elif e.IsFSharpRecord then "Record" elif e.IsFSharpUnion then "Union" else "Type"
+            SummaryHtml = summary
+            Members = members @ fields @ cases
             Entities = nestedEntities
         }
         entity, scenarios @ nestedScenarios
 
+    /// <summary>Walks through all implementation file declarations to find entities and scenarios.</summary>
     let rec walkDeclarations (decls: FSharpImplementationFileDeclaration list) =
         let mutable entities = []
         let mutable scenarios = []
@@ -112,6 +173,7 @@ module SymbolLister =
             | _ -> ()
         entities, scenarios
 
+    /// <summary>Merges multiple PackageModels into a single unified documentation model.</summary>
     let merge (packages: PackageModel list) =
         if packages.IsEmpty then 
             { Version = "0.1.0"; Entities = []; Scenarios = [] }
@@ -120,6 +182,7 @@ module SymbolLister =
               Entities = packages |> List.collect (fun p -> p.Entities)
               Scenarios = packages |> List.collect (fun p -> p.Scenarios) }
 
+    /// <summary>Scans a project file and extracts all documented symbols.</summary>
     let extractFromProject (projectPath: string) = async {
         let sourceFiles = Directory.GetFiles(Path.GetDirectoryName(projectPath), "*.fs", SearchOption.AllDirectories)
         let options : FSharpProjectOptions = {

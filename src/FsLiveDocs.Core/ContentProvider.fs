@@ -5,11 +5,16 @@ open Markdig
 open YamlDotNet.Serialization
 open YamlDotNet.Serialization.NamingConventions
 
+/// <summary>Provides capabilities to load, parse, and resolve Markdown documentation pages.</summary>
 module ContentProvider =
 
+    /// <summary>The shared Markdig pipeline with advanced extensions enabled.</summary>
     let pipeline = MarkdownPipelineBuilder().UseAdvancedExtensions().Build()
+    
+    /// <summary>The YAML deserializer for frontmatter processing.</summary>
     let deserializer = DeserializerBuilder().WithNamingConvention(CamelCaseNamingConvention.Instance).Build()
 
+    /// <summary>Helper to find the index of an element starting from a given position.</summary>
     let findIndexIteration start f (arr: 'T[]) =
         let mutable found = None
         let mutable i = start
@@ -18,6 +23,7 @@ module ContentProvider =
             i <- i + 1
         found
 
+    /// <summary>Parses the YAML frontmatter from a raw Markdown string.</summary>
     let parseFrontMatter (content: string) =
         let lines = content.Split([| "\n"; "\r\n" |], System.StringSplitOptions.None)
         if lines.Length > 0 && lines.[0] = "---" then
@@ -32,6 +38,7 @@ module ContentProvider =
         else
             None
 
+    /// <summary>Searches for a member by ID or Name within a PackageModel.</summary>
     let findMember (id: string) (package: PackageModel) =
         let rec searchEntities (entities: EntityModel list) =
             entities |> Seq.tryPick (fun e ->
@@ -41,7 +48,8 @@ module ContentProvider =
             )
         searchEntities package.Entities
 
-    let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) =
+    /// <summary>Resolves shortcodes (snippets, examples) and semantic links (xrefs) in Markdown content.</summary>
+    let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
         // 1. Resolve {{< snippet id="X" >}}
         let snippetPattern = @"{{<\s*snippet\s+id=""(?<id>[^""]+)""\s*(?:showOutput=""(?<showOutput>[^""]+)"")?\s*>}}"
         let body1 = System.Text.RegularExpressions.Regex.Replace(body, snippetPattern, fun (m: System.Text.RegularExpressions.Match) ->
@@ -65,7 +73,6 @@ module ContentProvider =
         let examplePattern = @"{{<\s*example\s+id=""(?<id>[^""]+)""\s*>}}"
         let body2 = System.Text.RegularExpressions.Regex.Replace(body1, examplePattern, fun (m: System.Text.RegularExpressions.Match) ->
             let id = m.Groups.["id"].Value
-            // Search in all members of all entities
             let rec findExample (entities: EntityModel list) =
                 entities |> Seq.tryPick (fun e ->
                     let ex = e.Members |> Seq.collect (fun m -> m.Examples) |> Seq.tryFind (fun ex -> ex.Name = id)
@@ -78,31 +85,45 @@ module ContentProvider =
             | None -> $"**Example {id} not found**"
         )
 
-        // 3. Resolve xref:M:Namespace.Type.Method
+        // 3. Resolve xref: with relative rootPath
         let xrefPattern = @"xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
         let body3 = System.Text.RegularExpressions.Regex.Replace(body2, xrefPattern, fun (m: System.Text.RegularExpressions.Match) ->
             let id = m.Groups.["id"].Value
             match findMember id package with
-            | Some mem -> $"[{mem.Name}](/api.html#{mem.Id})"
+            | Some mem -> 
+                // We point to the module/type page, not individual member pages yet
+                // Need to find the parent entity ID
+                let rec findParentId (entities: EntityModel list) parentId =
+                    entities |> Seq.tryPick (fun e ->
+                        if e.Members |> List.exists (fun m -> m.Id = id || m.Name = id) then
+                            Some e.Id
+                        else
+                            findParentId e.Entities (Some e.Id)
+                    )
+                let targetPage = defaultArg (findParentId package.Entities None) "api"
+                $"[{mem.Name}]({rootPath}api/{targetPage}.html#{mem.Id})"
             | None -> id
         )
         body3
 
-    let loadPage (filePath: string) (sourceDir: string) (package: PackageModel) =
+    /// <summary>Loads and processes a single Markdown page.</summary>
+    let loadPage (filePath: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
         let raw = File.ReadAllText(filePath)
         match parseFrontMatter raw with
         | Some (metadata, body) ->
-            let resolved = resolveSnippets body sourceDir package
+            let resolved = resolveSnippets body sourceDir package rootPath
             let html = Markdown.ToHtml(resolved, pipeline)
             { Metadata = metadata; ContentHtml = html; FilePath = filePath }
         | None ->
             let html = Markdown.ToHtml(raw, pipeline)
             { Metadata = { Title = Path.GetFileNameWithoutExtension(filePath); Weight = 0; Type = None }; ContentHtml = html; FilePath = filePath }
 
-    let scanDocs (docsDir: string) (sourceDir: string) (package: PackageModel) =
+    /// <summary>Scans the docs directory and loads all guide pages.</summary>
+    let scanDocs (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
         if Directory.Exists(docsDir) then
             Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
-            |> Array.map (fun f -> loadPage f sourceDir package)
+            |> Array.filter (fun f -> not (f.Contains("/api/")))
+            |> Array.map (fun f -> loadPage f sourceDir package rootPath)
             |> Array.toList
         else
             []
