@@ -112,6 +112,14 @@ module SymbolLister =
             | _ -> ()
         entities, scenarios
 
+    let merge (packages: PackageModel list) =
+        if packages.IsEmpty then 
+            { Version = "0.1.0"; Entities = []; Scenarios = [] }
+        else
+            { Version = (packages |> List.head).Version
+              Entities = packages |> List.collect (fun p -> p.Entities)
+              Scenarios = packages |> List.collect (fun p -> p.Scenarios) }
+
     let extractFromProject (projectPath: string) = async {
         let sourceFiles = Directory.GetFiles(Path.GetDirectoryName(projectPath), "*.fs", SearchOption.AllDirectories)
         let options : FSharpProjectOptions = {

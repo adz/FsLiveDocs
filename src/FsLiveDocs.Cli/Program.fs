@@ -14,28 +14,38 @@ open Microsoft.Extensions.FileProviders
 type Arguments =
     | [<CliPrefix(CliPrefix.None)>] Init
     | [<CliPrefix(CliPrefix.None)>] CI
-    | [<CliPrefix(CliPrefix.None)>] Extract of projectPath:string
-    | [<CliPrefix(CliPrefix.None)>] Test of projectPath:string
-    | [<CliPrefix(CliPrefix.None)>] Build of projectPath:string
-    | [<CliPrefix(CliPrefix.None)>] Watch of projectPath:string
+    | [<CliPrefix(CliPrefix.None)>] Extract of projectPaths:string list
+    | [<CliPrefix(CliPrefix.None)>] Test of projectPaths:string list
+    | [<CliPrefix(CliPrefix.None)>] Build of projectPaths:string list
+    | [<CliPrefix(CliPrefix.None)>] Watch of projectPaths:string list
     | [<Inherit; AltCommandLine("-t")>] Theme of string
     interface IArgParserTemplate with
         member s.Usage =
             match s with
             | Init -> "Scaffold a new LiveDocs project."
             | CI -> "Generate CI/CD templates (GitHub Actions)."
-            | Extract _ -> "Extract symbols and docstrings into a JSON blob."
-            | Test _ -> "Run all verified docstrings and snippets."
-            | Build _ -> "Render the final static site."
+            | Extract _ -> "Extract symbols from one or more projects into a JSON blob."
+            | Test _ -> "Run all verified docstrings and snippets for the given projects."
+            | Build _ -> "Render the final static site for the given projects."
             | Watch _ -> "Start a dev server with file watching."
             | Theme _ -> "Set the visual theme (default: light)."
 
 module Program =
 
-    let buildAction (projectPath: string) (theme: string) =
+    let getUnifiedPackage (projectPaths: string list) = async {
+        let! packages = 
+            projectPaths 
+            |> List.map SymbolLister.extractFromProject 
+            |> Async.Parallel
+        return SymbolLister.merge (Seq.toList packages)
+    }
+
+    let buildAction (projectPaths: string list) (theme: string) =
         AnsiConsole.Status().Start("Building site...", fun ctx ->
-            let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
-            let pages = ContentProvider.scanDocs "docs" (Path.GetDirectoryName(projectPath)) package
+            let package = getUnifiedPackage projectPaths |> Async.RunSynchronously
+            // For multi-project, we use the root of the first project for snippet resolution or current dir
+            let sourceDir = Directory.GetCurrentDirectory() 
+            let pages = ContentProvider.scanDocs "docs" sourceDir package
             
             let historyDir = ".livedocs/history"
             if not (Directory.Exists(historyDir)) then Directory.CreateDirectory(historyDir) |> ignore
@@ -94,7 +104,7 @@ jobs:
         run: |
           dotnet build
           ./scripts/publish.sh
-          ./artifacts/livedocs build YourProject.fsproj
+          ./artifacts/livedocs build src/Project1/Project1.fsproj src/Project2/Project2.fsproj
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
@@ -105,9 +115,9 @@ jobs:
                     AnsiConsole.MarkupLine("[green]Done: .github/workflows/livedocs.yml[/]")
 
                 elif results.Contains Extract then
-                    let projectPath = results.GetResult Extract
+                    let projectPaths = results.GetResult Extract
                     AnsiConsole.Status().Start("Extracting symbols...", fun ctx ->
-                        let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
+                        let package = getUnifiedPackage projectPaths |> Async.RunSynchronously
                         let json = Newtonsoft.Json.JsonConvert.SerializeObject(package, Newtonsoft.Json.Formatting.Indented)
                         if not (Directory.Exists(".livedocs/history")) then Directory.CreateDirectory(".livedocs/history") |> ignore
                         let fileName = $".livedocs/history/{package.Version}.json"
@@ -116,30 +126,33 @@ jobs:
                     AnsiConsole.MarkupLine("[green]Extraction complete: .livedocs/history/[/]")
 
                 elif results.Contains Test then
-                    let projectPath = results.GetResult Test
-                    AnsiConsole.Status().Start("Running tests...", fun ctx ->
-                        let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
-                        let results = DocTestRunner.verifyExamples package projectPath [] |> Async.RunSynchronously
-                        for (name, success, output) in results do
-                            if success then AnsiConsole.MarkupLine($"[green]PASS:[/] {Markup.Escape(name)}")
-                            else AnsiConsole.MarkupLine($"[red]FAIL:[/] {Markup.Escape(name)} - {Markup.Escape(output)}")
-                    )
+                    let projectPaths = results.GetResult Test
+                    for projectPath in projectPaths do
+                        AnsiConsole.MarkupLine($"[blue]Testing project: {projectPath}[/]")
+                        AnsiConsole.Status().Start($"Running tests for {projectPath}...", fun ctx ->
+                            let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
+                            let results = DocTestRunner.verifyExamples package projectPath [] |> Async.RunSynchronously
+                            for (name, success, output) in results do
+                                if success then AnsiConsole.MarkupLine($"  [green]PASS:[/] {Markup.Escape(name)}")
+                                else AnsiConsole.MarkupLine($"  [red]FAIL:[/] {Markup.Escape(name)} - {Markup.Escape(output)}")
+                        )
 
                 elif results.Contains Build then
-                    let projectPath = results.GetResult Build
-                    buildAction projectPath theme
+                    let projectPaths = results.GetResult Build
+                    buildAction projectPaths theme
 
                 elif results.Contains Watch then
-                    let projectPath = results.GetResult Watch
-                    buildAction projectPath theme
+                    let projectPaths = results.GetResult Watch
+                    buildAction projectPaths theme
                     
-                    let watcher = new FileSystemWatcher(Path.GetDirectoryName(projectPath))
-                    watcher.IncludeSubdirectories <- true
-                    watcher.EnableRaisingEvents <- true
-                    watcher.Changed.Add(fun _ -> 
-                        AnsiConsole.MarkupLine("[yellow]Change detected, rebuilding...[/]")
-                        try buildAction projectPath theme with e -> AnsiConsole.WriteException(e)
-                    )
+                    for projectPath in projectPaths do
+                        let watcher = new FileSystemWatcher(Path.GetDirectoryName(projectPath))
+                        watcher.IncludeSubdirectories <- true
+                        watcher.EnableRaisingEvents <- true
+                        watcher.Changed.Add(fun _ -> 
+                            AnsiConsole.MarkupLine($"[yellow]Change detected in {projectPath}, rebuilding...[/]")
+                            try buildAction projectPaths theme with e -> AnsiConsole.WriteException(e)
+                        )
 
                     let builder = WebApplication.CreateBuilder()
                     let app = builder.Build()
