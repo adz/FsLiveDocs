@@ -63,13 +63,16 @@ module Program =
             
             SiteBuilder.buildAll historyDir package pages theme "output"
             
-            try
-                let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
-                psi.RedirectStandardOutput <- true
-                psi.UseShellExecute <- false
-                let proc = System.Diagnostics.Process.Start(psi)
-                proc.WaitForExit()
-            with _ -> ()
+            let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
+            psi.RedirectStandardOutput <- true
+            psi.RedirectStandardError <- true
+            psi.UseShellExecute <- false
+            let proc = System.Diagnostics.Process.Start(psi)
+            let pagefindOutput = proc.StandardOutput.ReadToEnd()
+            let pagefindError = proc.StandardError.ReadToEnd()
+            proc.WaitForExit()
+            if proc.ExitCode <> 0 then
+                invalidOp $"Pagefind indexing failed with exit code {proc.ExitCode}.\n{pagefindOutput}\n{pagefindError}"
         )
         AnsiConsole.MarkupLine("[green]Build complete: output/[/]")
 

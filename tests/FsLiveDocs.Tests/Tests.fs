@@ -15,8 +15,8 @@ module SymbolListerTests =
 
     [<Fact>]
     let ``merge removes empty synthetic Default namespace`` () =
-        let child = { Id = "Default.Sample"; Name = "Sample"; Kind = "Module"; SummaryHtml = ""; Members = []; Entities = [] }
-        let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = "Namespace"; SummaryHtml = ""; Members = []; Entities = [ child ] }
+        let child = { Id = "Default.Sample"; Name = "Sample"; Kind = "Module"; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
+        let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = "Namespace"; SummaryHtml = ""; Members = []; Examples = []; Entities = [ child ] }
         let package = SymbolLister.merge [ { Version = "1.0"; Entities = [ defaultNamespace; child ]; Scenarios = [] } ]
 
         let onlyEntity = Assert.Single(package.Entities)
@@ -39,7 +39,7 @@ module ContentProviderTests =
     let ``resolveSnippets handles transclusion and xrefs`` () =
         let package : PackageModel = { 
             Version = "1.0"
-            Entities = [ { Id = "M1"; Name = "add"; Kind = "Module"; SummaryHtml = ""; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; SummaryHtml = ""; RemarksHtml = ""; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None } ]; Location = { File = ""; Line = 0 } } ]; Entities = [] } ]
+            Entities = [ { Id = "M1"; Name = "add"; Kind = "Module"; SummaryHtml = ""; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; SummaryHtml = ""; RemarksHtml = ""; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
             Scenarios = []
         }
         let body = "Look at {{< example id=\"E1\" >}} and xref:M:M1.add"

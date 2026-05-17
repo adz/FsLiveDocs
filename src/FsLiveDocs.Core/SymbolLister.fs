@@ -11,6 +11,11 @@ open System.Xml.Linq
 /// <summary>Provides capabilities to scan F# projects and extract symbols using FSharp.Formatting.</summary>
 module SymbolLister =
 
+    let private rawXml (comment: ApiDocComment) =
+        match comment.Xml with
+        | Some xml -> xml.ToString(SaveOptions.DisableFormatting)
+        | None -> ""
+
     /// <summary>Extracts &lt;example&gt; tags from XML documentation for verification and transclusion.</summary>
     let extractExamples (xmlDoc: string) =
         let pattern = @"<example(?:\s+name=""(?<name>[^""]+)"")?(?:\s+scenario=""(?<scenario>[^""]+)"")?>(?<code>.*?)<\/example>"
@@ -34,14 +39,6 @@ module SymbolLister =
             | Some loc -> { File = loc.FileName; Line = loc.StartLine }
             | None -> { File = ""; Line = 0 }
 
-        let xmlDoc = 
-            match m.Symbol with
-            | :? FSharpMemberOrFunctionOrValue as mfv ->
-                match mfv.XmlDoc with
-                | FSharpXmlDoc.FromXmlText doc -> doc.UnprocessedLines |> String.concat "\n"
-                | _ -> ""
-            | _ -> ""
-
         {
             Id = m.Symbol.FullName
             Name = m.Name
@@ -56,7 +53,7 @@ module SymbolLister =
             ReturnType = m.ReturnInfo.ReturnType |> Option.map (fun (_, h) -> h.HtmlText) |> Option.defaultValue "unit"
             SummaryHtml = m.Comment.Summary.HtmlText
             RemarksHtml = m.Comment.Remarks |> Option.map (fun r -> r.HtmlText) |> Option.defaultValue ""
-            Examples = extractExamples xmlDoc
+            Examples = m.Comment |> rawXml |> extractExamples
             Location = location
         }
 
@@ -75,6 +72,7 @@ module SymbolLister =
                 else "Type"
             SummaryHtml = e.Comment.Summary.HtmlText
             Members = members
+            Examples = e.Comment |> rawXml |> extractExamples
             Entities = nested
         }
 
@@ -90,6 +88,9 @@ module SymbolLister =
             let prunedChildren = pruneSyntheticDefaults e.Entities
             let pruned = { e with Entities = prunedChildren }
             if isSyntheticDefaultNamespace pruned then pruned.Entities else [ pruned ])
+
+    let private entityExamples (e: EntityModel) =
+        if isNull (box e.Examples) then [] else e.Examples
 
     let private getAssemblyName (projectPath: string) =
         try
@@ -131,6 +132,7 @@ module SymbolLister =
                         Kind = "Namespace"
                         SummaryHtml = ""
                         Members = []
+                        Examples = []
                         Entities = children 
                     }
             )
@@ -150,6 +152,7 @@ module SymbolLister =
                         |> List.tryHead 
                         |> Option.defaultValue ""
                     Members = group |> List.collect (fun e -> e.Members) |> List.distinctBy (fun m -> m.Id)
+                    Examples = group |> List.collect entityExamples |> List.distinctBy (fun ex -> ex.Name)
                     Entities = mergeEntities (group |> List.collect (fun e -> e.Entities))
                 }
             )

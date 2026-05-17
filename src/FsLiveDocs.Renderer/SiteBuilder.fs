@@ -12,6 +12,9 @@ module SiteBuilder =
         entities
         |> List.collect (fun e -> e :: flattenEntities e.Entities)
 
+    let private entityExamples (entity: EntityModel) =
+        if isNull (box entity.Examples) then [] else entity.Examples
+
     /// <summary>Renders a single Markdown guide page.</summary>
     let renderPage (page: ContentPage) (allPages: ContentPage list) (package: PackageModel) (versions: string list) (theme: string) (rootPath: string) =
         let content = [
@@ -36,6 +39,23 @@ module SiteBuilder =
                 else emptyText)
 
                 div [ _class "space-y-12" ] (ent.Members |> List.map View.apiCard)
+
+                let examples = entityExamples ent
+                (if not examples.IsEmpty then
+                    div [ _class "mt-12" ] [
+                        h2 [ _class "text-2xl font-black mb-6 tracking-tighter" ] [ str "Examples" ]
+                        div [ _class "space-y-8" ] (
+                            examples |> List.map (fun ex ->
+                                div [ _class "not-prose" ] [
+                                    if ex.Name <> "Example" then
+                                        h3 [ _class "text-sm font-black mb-3 opacity-60 uppercase tracking-widest" ] [ str ex.Name ]
+                                    pre [ _class "bg-neutral text-neutral-content p-8 rounded-[2rem] text-sm font-mono overflow-x-auto border-0 shadow-2xl shadow-black/20" ] [
+                                        code [ _class "language-fsharp" ] [ str ex.Content ]
+                                    ]
+                                ])
+                        )
+                    ]
+                else emptyText)
                 
                 (if not ent.Entities.IsEmpty then
                     div [ _class "space-y-16" ] (ent.Entities |> List.map (fun ne -> renderEntity ne true))

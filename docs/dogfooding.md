@@ -21,16 +21,15 @@ All of these are passed to the `build` command to create a unified API reference
 
 We follow a strict rule: **Every public member must have an XML docstring.**
 
-Example from `SymbolLister.normalizeName`:
+Example from `Say.hello`:
 
 ```fsharp
-/// <summary>Normalizes F# compiler names (removes 'Module' suffix and generic backticks).</summary>
-/// <example name="NormalizeTest">
-/// let name = SymbolLister.normalizeName "List`1"
-/// printfn "%s" name
-/// // EXPECTED: List
+/// <summary>Prints a friendly greeting to the console.</summary>
+/// <example name="HelloExample">
+/// Say.hello "F#"
+/// // EXPECTED: Hello F#
 /// </example>
-let normalizeName (name: string) = ...
+let hello name = ...
 ```
 
 ## 🧪 Verified Examples
@@ -45,7 +44,7 @@ The examples above are not just text. When we run `./scripts/preview.sh`, the fo
 
 This very guide uses live code snippets from our source. For example, the `ExampleModel` record definition is pulled directly from `Models.fs`:
 
-{{< snippet id="CreateExample" >}}
+{{< snippet id="ExampleModel" >}}
 
 ## 🎨 Professional Layout
 

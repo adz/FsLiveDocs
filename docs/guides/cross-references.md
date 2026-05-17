@@ -6,5 +6,5 @@ weight: 3
 
 FsLiveDocs supports cross-referencing API members using the `xref:` syntax.
 
-- Link to a member: xref:M:SampleLib.Math.add
-- Link to a type: xref:T:SampleLib.Math
+- Link to a member: xref:M:FsLiveDocs.Core.Say.hello
+- Link to a type: xref:T:FsLiveDocs.Core.ExampleModel

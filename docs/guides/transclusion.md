@@ -11,11 +11,14 @@ You can pull live code directly from your source files into your documentation. 
 Mark your code with snippet tags:
 
 ```fsharp
-// <snippet:MyFunction>
-let myFunc () = 42
-// </snippet:MyFunction>
+// <snippet:ProjectStructure>
+type SourceLink = {
+    File: string
+    Line: int
+}
+// </snippet:ProjectStructure>
 ```
 
 Then reference it in Markdown:
 
-{{< snippet id="MyFunction" >}}
+{{< snippet id="ProjectStructure" >}}

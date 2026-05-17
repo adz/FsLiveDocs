@@ -8,4 +8,4 @@ The heart of the documentation engine. This project contains the fundamental dat
 - **SymbolLister**: The bridge to the F# compiler.
 - **ContentProvider**: The Markdown processor.
 
-{{< example id="NormalizeTest" >}}
+{{< example id="CreateExample" >}}

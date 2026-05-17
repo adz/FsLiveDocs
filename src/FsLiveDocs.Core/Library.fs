@@ -8,9 +8,9 @@ open System
 /// dependency injection, required for a code example to execute successfully.
 /// </remarks>
 /// <example name="DocScenarioUsage">
-/// [&lt;DocScenario("AuthenticatedUser")&gt;]
-/// let setupUser () =
-///     printfn "User authenticated"
+/// let attr = DocScenarioAttribute("AuthenticatedUser")
+/// printfn "%s" attr.Name
+/// // EXPECTED: AuthenticatedUser
 /// </example>
 [<AttributeUsage(AttributeTargets.Method, AllowMultiple = false)>]
 type DocScenarioAttribute(name: string) =

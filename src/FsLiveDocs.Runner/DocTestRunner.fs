@@ -8,6 +8,26 @@ open FsLiveDocs.Core
 /// <summary>The execution engine for verified docstrings (DocTests).</summary>
 module DocTestRunner =
 
+    let private indentExample (content: string) =
+        let lines = content.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
+        let nonEmpty = lines |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line))
+        let minIndent =
+            nonEmpty
+            |> Array.map (fun line -> line.Length - line.TrimStart().Length)
+            |> Array.fold min Int32.MaxValue
+
+        lines
+        |> Array.map (fun line ->
+            let normalized =
+                if String.IsNullOrWhiteSpace line then ""
+                elif minIndent = Int32.MaxValue then line.TrimStart()
+                elif line.Length >= minIndent then line.Substring(minIndent)
+                else line.TrimStart()
+            let xmlDocNormalized =
+                if normalized.StartsWith(" ") then normalized.Substring(1) else normalized
+            "        " + xmlDocNormalized)
+        |> String.concat "\n"
+
     /// <summary>Generates a temporary .fsproj and Program.fs to execute code examples.</summary>
     let generateTestProject (examples: ExampleModel list) (scenarios: ScenarioModel list) (projectPath: string) (references: string list) (tempDir: string) =
         let projectFile = Path.Combine(tempDir, "LiveDocs.Generated.Tests.fsproj")
@@ -48,10 +68,7 @@ module DocTestRunner =
                         | None -> ""
                     | None -> ""
                 
-                let body = 
-                    ex.Content.Split([|'\n'; '\r'|], StringSplitOptions.RemoveEmptyEntries) 
-                    |> Array.map (fun l -> "        " + l.Trim()) 
-                    |> String.concat "\n"
+                let body = indentExample ex.Content
                 
                 sprintf "let test%d () =\n%s\n    let _ =\n%s\n        ()\n    ()\n" i scenarioCall body)
             |> String.concat "\n"
@@ -98,7 +115,8 @@ module DocTestRunner =
         Directory.CreateDirectory(tempDir) |> ignore
         
         let rec getAllExamples (e: EntityModel) =
-            let members = e.Members |> List.collect (fun m -> m.Examples)
+            let entityExamples = if isNull (box e.Examples) then [] else e.Examples
+            let members = entityExamples @ (e.Members |> List.collect (fun m -> m.Examples))
             let nested = e.Entities |> List.collect getAllExamples
             members @ nested
 

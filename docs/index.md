@@ -12,8 +12,8 @@ FsLiveDocs (Atlas) is a "verified documentation" engine. It treats your document
 ## 🔗 Key Features
 
 - **✅ Verified Docstrings**: Code in `/// <example>` tags is extracted and run against your actual project.
-- **🔗 Snippet Transclusion**: Use `{{< snippet id="Name" >}}` to pull live code from `.fs` files.
-- **🧬 Semantic Cross-References**: Link to API members using `xref:M:Namespace.Type.Method`.
+- **🔗 Snippet Transclusion**: Use `{{&lt; snippet id="Name" &gt;}}` to pull live code from `.fs` files.
+- **🧬 Semantic Cross-References**: Link to API members using `xref&#58;M&#58;Namespace.Type.Method`.
 - **📜 Version History**: Keep multiple versions of your API documentation using fast JSON snapshots.
 - **🔍 Modern Search**: Integrated **Pagefind** for lightning-fast, zero-config static search.
 

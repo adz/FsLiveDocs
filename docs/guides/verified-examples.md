@@ -9,12 +9,12 @@ FsLiveDocs ensures that your examples are always correct. By using the `<example
 ## Example Usage
 
 ```fsharp
-/// <example name="AddOne">
-/// let result = 1 + 1
-/// // EXPECTED: 2
+/// <example name="HelloExample">
+/// Say.hello "F#"
+/// // EXPECTED: Hello F#
 /// </example>
 ```
 
 You can transclude these examples into your guides using the example shortcode:
 
-{{< example id="AddOne" >}}
+{{< example id="HelloExample" >}}

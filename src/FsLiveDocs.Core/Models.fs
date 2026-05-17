@@ -12,6 +12,7 @@ type SourceLink = {
 }
 // </snippet:ProjectStructure>
 
+// <snippet:ExampleModel>
 /// <summary>Represents an executable code example extracted from documentation.</summary>
 /// <example name="CreateExample">
 /// let example = { 
@@ -31,6 +32,7 @@ type ExampleModel = {
     /// <summary>Optional scenario name to provide mocks/DI for this example.</summary>
     Scenario: string option
 }
+// </snippet:ExampleModel>
 
 /// <summary>Represents a parameter of a function or method.</summary>
 type ParameterModel = {
@@ -76,6 +78,8 @@ type EntityModel = {
     SummaryHtml: string
     /// <summary>Members belonging to this entity.</summary>
     Members: MemberModel list
+    /// <summary>Executable examples associated with this entity.</summary>
+    Examples: ExampleModel list
     /// <summary>Nested entities (sub-modules or nested types).</summary>
     Entities: EntityModel list
 }

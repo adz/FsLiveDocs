@@ -83,12 +83,12 @@ module View =
 
     let apiCard (memberModel: MemberModel) =
         div [ _class "card bg-base-100 shadow-sm border border-base-300 overflow-hidden mb-12 hover:shadow-lg transition-all duration-300 group/card"; _id memberModel.Id ] [
-            div [ _class "bg-base-200/30 px-6 py-4 border-b border-base-300 flex justify-between items-center group-hover/card:bg-base-200/50 transition-colors" ] [
-                code [ _class "text-xs font-mono text-primary bg-primary/5 px-3 py-1.5 rounded-full border border-primary/10 shadow-inner" ] [ str memberModel.Signature ]
+            div [ _class "bg-base-200/30 px-4 py-3 border-b border-base-300 flex justify-between items-center gap-4 group-hover/card:bg-base-200/50 transition-colors" ] [
+                div [ _class "text-xs font-mono text-primary bg-primary/5 px-3 py-1.5 rounded-full border border-primary/10 shadow-inner overflow-x-auto max-w-full block" ] [ rawText memberModel.Signature ]
                 span [ _class "text-[10px] font-black uppercase opacity-30 tracking-widest" ] [ str "Member" ]
             ]
-            div [ _class "p-8 md:p-12" ] [
-                h2 [ _class "text-3xl font-black mb-6 tracking-tighter group-hover/card:text-primary transition-colors h-anchor" ] [ str memberModel.Name ]
+            div [ _class "p-6 md:p-8" ] [
+                h2 [ _class "text-2xl font-black mb-5 tracking-tighter group-hover/card:text-primary transition-colors h-anchor" ] [ str memberModel.Name ]
                 
                 div [ _class "prose prose-sm md:prose-base max-w-none mb-10 opacity-80 leading-relaxed" ] [ rawText memberModel.SummaryHtml ]
 
@@ -97,13 +97,13 @@ module View =
                         h4 [ _class "text-[11px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2" ] [ 
                             i [ _class "bi bi-list-nested" ] []; str "Parameters" 
                         ]
-                        div [ _class "overflow-x-auto rounded-3xl border border-base-300 shadow-2xl shadow-base-300/20" ] [
+                        div [ _class "overflow-x-auto rounded-xl border border-base-300 shadow-sm" ] [
                             table [ _class "table table-md table-zebra w-full" ] [
                                 thead [ _class "bg-base-200/50" ] [ tr [] [ th [ _class "px-6" ] [ str "Name" ]; th [] [ str "Type" ]; th [] [ str "Description" ] ] ]
                                 tbody [] (memberModel.Parameters |> List.map (fun p ->
                                     tr [] [
                                         td [ _class "font-bold font-mono text-sm text-primary px-6" ] [ str p.Name ]
-                                        td [] [ code [ _class "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ] [ str p.Type ] ]
+                                        td [] [ span [ _class "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText p.Type ] ]
                                         td [ _class "text-sm opacity-80 leading-relaxed" ] [ rawText p.DescriptionHtml ]
                                     ]
                                 ))
@@ -112,9 +112,9 @@ module View =
                     ]
                 else emptyText)
 
-                div [ _class "mb-10 flex items-center gap-6 p-6 bg-base-200/20 rounded-3xl border border-base-300 shadow-inner" ] [
+                div [ _class "mb-10 flex items-center gap-6 p-5 bg-base-200/20 rounded-xl border border-base-300 shadow-inner" ] [
                     h4 [ _class "text-[11px] font-black uppercase opacity-40 tracking-widest" ] [ str "Returns" ]
-                    code [ _class "text-accent font-mono text-sm font-black bg-accent/5 px-4 py-1.5 rounded-xl border border-accent/10" ] [ str memberModel.ReturnType ]
+                    div [ _class "text-accent font-mono text-sm font-black bg-accent/5 px-4 py-1.5 rounded-xl border border-accent/10 overflow-x-auto" ] [ rawText memberModel.ReturnType ]
                 ]
 
                 (if not memberModel.Examples.IsEmpty then
@@ -202,28 +202,28 @@ module View =
                     ]
                 ]
 
-                div [ _class "flex-1 flex overflow-hidden" ] [
+                div [ _class "flex-1 flex" ] [
                     div [ _class "drawer lg:drawer-open" ] [
                         input [ _id "my-drawer-2"; _type "checkbox"; _class "drawer-toggle" ]
-                        div [ _class "drawer-content flex flex-col h-full overflow-y-auto" ] [
-                            div [ _class "max-w-7xl w-full mx-auto p-6 md:p-12 lg:p-16" ] [
-                                div [ _class "grid grid-cols-1 xl:grid-cols-4 gap-16" ] [
-                                    main [ _class "xl:col-span-3 prose prose-base md:prose-lg max-w-none bg-base-100 p-10 md:p-20 rounded-[3rem] shadow-2xl shadow-base-300/40 border border-base-300 min-h-[85vh]" ] [
-                                        div [ _id "search-ui"; _class "not-prose mb-20 shadow-inner rounded-3xl overflow-hidden" ] []
-                                        yield! content
+                        div [ _class "drawer-content min-h-[calc(100vh-5rem)]" ] [
+                            div [ _class "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_14rem] gap-6 p-4 md:p-6 xl:p-8" ] [
+                                div [ _class "min-w-0" ] [
+                                    main [ _class "prose prose-base md:prose-lg max-w-none bg-base-100 p-6 md:p-8 rounded-xl shadow-xl shadow-base-300/30 border border-base-300 min-h-[85vh]" ] [
+                                            div [ _id "search-ui"; _class "not-prose mb-12 shadow-inner rounded-xl overflow-hidden" ] []
+                                            yield! content
                                     ]
-                                    aside [ _class "hidden xl:block" ] [
-                                        div [ _class "sticky top-36" ] [
-                                            h4 [ _class "text-[10px] font-black uppercase mb-8 opacity-30 tracking-[0.3em]" ] [ str "On This Page" ]
-                                            ul [ _id "on-this-page"; _class "menu menu-sm opacity-80 border-l-4 border-primary/10 gap-3 ps-8" ] []
-                                        ]
+                                ]
+                                aside [ _class "hidden xl:block sticky top-24 self-start h-[calc(100vh-7rem)] overflow-y-auto border-l border-base-300 bg-base-200/30" ] [
+                                    div [ _class "px-6 py-10" ] [
+                                        h4 [ _class "text-[10px] font-black uppercase mb-8 opacity-30 tracking-[0.3em]" ] [ str "On This Page" ]
+                                        ul [ _id "on-this-page"; _class "menu menu-sm opacity-80 border-l-4 border-primary/10 gap-3 ps-6" ] []
                                     ]
                                 ]
                             ]
                         ] 
-                        div [ _class "drawer-side z-50 h-full sticky top-20" ] [
+                        div [ _class "drawer-side z-50 lg:fixed lg:top-20 lg:bottom-0 lg:h-[calc(100vh-5rem)]" ] [
                             label [ _for "my-drawer-2"; _class "drawer-overlay" ] []
-                            div [ _class "bg-base-100 w-80 h-[calc(100vh-5rem)] border-r border-base-300 overflow-y-auto p-10 shadow-sm transition-all" ] [
+                            div [ _class "bg-base-100 w-80 h-full border-r border-base-300 overflow-y-auto p-10 shadow-sm transition-all" ] [
                                 sidebar safeRoot pages package
                             ]
                         ]
