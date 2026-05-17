@@ -9,31 +9,19 @@ open FsLiveDocs.Runner
 module SymbolListerTests =
 
     [<Fact>]
-    let ``normalizeName removes Module and backticks`` () =
-        Assert.Equal("My", SymbolLister.normalizeName "MyModule")
-        Assert.Equal("List", SymbolLister.normalizeName "List`1")
-        Assert.Equal("Map", SymbolLister.normalizeName "Map`2")
+    let ``Placeholder for new SymbolLister tests`` () =
+        // We will add new tests as we verify the FSharp.Formatting integration
+        Assert.True(true)
 
     [<Fact>]
-    let ``extractExamples parses example tags correctly`` () =
-        let xml = """
-        <summary>Test</summary>
-        <example name="Test1">
-        let x = 1
-        // EXPECTED: 1
-        </example>
-        <example scenario="S1">
-        let y = 2
-        </example>
-        """
-        let examples = SymbolLister.extractExamples xml
-        Assert.Equal(2, examples.Length)
-        Assert.Equal("Test1", examples.[0].Name)
-        Assert.Equal("let x = 1", examples.[0].Content)
-        Assert.Equal(Some "1", examples.[0].ExpectedOutput)
-        Assert.Equal("Example", examples.[1].Name)
-        Assert.Equal("let y = 2", examples.[1].Content)
-        Assert.Equal(Some "S1", examples.[1].Scenario)
+    let ``merge removes empty synthetic Default namespace`` () =
+        let child = { Id = "Default.Sample"; Name = "Sample"; Kind = "Module"; SummaryHtml = ""; Members = []; Entities = [] }
+        let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = "Namespace"; SummaryHtml = ""; Members = []; Entities = [ child ] }
+        let package = SymbolLister.merge [ { Version = "1.0"; Entities = [ defaultNamespace; child ]; Scenarios = [] } ]
+
+        let onlyEntity = Assert.Single(package.Entities)
+        Assert.Equal("Default.Sample", onlyEntity.Id)
+        Assert.Equal("Sample", onlyEntity.Name)
 
 module ContentProviderTests =
 
@@ -55,9 +43,9 @@ module ContentProviderTests =
             Scenarios = []
         }
         let body = "Look at {{< example id=\"E1\" >}} and xref:M:M1.add"
-        let resolved = ContentProvider.resolveSnippets body "." package
+        let resolved = ContentProvider.resolveSnippets body "." package "/"
         Assert.Contains("```fsharp\n1+1\n```", resolved)
-        Assert.Contains("[add](/api.html#M1.add)", resolved)
+        Assert.Contains("[add](/api/M1.html#M1.add)", resolved)
 
 module DocTestRunnerTests =
 

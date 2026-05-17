@@ -8,6 +8,10 @@ open FsLiveDocs.Core
 /// <summary>The high-level site assembly engine.</summary>
 module SiteBuilder =
 
+    let rec private flattenEntities (entities: EntityModel list) =
+        entities
+        |> List.collect (fun e -> e :: flattenEntities e.Entities)
+
     /// <summary>Renders a single Markdown guide page.</summary>
     let renderPage (page: ContentPage) (allPages: ContentPage list) (package: PackageModel) (versions: string list) (theme: string) (rootPath: string) =
         let content = [
@@ -59,7 +63,8 @@ module SiteBuilder =
 
     /// <summary>Builds the primary documentation site.</summary>
     let build (package: PackageModel) (pages: ContentPage list) (versions: string list) (theme: string) (rootPath: string) (outputDir: string) =
-        if not (Directory.Exists(outputDir)) then Directory.CreateDirectory(outputDir) |> ignore
+        if Directory.Exists(outputDir) then Directory.Delete(outputDir, true)
+        Directory.CreateDirectory(outputDir) |> ignore
         
         // LLMS Integration
         File.WriteAllText(Path.Combine(outputDir, "llms.txt"), generateLlmsTxt package)
@@ -74,7 +79,7 @@ module SiteBuilder =
         let apiDir = Path.Combine(outputDir, "api")
         if not (Directory.Exists(apiDir)) then Directory.CreateDirectory(apiDir) |> ignore
         
-        for e in package.Entities do
+        for e in flattenEntities package.Entities do
             let html = renderEntityPage e pages package versions theme (rootPath + "../")
             File.WriteAllText(Path.Combine(apiDir, e.Id + ".html"), html)
 

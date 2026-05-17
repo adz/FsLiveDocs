@@ -8,7 +8,7 @@ open System
 /// dependency injection, required for a code example to execute successfully.
 /// </remarks>
 /// <example name="DocScenarioUsage">
-/// [<DocScenario("AuthenticatedUser")>]
+/// [&lt;DocScenario("AuthenticatedUser")&gt;]
 /// let setupUser () =
 ///     printfn "User authenticated"
 /// </example>

@@ -2,44 +2,19 @@ namespace FsLiveDocs.Core
 
 open System
 open System.IO
-open FSharp.Compiler.CodeAnalysis
+open FSharp.Formatting.ApiDocs
+open FSharp.Formatting.Templating
 open FSharp.Compiler.Symbols
-open FSharp.Compiler.EditorServices
-open FSharp.Compiler.Xml
+open System.Text.RegularExpressions
+open System.Xml.Linq
 
-/// <summary>Provides capabilities to scan F# projects and extract symbols, signatures, and docstrings.</summary>
+/// <summary>Provides capabilities to scan F# projects and extract symbols using FSharp.Formatting.</summary>
 module SymbolLister =
-
-    /// <summary>The shared compiler checker instance.</summary>
-    let checker = FSharpChecker.Create(keepAssemblyContents = true)
-
-    /// <summary>Normalizes F# compiler names (removes 'Module' suffix and generic backticks).</summary>
-    let normalizeName (name: string) =
-        name.Replace("Module", "")
-            .Replace("`1", "")
-            .Replace("`2", "")
-            .Replace("`3", "")
-            .Trim()
-
-    /// <summary>Formats a member signature into a readable F# string.</summary>
-    let getSignature (m: FSharpMemberOrFunctionOrValue) =
-        m.FullType.Format(FSharpDisplayContext.Empty)
-
-    /// <summary>Extracts parameters from a member, including their types.</summary>
-    let getParameters (m: FSharpMemberOrFunctionOrValue) =
-        [ for group in m.CurriedParameterGroups do
-            for p in group do
-                yield { 
-                    Name = p.DisplayName
-                    Type = p.Type.Format(FSharpDisplayContext.Empty)
-                    DescriptionHtml = "" 
-                }
-        ]
 
     /// <summary>Extracts &lt;example&gt; tags from XML documentation for verification and transclusion.</summary>
     let extractExamples (xmlDoc: string) =
         let pattern = @"<example(?:\s+name=""(?<name>[^""]+)"")?(?:\s+scenario=""(?<scenario>[^""]+)"")?>(?<code>.*?)<\/example>"
-        let matches = System.Text.RegularExpressions.Regex.Matches(xmlDoc, pattern, System.Text.RegularExpressions.RegexOptions.Singleline)
+        let matches = Regex.Matches(xmlDoc, pattern, RegexOptions.Singleline)
         [ for m in matches do
             let code = m.Groups.["code"].Value.Trim()
             let parts = code.Split([| "// EXPECTED:" |], StringSplitOptions.None)
@@ -53,160 +28,199 @@ module SymbolLister =
             }
         ]
 
-    /// <summary>Extracts raw text from an FSharpXmlDoc instance.</summary>
-    let getXmlText (xmlDoc: FSharpXmlDoc) =
-        match xmlDoc with
-        | FSharpXmlDoc.None -> ""
-        | FSharpXmlDoc.FromXmlText (doc) -> 
-            try doc.UnprocessedLines |> String.concat "\n" with _ -> ""
-        | _ -> ""
+    let mapMember (m: ApiDocMember) : MemberModel =
+        let location = 
+            match m.Symbol.DeclarationLocation with
+            | Some loc -> { File = loc.FileName; Line = loc.StartLine }
+            | None -> { File = ""; Line = 0 }
 
-    /// <summary>Recursively maps an FSharpEntity to an EntityModel, extracting members, fields, and scenarios.</summary>
-    let rec mapEntity (e: FSharpEntity) : EntityModel * ScenarioModel list =
-        let xmlDoc = getXmlText e.XmlDoc
-        
-        let introPath = Path.Combine("docs", "api", e.FullName + ".md")
-        let summary = 
-            if File.Exists(introPath) then
-                let content = File.ReadAllText(introPath)
-                if content.StartsWith("---") then
-                    let parts = content.Split([| "---" |], StringSplitOptions.RemoveEmptyEntries)
-                    if parts.Length > 1 then String.concat "---" parts.[1..] else content
-                else content
-            else xmlDoc
+        let xmlDoc = 
+            match m.Symbol with
+            | :? FSharpMemberOrFunctionOrValue as mfv ->
+                match mfv.XmlDoc with
+                | FSharpXmlDoc.FromXmlText doc -> doc.UnprocessedLines |> String.concat "\n"
+                | _ -> ""
+            | _ -> ""
 
-        let mutable scenarios = []
-        
-        // 1. Extract standard members
-        let members = 
-            e.MembersFunctionsAndValues 
-            |> Seq.filter (fun m -> not m.IsCompilerGenerated)
-            |> Seq.map (fun m -> 
-                let mXmlDoc = getXmlText m.XmlDoc
-                for attr in m.Attributes do
-                    if attr.AttributeType.FullName = "FsLiveDocs.Core.DocScenarioAttribute" then
-                        let args = attr.ConstructorArguments
-                        if args.Count > 0 then
-                            match args.[0] with
-                            | (_, (:? string as name)) -> 
-                                scenarios <- { Name = name; MethodId = m.FullName } :: scenarios
-                            | _ -> ()
-
-                {
-                    Id = m.FullName
-                    Name = m.DisplayName
-                    Signature = getSignature m
-                    Parameters = getParameters m
-                    ReturnType = m.ReturnParameter.Type.Format(FSharpDisplayContext.Empty)
-                    SummaryHtml = mXmlDoc
-                    RemarksHtml = ""
-                    Examples = extractExamples mXmlDoc
-                    Location = { File = m.DeclarationLocation.FileName; Line = m.DeclarationLocation.StartLine }
-                }
-            ) |> Seq.toList
-
-        // 2. Extract record fields if any
-        let fields =
-            if e.IsFSharpRecord then
-                e.FSharpFields
-                |> Seq.map (fun f -> 
-                    {
-                        Id = e.FullName + "." + f.Name
-                        Name = f.Name
-                        Signature = f.FieldType.Format(FSharpDisplayContext.Empty)
-                        Parameters = []
-                        ReturnType = f.FieldType.Format(FSharpDisplayContext.Empty)
-                        SummaryHtml = getXmlText f.XmlDoc
-                        RemarksHtml = ""
-                        Examples = []
-                        Location = { File = f.DeclarationLocation.FileName; Line = f.DeclarationLocation.StartLine }
-                    }
-                ) |> Seq.toList
-            else []
-
-        // 3. Extract union cases if any
-        let cases =
-            if e.IsFSharpUnion then
-                e.UnionCases
-                |> Seq.map (fun c -> 
-                    {
-                        Id = e.FullName + "." + c.Name
-                        Name = c.Name
-                        Signature = c.Name // Union cases don't have a standard signature in the same way
-                        Parameters = []
-                        ReturnType = e.DisplayName
-                        SummaryHtml = getXmlText c.XmlDoc
-                        RemarksHtml = ""
-                        Examples = []
-                        Location = { File = c.DeclarationLocation.FileName; Line = c.DeclarationLocation.StartLine }
-                    }
-                ) |> Seq.toList
-            else []
-
-        let nested = e.NestedEntities |> Seq.map mapEntity |> Seq.toList
-        let nestedEntities = nested |> List.map fst
-        let nestedScenarios = nested |> List.collect snd
-        
-        let entity = {
-            Id = e.FullName
-            Name = normalizeName e.DisplayName
-            Kind = if e.IsFSharpModule then "Module" elif e.IsFSharpRecord then "Record" elif e.IsFSharpUnion then "Union" else "Type"
-            SummaryHtml = summary
-            Members = members @ fields @ cases
-            Entities = nestedEntities
+        {
+            Id = m.Symbol.FullName
+            Name = m.Name
+            Signature = m.UsageHtml.HtmlText // usage is often better for members
+            Parameters = 
+                m.Parameters 
+                |> List.map (fun p -> { 
+                    Name = p.ParameterNameText
+                    Type = p.ParameterType.HtmlText
+                    DescriptionHtml = p.ParameterDocs |> Option.map (fun d -> d.HtmlText) |> Option.defaultValue "" 
+                })
+            ReturnType = m.ReturnInfo.ReturnType |> Option.map (fun (_, h) -> h.HtmlText) |> Option.defaultValue "unit"
+            SummaryHtml = m.Comment.Summary.HtmlText
+            RemarksHtml = m.Comment.Remarks |> Option.map (fun r -> r.HtmlText) |> Option.defaultValue ""
+            Examples = extractExamples xmlDoc
+            Location = location
         }
-        entity, scenarios @ nestedScenarios
 
-    /// <summary>Walks through all implementation file declarations to find entities and scenarios.</summary>
-    let rec walkDeclarations (decls: FSharpImplementationFileDeclaration list) =
-        let mutable entities = []
-        let mutable scenarios = []
-        for d in decls do
-            match d with
-            | FSharpImplementationFileDeclaration.Entity (e, subDecls) -> 
-                let ent, sc = mapEntity e
-                entities <- ent :: entities
-                scenarios <- sc @ scenarios
-                let subEnts, subScs = walkDeclarations subDecls
-                entities <- subEnts @ entities
-                scenarios <- subScs @ scenarios
-            | _ -> ()
-        entities, scenarios
+    let rec mapEntity (e: ApiDocEntity) : EntityModel =
+        let members = e.AllMembers |> Seq.map mapMember |> Seq.toList
+        let nested = e.NestedEntities |> List.map mapEntity
 
-    /// <summary>Merges multiple PackageModels into a single unified documentation model.</summary>
+        {
+            Id = e.Symbol.FullName
+            Name = e.Name
+            Kind = 
+                if e.Symbol.IsFSharpModule then "Module"
+                elif e.Symbol.IsNamespace then "Namespace"
+                elif e.Symbol.IsFSharpRecord then "Record"
+                elif e.Symbol.IsFSharpUnion then "Union"
+                else "Type"
+            SummaryHtml = e.Comment.Summary.HtmlText
+            Members = members
+            Entities = nested
+        }
+
+    let private isSyntheticDefaultNamespace (e: EntityModel) =
+        e.Kind = "Namespace"
+        && e.Name.Equals("Default", StringComparison.OrdinalIgnoreCase)
+        && String.IsNullOrWhiteSpace e.SummaryHtml
+        && e.Members.IsEmpty
+
+    let rec private pruneSyntheticDefaults (entities: EntityModel list) =
+        entities
+        |> List.collect (fun e ->
+            let prunedChildren = pruneSyntheticDefaults e.Entities
+            let pruned = { e with Entities = prunedChildren }
+            if isSyntheticDefaultNamespace pruned then pruned.Entities else [ pruned ])
+
+    let private getAssemblyName (projectPath: string) =
+        try
+            let project = XDocument.Load(projectPath)
+            let assemblyName =
+                project.Descendants(XName.Get "AssemblyName")
+                |> Seq.tryPick (fun e ->
+                    let value = e.Value.Trim()
+                    if String.IsNullOrWhiteSpace value then None else Some value)
+
+            assemblyName |> Option.defaultValue (Path.GetFileNameWithoutExtension(projectPath))
+        with _ ->
+            Path.GetFileNameWithoutExtension(projectPath)
+
+    /// <summary>Groups flattened entities into a hierarchical tree based on their IDs.</summary>
+    let reconstructHierarchy (entities: EntityModel list) =
+        let rec buildTree (currentPath: string) (available: EntityModel list) =
+            available
+            |> List.groupBy (fun e -> 
+                let relativeId = if String.IsNullOrEmpty currentPath then e.Id else e.Id.Substring(currentPath.Length + 1)
+                let parts = relativeId.Split('.')
+                parts.[0]
+            )
+            |> List.map (fun (name, group) ->
+                let fullId = if String.IsNullOrEmpty currentPath then name else currentPath + "." + name
+                // If there's an exact match for this ID, it's our current entity
+                let currentEntity = group |> List.tryFind (fun e -> e.Id = fullId)
+                
+                // Other entities in the group are children/descendants
+                let descendants = group |> List.filter (fun e -> e.Id <> fullId)
+                let children = buildTree fullId descendants
+
+                match currentEntity with
+                | Some e -> { e with Entities = mergeEntities (e.Entities @ children) }
+                | None -> 
+                    { 
+                        Id = fullId
+                        Name = name
+                        Kind = "Namespace"
+                        SummaryHtml = ""
+                        Members = []
+                        Entities = children 
+                    }
+            )
+        and mergeEntities (entities: EntityModel list) =
+            entities
+            |> List.groupBy (fun e -> e.Id)
+            |> List.map (fun (id, group) ->
+                let first = List.head group
+                {
+                    Id = id
+                    Name = first.Name
+                    Kind = first.Kind
+                    SummaryHtml = 
+                        group 
+                        |> List.map (fun e -> e.SummaryHtml) 
+                        |> List.filter (not << String.IsNullOrWhiteSpace) 
+                        |> List.tryHead 
+                        |> Option.defaultValue ""
+                    Members = group |> List.collect (fun e -> e.Members) |> List.distinctBy (fun m -> m.Id)
+                    Entities = mergeEntities (group |> List.collect (fun e -> e.Entities))
+                }
+            )
+
+        buildTree "" entities
+
+    /// <summary>Scans a project file and extracts all documented symbols using FSharp.Formatting.</summary>
+    let extractFromProject (projectPath: string) = async {
+        // ApiDocs needs the DLL and XML to be built first.
+        let projName = Path.GetFileNameWithoutExtension(projectPath)
+        let assemblyName = getAssemblyName projectPath
+        let projDir = Path.GetDirectoryName(projectPath)
+        
+        let searchPaths = [
+            Path.Combine(projDir, "../../artifacts/bin")
+            Path.Combine(projDir, "bin/Debug/net10.0")
+            Path.Combine(projDir, "bin/Release/net10.0")
+        ]
+
+        let dllPath = 
+            searchPaths 
+            |> List.filter Directory.Exists
+            |> List.tryPick (fun path ->
+                let files = Directory.GetFiles(path, $"{assemblyName}.dll", SearchOption.AllDirectories)
+                if files.Length > 0 then Some files.[0] else None
+            )
+            |> Option.defaultValue ""
+
+        if String.IsNullOrEmpty dllPath || not (File.Exists dllPath) then
+            return { Version = "0.1.0"; Entities = []; Scenarios = [] }
+        else
+            // FSharp.Formatting REQUIRES the .xml file to be next to the .dll
+            let xmlPath = Path.ChangeExtension(dllPath, ".xml")
+            if not (File.Exists xmlPath) then
+                printfn "Warning: Skipping project %s because associated XML file was not found at %s" projName xmlPath
+                return { Version = "0.1.0"; Entities = []; Scenarios = [] }
+            else
+                let input = ApiDocInput.FromFile(dllPath)
+                let libDirs = 
+                    [ 
+                        Path.GetDirectoryName(dllPath)
+                        System.AppContext.BaseDirectory
+                    ] |> List.distinct
+                let model = ApiDocs.GenerateModel([input], "Project", Substitutions.Empty, qualify=false, libDirs = libDirs)
+                
+                let rec flatten (e: ApiDocEntity) =
+                    seq {
+                        yield mapEntity e
+                        for n in e.NestedEntities do
+                            yield! flatten n
+                    }
+
+                let isProjectEntity (e: ApiDocEntity) =
+                    e.Symbol.Assembly.SimpleName.Equals(assemblyName, StringComparison.OrdinalIgnoreCase)
+
+                let entities =
+                    model.EntityInfos 
+                    |> Seq.filter (fun ei -> isProjectEntity ei.Entity)
+                    |> Seq.collect (fun ei -> flatten ei.Entity)
+                    |> Seq.toList
+
+                return { Version = "0.1.0"; Entities = entities; Scenarios = [] }
+    }
+
+    /// <summary>Merges multiple PackageModels into a single unified documentation model and reconstructs hierarchy.</summary>
     let merge (packages: PackageModel list) =
         if packages.IsEmpty then 
             { Version = "0.1.0"; Entities = []; Scenarios = [] }
         else
+            let allFlatEntities = packages |> List.collect (fun p -> p.Entities) |> List.distinctBy (fun e -> e.Id)
+            let hierarchical = reconstructHierarchy allFlatEntities |> pruneSyntheticDefaults
             { Version = (packages |> List.head).Version
-              Entities = packages |> List.collect (fun p -> p.Entities)
-              Scenarios = packages |> List.collect (fun p -> p.Scenarios) }
-
-    /// <summary>Scans a project file and extracts all documented symbols.</summary>
-    let extractFromProject (projectPath: string) = async {
-        let sourceFiles = Directory.GetFiles(Path.GetDirectoryName(projectPath), "*.fs", SearchOption.AllDirectories)
-        let options : FSharpProjectOptions = {
-            ProjectFileName = projectPath
-            ProjectId = None
-            SourceFiles = sourceFiles
-            OtherOptions = [| "--targetprofile:netcore" |]
-            ReferencedProjects = [||]
-            IsIncompleteTypeCheckEnvironment = false
-            UseScriptResolutionRules = false
-            LoadTime = DateTime.Now
-            UnresolvedReferences = None
-            OriginalLoadReferences = []
-            Stamp = None
-        }
-        
-        let! checkResults = checker.ParseAndCheckProject(options)
-        
-        let results = 
-            checkResults.AssemblyContents.ImplementationFiles
-            |> List.map (fun f -> walkDeclarations f.Declarations)
-        
-        let entities = results |> List.collect fst
-        let scenarios = results |> List.collect snd
-
-        return { Version = "0.1.0"; Entities = entities; Scenarios = scenarios }
-    }
+              Entities = hierarchical
+              Scenarios = [] }

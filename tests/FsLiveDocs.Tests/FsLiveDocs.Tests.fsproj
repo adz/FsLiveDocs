@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <Compile Include="Tests.fs" />
+    <Compile Include="IntegrationTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -17,12 +18,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FsLiveDocs.Core\FsLiveDocs.Core.fsproj" />
-    <ProjectReference Include="..\FsLiveDocs.Runner\FsLiveDocs.Runner.fsproj" />
-    <ProjectReference Include="..\FsLiveDocs.Renderer\FsLiveDocs.Renderer.fsproj" />
-    <ProjectReference Include="..\..\src\FsLiveDocs.Core\FsLiveDocs.Core.fsproj" />
-    <ProjectReference Include="..\..\src\FsLiveDocs.Runner\FsLiveDocs.Runner.fsproj" />
-    <ProjectReference Include="..\..\src\FsLiveDocs.Renderer\FsLiveDocs.Renderer.fsproj" />
+    <ProjectReference Include="../../src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj" />
+    <ProjectReference Include="../../src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj" />
+    <ProjectReference Include="../../src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj" />
   </ItemGroup>
 
 </Project>

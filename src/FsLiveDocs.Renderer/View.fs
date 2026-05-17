@@ -46,10 +46,7 @@ module View =
     let sidebar (rootPath: string) (pages: ContentPage list) (package: PackageModel) =
         let apiGroups = 
             package.Entities 
-            |> List.groupBy (fun e -> 
-                let parts = e.Id.Split('.')
-                if parts.Length > 1 then parts.[0] else "Default"
-            )
+            |> List.groupBy (fun e -> e.Id.Split('.').[0])
 
         div [ _class "flex flex-col gap-10 pb-32" ] [
             // Guides Section
@@ -62,13 +59,21 @@ module View =
                 h3 [ _class "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50" ] [ str "API Reference" ]
                 ul [ _class "menu menu-sm p-0 gap-2" ] (
                     apiGroups |> List.map (fun (area, entities) ->
+                        let entitiesToRender = 
+                            // If we have a single namespace root that matches the area name, and it has children,
+                            // promote children to the top level of this group to avoid "Namespace > Namespace" redundancy.
+                            match entities with
+                            | [ e ] when e.Kind = "Namespace" && e.Name.Equals(area, StringComparison.OrdinalIgnoreCase) && not e.Entities.IsEmpty ->
+                                e.Entities
+                            | _ -> entities
+
                         li [] [
                             details [ _class "group"; attr "open" "true" ] [
                                 summary [ _class "flex items-center justify-between py-2 px-4 text-primary font-black hover:bg-base-300 rounded-lg cursor-pointer list-none uppercase tracking-widest text-[10px]" ] [
                                     str area
                                     i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
                                 ]
-                                ul [ _class "menu menu-sm p-0 mt-2 gap-1 border-l-2 border-primary/10 ml-4" ] (entities |> List.map (sidebarEntityLink rootPath))
+                                ul [ _class "menu menu-sm p-0 mt-2 gap-1 border-l-2 border-primary/10 ml-4" ] (entitiesToRender |> List.map (sidebarEntityLink rootPath))
                             ]
                         ]
                     )
@@ -225,8 +230,8 @@ module View =
                     ]
                 ]
 
-                script [ _src (Url.resolve safeRoot "_pagefind/pagefind-ui.js") ] []
-                script [] [ rawText "window.addEventListener('DOMContentLoaded', (event) => { if(typeof PagefindUI !== 'undefined') new PagefindUI({ element: '#search-ui', showSubResults: true, bundlePath: '/' }); });" ]
+                script [ _src (Url.resolve safeRoot "pagefind/pagefind-ui.js") ] []
+                script [] [ rawText "window.addEventListener('DOMContentLoaded', (event) => { if(typeof PagefindUI !== 'undefined') new PagefindUI({ element: '#search-ui', showSubResults: true }); });" ]
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" ] []
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-fsharp.min.js" ] []
                 script [] [ rawText "document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => { const t = el.getAttribute('data-set-theme'); document.documentElement.setAttribute('data-theme', t); localStorage.setItem('theme', t); }))" ]

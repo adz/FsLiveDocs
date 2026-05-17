@@ -5,8 +5,9 @@
     <LangVersion>preview</LangVersion>
     <UseArtifactsOutput>true</UseArtifactsOutput>
     <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="FSharp.Core" Version="10.1.204" />
+    <PackageReference Include="FSharp.Core" Version="10.1.201" />
   </ItemGroup>
 </Project>

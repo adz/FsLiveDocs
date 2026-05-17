@@ -44,10 +44,10 @@ module Program =
 
     /// <summary>Loads and merges multiple project models into a unified package.</summary>
     let getUnifiedPackage (projectPaths: string list) = async {
-        let! packages = 
-            projectPaths 
-            |> List.map SymbolLister.extractFromProject 
-            |> Async.Parallel
+        let packages = ResizeArray()
+        for projectPath in projectPaths do
+            let! package = SymbolLister.extractFromProject projectPath
+            packages.Add(package)
         return SymbolLister.merge (Seq.toList packages)
     }
 
