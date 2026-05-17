@@ -10,6 +10,7 @@ open FsLiveDocs.Renderer
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Hosting
 open Microsoft.Extensions.FileProviders
+open Microsoft.AspNetCore.Http
 
 type Arguments =
     | [<CliPrefix(CliPrefix.None)>] Init
@@ -43,7 +44,6 @@ module Program =
     let buildAction (projectPaths: string list) (theme: string) =
         AnsiConsole.Status().Start("Building site...", fun ctx ->
             let package = getUnifiedPackage projectPaths |> Async.RunSynchronously
-            // For multi-project, we use the root of the first project for snippet resolution or current dir
             let sourceDir = Directory.GetCurrentDirectory() 
             let pages = ContentProvider.scanDocs "docs" sourceDir package
             
@@ -104,7 +104,7 @@ jobs:
         run: |
           dotnet build
           ./scripts/publish.sh
-          ./artifacts/livedocs build src/Project1/Project1.fsproj src/Project2/Project2.fsproj
+          ./artifacts/livedocs build src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
@@ -157,10 +157,20 @@ jobs:
                     let builder = WebApplication.CreateBuilder()
                     let app = builder.Build()
                     app.UseDefaultFiles() |> ignore
+                    let outputDir = Path.Combine(Directory.GetCurrentDirectory(), "output")
                     app.UseStaticFiles(StaticFileOptions(
-                        FileProvider = new PhysicalFileProvider(Path.Combine(Directory.GetCurrentDirectory(), "output")),
+                        FileProvider = new PhysicalFileProvider(outputDir),
                         RequestPath = ""
                     )) |> ignore
+                    
+                    app.Use(fun (context: HttpContext) (next: Func<Threading.Tasks.Task>) ->
+                        if context.Request.Path.Value = "/" then
+                            context.Response.Redirect("/index.html")
+                            Threading.Tasks.Task.CompletedTask
+                        else
+                            next.Invoke()
+                    ) |> ignore
+
                     AnsiConsole.MarkupLine("[blue]Starting dev server at http://localhost:5000[/]")
                     app.Run("http://localhost:5000")
                 

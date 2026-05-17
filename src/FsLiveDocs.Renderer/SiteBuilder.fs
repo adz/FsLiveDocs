@@ -6,23 +6,28 @@ open FsLiveDocs.Core
 
 module SiteBuilder =
 
-    let renderPage (page: ContentPage) (allPages: ContentPage list) (versions: string list) (theme: string) =
+    let renderPage (page: ContentPage) (allPages: ContentPage list) (package: PackageModel) (versions: string list) (theme: string) =
         let content = [
             div [] [ rawText page.ContentHtml ]
         ]
-        View.layout page.Metadata.Title allPages versions theme content
+        View.layout page.Metadata.Title allPages package versions theme content
         |> fun node -> RenderView.AsString.htmlNode node
 
     let renderApi (package: PackageModel) (allPages: ContentPage list) (versions: string list) (theme: string) =
         let rec renderEntity (e: EntityModel) =
-            div [ _class "entity mb-12" ] [
-                h2 [ _class "text-3xl font-black mb-6 pb-2 border-b-2 border-primary w-fit"; _id e.Id ] [ str e.Name ]
-                div [ _class "members space-y-8" ] (e.Members |> List.map View.apiCard)
-                div [ _class "nested mt-8" ] (e.Entities |> List.map renderEntity)
+            div [ _class "entity mb-16 pt-8"; _id e.Id ] [
+                h2 [ _class "text-3xl font-black mb-8 pb-4 border-b-4 border-primary/20 w-full flex items-center justify-between" ] [ 
+                    str e.Name 
+                    span [ _class "badge badge-outline opacity-30 text-xs font-mono" ] [ str e.Kind ]
+                ]
+                div [ _class "space-y-12" ] (e.Members |> List.map View.apiCard)
+                (if not e.Entities.IsEmpty then
+                    div [ _class "nested mt-12 pl-6 border-l-2 border-base-300" ] (e.Entities |> List.map renderEntity)
+                else emptyText)
             ]
 
         let content = package.Entities |> List.map renderEntity
-        View.layout "API Reference" allPages versions theme content
+        View.layout "API Reference" allPages package versions theme content
         |> fun node -> RenderView.AsString.htmlNode node
 
     let generateLlmsTxt (package: PackageModel) =
@@ -47,7 +52,7 @@ module SiteBuilder =
         
         // Render content pages
         for page in pages do
-            let (html: string) = renderPage page pages versions theme
+            let (html: string) = renderPage page pages package versions theme
             let fileName = Path.GetFileNameWithoutExtension(page.FilePath).ToLower() + ".html"
             File.WriteAllText(Path.Combine(outputDir, fileName), html)
 
@@ -57,11 +62,21 @@ module SiteBuilder =
 
         // Generate index.html if not present
         if not (File.Exists(Path.Combine(outputDir, "index.html"))) then
+            // If docs/index.md doesn't exist, we might have home.html or similar?
+            // Actually, we force docs/index.md in Init.
             let indexContent = [ 
-                h1 [ _class "text-5xl font-black mb-6" ] [ str "Welcome to LiveDocs" ]
-                p [ _class "text-xl opacity-70" ] [ str "Select a page from the sidebar to get started." ] 
+                h1 [ _class "text-6xl font-black mb-8 tracking-tighter" ] [ 
+                    span [ _class "text-primary" ] [ str "Fs" ]; str "LiveDocs" 
+                ]
+                p [ _class "text-xl opacity-60 leading-relaxed max-w-2xl" ] [ 
+                    str "The next generation documentation engine for F#. Verified docstrings, live snippet transclusion, and solution-wide API tracking." 
+                ]
+                div [ _class "flex gap-4 mt-10" ] [
+                    a [ _href "/api.html"; _class "btn btn-primary btn-lg rounded-2xl px-10" ] [ str "Explore API" ]
+                    a [ _href "/verified-examples.html"; _class "btn btn-outline btn-lg rounded-2xl px-10" ] [ str "Learn Guides" ]
+                ]
             ]
-            let (html: string) = View.layout "Home" pages versions theme indexContent |> RenderView.AsString.htmlNode
+            let (html: string) = View.layout "Home" pages package versions theme indexContent |> RenderView.AsString.htmlNode
             File.WriteAllText(Path.Combine(outputDir, "index.html"), html)
 
     let buildAll (historyDir: string) (currentPackage: PackageModel) (pages: ContentPage list) (theme: string) (outputDir: string) =

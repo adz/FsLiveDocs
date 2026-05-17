@@ -10,7 +10,7 @@ PROJECTS=(
   "src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj"
 )
 
-echo "--- FsLiveDocs: Documentation Builder ---"
+echo "--- FsLiveDocs: Documentation Preview ---"
 
 # 1. Build and Publish the livedocs tool if not exists or forced
 if [ ! -f "./artifacts/livedocs" ]; then
