@@ -244,7 +244,6 @@ module SiteBuilder =
                 ]
 
                 renderSummaryBlock ent.SummaryHtml
-
                 renderFieldTable "Fields" ent.Members
 
                 let examples = entityExamples ent
