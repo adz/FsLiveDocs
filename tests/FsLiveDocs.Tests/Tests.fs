@@ -5,6 +5,7 @@ open System.IO
 open Xunit
 open FsLiveDocs.Core
 open FsLiveDocs.Runner
+open FsLiveDocs.Renderer
 
 module SymbolListerTests =
 
@@ -63,3 +64,10 @@ module DocTestRunnerTests =
         let prog = File.ReadAllText(Path.Combine(temp, "Program.fs"))
         Assert.Contains("printfn \"--- TEST: T1 ---\"", prog)
         Assert.Contains("printfn \"hi\"", prog)
+
+module ViewTests =
+
+    [<Fact>]
+    let ``sourceLinkHref builds github source links`` () =
+        let link = View.sourceLinkHref (Some "https://github.com/user/repo") { File = "src/Example.fs"; Line = 42 }
+        Assert.Equal(Some "https://github.com/user/repo/blob/main/src/Example.fs#L42", link)

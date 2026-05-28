@@ -4,6 +4,8 @@ open Giraffe.ViewEngine
 open FsLiveDocs.Core
 open System
 open System.IO
+open System.Net
+open System.Text.RegularExpressions
 
 /// <summary>Centralized URL and path resolution helpers.</summary>
 module Url =
@@ -19,6 +21,53 @@ module Url =
 
 /// <summary>Contains the view components and layout templates for the documentation site.</summary>
 module View =
+
+    let private stripHtml (html: string) =
+        html
+        |> fun text -> Regex.Replace(text, "<.*?>", String.Empty)
+        |> WebUtility.HtmlDecode
+        |> fun text -> Regex.Replace(text, @"\s+", " ").Trim()
+
+    let private synopsisFromHtml (html: string) =
+        let text = stripHtml html
+        if String.IsNullOrWhiteSpace text then "No description available."
+        else
+            let matchResult = Regex.Match(text, @"^(.+?[.!?])(?:\s|$)")
+            if matchResult.Success then matchResult.Groups.[1].Value else text
+
+    let sourceLinkHref (repoUrl: string option) (location: SourceLink) =
+        match repoUrl with
+        | Some repo when not (String.IsNullOrWhiteSpace repo) && not (String.IsNullOrWhiteSpace location.File) && location.Line > 0 ->
+            Some $"{repo.TrimEnd('/')}/blob/main/{location.File}#L{location.Line}"
+        | _ -> None
+
+    let private anchorIcon (href: string) (label: string) =
+        a [
+            _href href
+            _class "anchor-link opacity-0 group-hover:opacity-60 transition-opacity no-underline inline-flex items-center justify-center w-6 h-6 text-base-content/60 hover:text-primary"
+            attr "aria-label" label
+            attr "title" label
+        ] [
+            i [ _class "bi bi-link-45deg text-base" ] []
+        ]
+
+    let h1WithAnchor (id: string) (title: string) (classes: string) =
+        h1 [ _id id; attr "data-toc-title" title; _class (classes + " group scroll-mt-24 flex items-center gap-3") ] [
+            span [] [ str title ]
+            anchorIcon ("#" + id) $"Copy link to {title}"
+        ]
+
+    let h2WithAnchor (id: string) (title: string) (classes: string) =
+        h2 [ _id id; attr "data-toc-title" title; _class (classes + " group scroll-mt-24 flex items-center gap-3") ] [
+            span [] [ str title ]
+            anchorIcon ("#" + id) $"Copy link to {title}"
+        ]
+
+    let h3WithAnchor (id: string) (title: string) (classes: string) =
+        h3 [ _id id; attr "data-toc-title" title; _class (classes + " group scroll-mt-24 flex items-center gap-3") ] [
+            span [] [ str title ]
+            anchorIcon ("#" + id) $"Copy link to {title}"
+        ]
 
     let navItem (title: string) (url: string) =
         li [] [ a [ _href url; _class "hover:text-primary transition-colors px-4 py-2 font-bold" ] [ str title ] ]
@@ -51,12 +100,12 @@ module View =
         div [ _class "flex flex-col gap-10 pb-32" ] [
             // Guides Section
             div [] [
-                h3 [ _class "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50" ] [ str "Guides" ]
+                h3WithAnchor "guides" "Guides" "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
                 ul [ _class "menu menu-sm p-0 gap-1" ] (pages |> List.sortBy (fun p -> p.Metadata.Weight) |> List.map (sidebarPageLink rootPath))
             ]
             // API Reference Section
             div [] [
-                h3 [ _class "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50" ] [ str "API Reference" ]
+                h3WithAnchor "api-reference" "API Reference" "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
                 ul [ _class "menu menu-sm p-0 gap-2" ] (
                     apiGroups |> List.map (fun (area, entities) ->
                         let entitiesToRender = 
@@ -81,10 +130,33 @@ module View =
             ]
         ]
 
-    let apiCard (memberModel: MemberModel) =
+    let apiCard (repoUrl: string option) (memberModel: MemberModel) =
+        let sourceLink =
+            sourceLinkHref repoUrl memberModel.Location
+            |> Option.map (fun href ->
+                a [
+                    _href href
+                    _target "_blank"
+                    attr "rel" "noreferrer"
+                    _class "btn btn-ghost btn-sm btn-circle border border-base-300 text-base-content/50 hover:text-primary hover:border-primary/30"
+                    attr "aria-label" $"View source for {memberModel.Name}"
+                    attr "title" $"View source for {memberModel.Name}"
+                ] [ i [ _class "bi bi-code-slash" ] [] ])
+
         div [ _class "card bg-base-100 shadow-sm border border-base-300 overflow-hidden hover:shadow-lg transition-all duration-300 group/card" ] [
-            div [ _class "bg-base-200/30 px-4 py-3 border-b border-base-300 flex justify-between items-center gap-4 group-hover/card:bg-base-200/50 transition-colors" ] [
-                h3 [ _id memberModel.Id; attr "data-toc-title" memberModel.Name; _class "text-xs font-mono text-primary bg-primary/5 px-3 py-1.5 rounded-full border border-primary/10 shadow-inner overflow-x-auto max-w-full block h-anchor scroll-mt-24" ] [ rawText memberModel.Signature ]
+            div [ _class "bg-base-200/30 px-4 py-4 border-b border-base-300 flex flex-col gap-3 group-hover/card:bg-base-200/50 transition-colors" ] [
+                div [ _class "flex items-start justify-between gap-4" ] [
+                    h3 [ _id memberModel.Id; attr "data-toc-title" memberModel.Name; _class "group text-xl font-black tracking-tight flex items-center gap-3 scroll-mt-24" ] [
+                        span [ _class "leading-tight" ] [ str memberModel.Name ]
+                        anchorIcon ("#" + memberModel.Id) $"Copy link to {memberModel.Name}"
+                    ]
+                    match sourceLink with
+                    | Some link -> link
+                    | None -> emptyText
+                ]
+                div [ _class "text-xs font-mono text-primary bg-primary/5 px-3 py-1.5 rounded-full border border-primary/10 shadow-inner overflow-x-auto max-w-full block" ] [
+                    rawText memberModel.Signature
+                ]
                 span [ _class "text-[10px] font-black uppercase opacity-30 tracking-widest" ] [ str "Member" ]
             ]
             div [ _class "p-5 md:p-6" ] [

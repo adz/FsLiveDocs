@@ -59,7 +59,16 @@ module SymbolLister =
     let mapMember (m: ApiDocMember) : MemberModel =
         let location = 
             match m.Symbol.DeclarationLocation with
-            | Some loc -> { File = loc.FileName; Line = loc.StartLine }
+            | Some loc ->
+                let file =
+                    if String.IsNullOrWhiteSpace loc.FileName then ""
+                    else
+                        let relative =
+                            if Path.IsPathRooted loc.FileName then
+                                Path.GetRelativePath(Directory.GetCurrentDirectory(), loc.FileName)
+                            else loc.FileName
+                        relative.Replace('\\', '/')
+                { File = file; Line = loc.StartLine }
             | None -> { File = ""; Line = 0 }
 
         {

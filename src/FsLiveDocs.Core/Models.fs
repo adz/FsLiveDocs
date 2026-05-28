@@ -104,6 +104,12 @@ type PackageModel = {
     Scenarios: ScenarioModel list
 }
 
+/// <summary>Build-time configuration for the generated documentation site.</summary>
+type SiteConfig = {
+    /// <summary>Optional repository URL used to build source links for members.</summary>
+    RepoUrl: string option
+}
+
 /// <summary>Metadata extracted from Markdown frontmatter.</summary>
 [<CLIMutable>]
 type ContentMetadata = {

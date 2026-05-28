@@ -58,6 +58,17 @@ module Program =
         return SymbolLister.merge (Seq.toList packages)
     }
 
+    let loadSiteConfig () =
+        let configPath = Path.Combine(".livedocs", "config.json")
+        if File.Exists(configPath) then
+            try
+                let config = Newtonsoft.Json.JsonConvert.DeserializeObject<SiteConfig>(File.ReadAllText(configPath))
+                if isNull (box config) then { RepoUrl = None } else config
+            with _ ->
+                { RepoUrl = None }
+        else
+            { RepoUrl = None }
+
     /// <summary>Orchestrates the build process for one or more projects.</summary>
     let buildAction (projectPaths: string list) (theme: string) =
         AnsiConsole.Status()
@@ -67,11 +78,12 @@ module Program =
                 let sourceDir = Directory.GetCurrentDirectory() 
                 let package = ContentProvider.applyApiDocs "docs" sourceDir packageRaw
                 let pages = ContentProvider.scanDocs "docs" sourceDir package ""
+                let config = loadSiteConfig()
                 
                 let historyDir = ".livedocs/history"
                 if not (Directory.Exists(historyDir)) then Directory.CreateDirectory(historyDir) |> ignore
                 
-                SiteBuilder.buildAll historyDir package pages theme "output"
+                SiteBuilder.buildAll historyDir package pages config theme "output"
                 
                 let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
                 psi.RedirectStandardOutput <- true
@@ -104,6 +116,8 @@ module Program =
                     printBanner()
                     AnsiConsole.MarkupLine("[blue]Scaffolding new project...[/]")
                     if not (Directory.Exists(".livedocs/history")) then Directory.CreateDirectory(".livedocs/history") |> ignore
+                    if not (Directory.Exists(".livedocs")) then Directory.CreateDirectory(".livedocs") |> ignore
+                    if not (File.Exists(".livedocs/config.json")) then File.WriteAllText(".livedocs/config.json", "{}")
                     if not (Directory.Exists("docs")) then Directory.CreateDirectory("docs") |> ignore
                     if not (File.Exists("docs/index.md")) then
                         File.WriteAllText("docs/index.md", "---\ntitle: Home\nweight: 1\n---\n# Welcome to FsLiveDocs\n\nEdit this file to get started.")
