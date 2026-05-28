@@ -82,50 +82,56 @@ module View =
         ]
 
     let apiCard (memberModel: MemberModel) =
-        div [ _class "card bg-base-100 shadow-sm border border-base-300 overflow-hidden mb-12 hover:shadow-lg transition-all duration-300 group/card"; _id memberModel.Id ] [
+        div [ _class "card bg-base-100 shadow-sm border border-base-300 overflow-hidden hover:shadow-lg transition-all duration-300 group/card" ] [
             div [ _class "bg-base-200/30 px-4 py-3 border-b border-base-300 flex justify-between items-center gap-4 group-hover/card:bg-base-200/50 transition-colors" ] [
-                div [ _class "text-xs font-mono text-primary bg-primary/5 px-3 py-1.5 rounded-full border border-primary/10 shadow-inner overflow-x-auto max-w-full block" ] [ rawText memberModel.Signature ]
+                h3 [ _id memberModel.Id; attr "data-toc-title" memberModel.Name; _class "text-xs font-mono text-primary bg-primary/5 px-3 py-1.5 rounded-full border border-primary/10 shadow-inner overflow-x-auto max-w-full block h-anchor scroll-mt-24" ] [ rawText memberModel.Signature ]
                 span [ _class "text-[10px] font-black uppercase opacity-30 tracking-widest" ] [ str "Member" ]
             ]
-            div [ _class "p-6 md:p-8" ] [
-                h2 [ _class "text-2xl font-black mb-5 tracking-tighter group-hover/card:text-primary transition-colors h-anchor" ] [ str memberModel.Name ]
-                
-                div [ _class "prose prose-sm md:prose-base max-w-none mb-10 opacity-80 leading-relaxed" ] [ rawText memberModel.SummaryHtml ]
+            div [ _class "p-5 md:p-6" ] [
+                div [ _class "prose prose-sm md:prose-base max-w-none mb-6 opacity-80 leading-relaxed" ] [ rawText memberModel.SummaryHtml ]
 
                 (if not memberModel.Parameters.IsEmpty then
                     div [ _class "mb-10" ] [
                         h4 [ _class "text-[11px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2" ] [ 
                             i [ _class "bi bi-list-nested" ] []; str "Parameters" 
                         ]
-                        div [ _class "overflow-x-auto rounded-xl border border-base-300 shadow-sm" ] [
-                            table [ _class "table table-md table-zebra w-full" ] [
-                                thead [ _class "bg-base-200/50" ] [ tr [] [ th [ _class "px-6" ] [ str "Name" ]; th [] [ str "Type" ]; th [] [ str "Description" ] ] ]
+                        div [ _class "overflow-x-auto rounded-xl border border-base-300 shadow-sm not-prose" ] [
+                            table [ _class "table table-sm table-zebra w-full" ] [
+                                thead [ _class "bg-base-200/50" ] [
+                                    tr [] [
+                                        th [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.625rem !important; padding-bottom: 0.625rem !important;" ] [ str "Name" ]
+                                        th [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.625rem !important; padding-bottom: 0.625rem !important;" ] [ str "Type" ]
+                                        th [ attr "style" "padding-right: 1.5rem !important; padding-top: 0.625rem !important; padding-bottom: 0.625rem !important;" ] [ str "Description" ]
+                                    ]
+                                ]
                                 tbody [] (memberModel.Parameters |> List.map (fun p ->
                                     tr [] [
-                                        td [ _class "font-bold font-mono text-sm text-primary px-6" ] [ str p.Name ]
-                                        td [] [ span [ _class "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText p.Type ] ]
-                                        td [ _class "text-sm opacity-80 leading-relaxed" ] [ rawText p.DescriptionHtml ]
+                                        td [ _class "font-bold font-mono text-sm text-primary"; attr "style" "padding-left: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ str p.Name ]
+                                        td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ span [ _class "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText p.Type ] ]
+                                        td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ rawText p.DescriptionHtml ]
                                     ]
                                 ))
-                            ]
+                             ]
                         ]
                     ]
                 else emptyText)
 
-                div [ _class "mb-10 flex items-center gap-6 p-5 bg-base-200/20 rounded-xl border border-base-300 shadow-inner" ] [
-                    h4 [ _class "text-[11px] font-black uppercase opacity-40 tracking-widest" ] [ str "Returns" ]
-                    div [ _class "text-accent font-mono text-sm font-black bg-accent/5 px-4 py-1.5 rounded-xl border border-accent/10 overflow-x-auto" ] [ rawText memberModel.ReturnType ]
+                div [ _class "mb-10 p-5 bg-base-200/20 rounded-xl border border-base-300 shadow-inner flex flex-col gap-3" ] [
+                    h4 [ _class "text-[11px] font-black uppercase opacity-40 tracking-widest flex items-center gap-2" ] [ 
+                        i [ _class "bi bi-arrow-return-right text-accent/60" ] []; str "Returns" 
+                    ]
+                    div [ _class "text-accent font-mono text-sm font-black bg-accent/5 px-4 py-2.5 rounded-xl border border-accent/10 overflow-x-auto w-full" ] [ rawText memberModel.ReturnType ]
                 ]
 
                 (if not memberModel.Examples.IsEmpty then
-                    div [] [
+                    div [ _class "not-prose" ] [
                         h4 [ _class "text-[11px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2" ] [ 
                              i [ _class "bi bi-play-circle-fill text-primary/60" ] []; str "Verification Examples" 
                         ]
                         (memberModel.Examples |> List.map (fun ex ->
                             div [ _class "mb-8" ] [
                                 if ex.Name <> "Example" then p [ _class "text-[10px] font-black mb-2 opacity-50 uppercase tracking-[0.2em]" ] [ str ex.Name ]
-                                pre [ _class "bg-neutral text-neutral-content p-8 rounded-[2rem] text-sm font-mono overflow-x-auto border-0 shadow-2xl shadow-black/20" ] [
+                                pre [ _class "bg-neutral text-neutral-content p-6 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-md" ] [
                                     code [ _class "language-fsharp" ] [ str ex.Content ]
                                 ]
                             ]
@@ -145,6 +151,8 @@ module View =
                 script [ _src "https://cdn.tailwindcss.com?plugins=typography" ] []
                 link [ _rel "stylesheet"; _href "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" ]
                 link [ _rel "stylesheet"; _href "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" ]
+                link [ _rel "stylesheet"; _href (Url.resolve safeRoot "pagefind/pagefind-ui.css") ]
+                script [] [ rawText "const theme = localStorage.getItem('theme'); if(theme) document.documentElement.setAttribute('data-theme', theme);" ]
                 style [] [ str """
                     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Fira+Code:wght@400;700&display=swap');
                     body { font-family: 'Inter', sans-serif; }
@@ -153,7 +161,31 @@ module View =
                     .prose pre { background: transparent !important; padding: 0 !important; }
                     .prose pre code { background: transparent !important; border: 0 !important; }
                     code { font-family: 'Fira Code', monospace; }
-                    summary::-webkit-details-marker { display: none; }
+                    summary::-webkit-details-marker { display: none !important; }
+                    summary::marker { display: none !important; }
+                    summary { list-style: none !important; }
+                    #search-ui {
+                        --pagefind-ui-primary: hsl(var(--p));
+                        --pagefind-ui-text: hsl(var(--bc));
+                        --pagefind-ui-background: hsl(var(--b1));
+                        --pagefind-ui-border: hsl(var(--b3));
+                        --pagefind-ui-font: inherit;
+                    }
+                    .pagefind-ui__search-input {
+                        background-color: hsl(var(--b2)) !important;
+                        border: 1px solid hsl(var(--b3)) !important;
+                        border-radius: 1rem !important;
+                        padding: 0.75rem 1.25rem !important;
+                        color: hsl(var(--bc)) !important;
+                    }
+                    .pagefind-ui__search-input:focus {
+                        outline: 2px solid hsl(var(--p)) !important;
+                        outline-offset: 1px !important;
+                    }
+                    .not-prose pre {
+                        background-color: hsl(var(--n)) !important;
+                        padding: 1.5rem !important;
+                    }
                 """ ]
                 title [] [ str $"{pageTitle} - FsLiveDocs" ]
             ]
@@ -180,7 +212,7 @@ module View =
                                     summary [ _class "px-8 py-3 bg-base-200 hover:bg-base-300 rounded-2xl cursor-pointer transition-all font-black text-xs uppercase tracking-widest" ] [ 
                                         str (if versions.IsEmpty then "v0.1.0" else versions |> List.head) 
                                     ]
-                                    ul [ _class "p-3 bg-base-100 rounded-[2rem] shadow-2xl border border-base-300 w-56 mt-4" ] (
+                                    ul [ _class "p-3 bg-base-100 rounded-2xl shadow-2xl border border-base-300 w-56 mt-4" ] (
                                         versions |> List.map (fun v -> 
                                             li [] [ a [ _href (Url.resolve safeRoot ("history/" + v + "/index.html")); _class "py-4 rounded-xl font-bold" ] [ str v ] ]
                                         )
@@ -193,7 +225,7 @@ module View =
                             label [ attr "tabindex" "0"; _class "btn btn-ghost btn-md btn-circle bg-base-200 hover:bg-base-300 shadow-sm" ] [
                                 i [ _class "bi bi-palette-fill text-lg" ] []
                             ]
-                            ul [ attr "tabindex" "0"; _class "dropdown-content z-[110] menu p-4 shadow-2xl bg-base-100 rounded-[2rem] w-64 mt-4 border border-base-300 grid grid-cols-2 gap-2" ] [
+                            ul [ attr "tabindex" "0"; _class "dropdown-content z-[110] menu p-4 shadow-2xl bg-base-100 rounded-2xl w-64 mt-4 border border-base-300 grid grid-cols-2 gap-2" ] [
                                 [ "light"; "dark"; "cupcake"; "dracula"; "emerald"; "corporate"; "retro"; "cyberpunk" ]
                                 |> List.map (fun t -> li [] [ a [ attr "data-set-theme" t; _class "text-[10px] font-black uppercase tracking-wider h-10 flex items-center justify-center rounded-xl hover:bg-base-200" ] [ str t ] ])
                                 |> div [ _class "contents" ]
@@ -209,7 +241,7 @@ module View =
                             div [ _class "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_14rem] gap-6 p-4 md:p-6 xl:p-8" ] [
                                 div [ _class "min-w-0" ] [
                                     main [ _class "prose prose-base md:prose-lg max-w-none bg-base-100 p-6 md:p-8 rounded-xl shadow-xl shadow-base-300/30 border border-base-300 min-h-[85vh]" ] [
-                                            div [ _id "search-ui"; _class "not-prose mb-12 shadow-inner rounded-xl overflow-hidden" ] []
+                                            div [ _id "search-ui"; _class "not-prose mb-12" ] []
                                             yield! content
                                     ]
                                 ]
@@ -235,7 +267,6 @@ module View =
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" ] []
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-fsharp.min.js" ] []
                 script [] [ rawText "document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => { const t = el.getAttribute('data-set-theme'); document.documentElement.setAttribute('data-theme', t); localStorage.setItem('theme', t); }))" ]
-                script [] [ rawText "const t = localStorage.getItem('theme'); if(t) document.documentElement.setAttribute('data-theme', t);" ]
                 // Dynamic On-This-Page Generator
                 script [] [ rawText """
                     window.addEventListener('DOMContentLoaded', () => {
@@ -244,10 +275,13 @@ module View =
                         if (toc && headings.length > 0) {
                             headings.forEach(h => {
                                 // Extract clean text ignoring badges/metadata
-                                let cleanText = Array.from(h.childNodes)
-                                    .filter(node => node.nodeType === Node.TEXT_NODE)
-                                    .map(node => node.textContent.trim())
-                                    .join(' ');
+                                let cleanText = h.getAttribute('data-toc-title');
+                                if (!cleanText) {
+                                    cleanText = Array.from(h.childNodes)
+                                        .filter(node => node.nodeType === Node.TEXT_NODE)
+                                        .map(node => node.textContent.trim())
+                                        .join(' ');
+                                }
                                 if (!cleanText) cleanText = h.innerText;
 
                                 if (!h.id) h.id = cleanText.toLowerCase().replace(/[^\w]+/g, '-');

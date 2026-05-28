@@ -44,10 +44,9 @@ type Arguments =
 module Program =
 
     let printBanner () =
-        AnsiConsole.Write(
-            new FigletText("LiveDocs")
-                .LeftAligned()
-                .Color(Color.Blue))
+        let figlet = FigletText("LiveDocs")
+        figlet.Color <- Color.Blue
+        AnsiConsole.Write(figlet)
         AnsiConsole.MarkupLine("[grey]Verified Documentation for F#[/]\n")
 
     /// <summary>Loads and merges multiple project models into a unified package.</summary>

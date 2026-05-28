@@ -52,7 +52,7 @@ module SiteBuilder =
                 (if not ent.Entities.IsEmpty then
                     div [ _class "mb-16" ] [
                         h2 [ _class "text-xl font-black mb-6 opacity-30 uppercase tracking-widest" ] [ str "Contents" ]
-                        div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4" ] (
+                        div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (
                             ent.Entities |> List.map (fun ne ->
                                 a [ _href (ne.Id + ".html")
                                     _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
@@ -75,7 +75,7 @@ module SiteBuilder =
                                 div [ _class "not-prose" ] [
                                     if ex.Name <> "Example" then
                                         h3 [ _class "text-sm font-black mb-4 opacity-40 tracking-[0.3em]" ] [ str ex.Name ]
-                                    pre [ _class "bg-neutral text-neutral-content p-8 rounded-[2rem] text-sm font-mono overflow-x-auto border-0 shadow-2xl shadow-black/20" ] [
+                                    pre [ _class "bg-neutral text-neutral-content p-6 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-md" ] [
                                         code [ _class "language-fsharp" ] [ str ex.Content ]
                                     ]
                                 ])
@@ -128,7 +128,7 @@ module SiteBuilder =
         // Generate api.html (Overview / API Reference index)
         let apiOverview = [
             h1 [ _class "text-5xl font-black mb-12 tracking-tighter" ] [ str "API Reference" ]
-            div [ _class "grid grid-cols-1 md:grid-cols-2 gap-6" ] (
+            div [ _class "grid grid-cols-1 md:grid-cols-2 gap-6 not-prose" ] (
                 let topLevel = 
                     match package.Entities with
                     | [ e ] when e.Kind = "Namespace" && e.Members.IsEmpty -> e.Entities
@@ -162,26 +162,26 @@ module SiteBuilder =
             p [ _class "text-2xl opacity-60 leading-relaxed max-w-3xl mb-12" ] [ 
                 str "Verified documentation for the F# ecosystem. Guaranteed to compile, guaranteed to run." 
             ]
-            div [ _class "flex flex-wrap gap-6" ] [
-                a [ _href (rootPath + "api.html"); _class "btn btn-primary btn-lg rounded-2xl px-12 h-20 shadow-2xl shadow-primary/20 text-lg" ] [ str "Explore API" ]
-                a [ _href (rootPath + "verified-examples.html"); _class "btn btn-outline btn-lg rounded-2xl px-12 h-20 text-lg hover:bg-base-300" ] [ str "Read Guides" ]
+            div [ _class "flex flex-wrap gap-6 not-prose" ] [
+                a [ _href (rootPath + "api.html"); _class "btn btn-primary btn-lg rounded-2xl px-12 h-20 shadow-2xl shadow-primary/20 text-lg no-underline" ] [ str "Explore API" ]
+                a [ _href (rootPath + "verified-examples.html"); _class "btn btn-outline btn-lg rounded-2xl px-12 h-20 text-lg hover:bg-base-300 no-underline" ] [ str "Read Guides" ]
             ]
-            div [ _class "grid grid-cols-1 md:grid-cols-3 gap-8 mt-24" ] [
-                div [ _class "card bg-base-100 border border-base-300 p-8 rounded-[2rem] shadow-sm hover:shadow-xl transition-all group" ] [
+            div [ _class "grid grid-cols-1 md:grid-cols-3 gap-8 mt-24 not-prose" ] [
+                div [ _class "card bg-base-100 border border-base-300 p-8 rounded-3xl shadow-sm hover:shadow-xl transition-all group" ] [
                     div [ _class "bg-primary/10 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform" ] [
                         i [ _class "bi bi-check2-circle text-3xl text-primary" ] []
                     ]
                     h3 [ _class "text-xl font-black mb-2" ] [ str "Verified" ]
                     p [ _class "opacity-60 text-sm leading-relaxed" ] [ str "Every example is a test. If it doesn't run, the build fails." ]
                 ]
-                div [ _class "card bg-base-100 border border-base-300 p-8 rounded-[2rem] shadow-sm hover:shadow-xl transition-all group" ] [
+                div [ _class "card bg-base-100 border border-base-300 p-8 rounded-3xl shadow-sm hover:shadow-xl transition-all group" ] [
                     div [ _class "bg-secondary/10 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform" ] [
                         i [ _class "bi bi-link-45deg text-3xl text-secondary" ] []
                     ]
                     h3 [ _class "text-xl font-black mb-2" ] [ str "Connected" ]
                     p [ _class "opacity-60 text-sm leading-relaxed" ] [ str "Live transclusion from your source code directly into your guides." ]
                 ]
-                div [ _class "card bg-base-100 border border-base-300 p-8 rounded-[2rem] shadow-sm hover:shadow-xl transition-all group" ] [
+                div [ _class "card bg-base-100 border border-base-300 p-8 rounded-3xl shadow-sm hover:shadow-xl transition-all group" ] [
                     div [ _class "bg-accent/10 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform" ] [
                         i [ _class "bi bi-clock-history text-3xl text-accent" ] []
                     ]
