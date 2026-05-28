@@ -456,6 +456,10 @@ module View =
 
                             code.dataset.copyText = copyText;
 
+                            if (window.Prism && typeof window.Prism.highlightElement === 'function') {{
+                                window.Prism.highlightElement(code);
+                            }}
+
                             const button = document.createElement('button');
                             button.type = 'button';
                             button.className = 'code-copy-button btn btn-xs btn-outline';
