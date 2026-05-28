@@ -29,3 +29,5 @@ We use the Diátaxis structure to decide what kind of content belongs in the doc
 That structure informs the content. The sidebar still follows the `docs/` folder layout so it remains automatic and easy to predict.
 
 If you add a new page, place it in the right folder and set its `weight` if you want a specific order. The `type` frontmatter is advisory metadata for the page itself, not the sidebar.
+
+For a field-by-field reference, see [Frontmatter Reference](frontmatter.html).

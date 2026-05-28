@@ -475,6 +475,10 @@ module View =
                                 window.Prism.highlightElement(code);
                             }}
 
+                            // Prism preserves the code structure, but explicit breaks avoid whitespace collapsing
+                            // in browsers that flatten newline text nodes inside enhanced code frames.
+                            code.innerHTML = code.innerHTML.replace(/\n/g, '<br>');
+
                             const button = document.createElement('button');
                             button.type = 'button';
                             button.className = 'code-copy-button btn btn-xs btn-outline';

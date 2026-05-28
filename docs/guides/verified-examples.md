@@ -32,13 +32,14 @@ That is the simplest case: no setup, no DI, no extra state.
 
 ## Adding a setup scenario
 
-Mark a function with `[<DocScenario>]` and give the example a matching `scenario` name.
+Mark a function with `[<DocScenario>]` and give the example a matching `scenario` name. The shared name is the join key: the generator scans all examples, finds the matching scenario, and runs that setup function before the example body.
 
 ```fsharp
 open FsLiveDocs.Core
 
 [<DocScenario("with-db")>]
 let configureDatabase () =
+    // This setup runs before the example below because both use "with-db".
     let connectionString = "Host=localhost;Database=docs"
     printfn "Configured %s" connectionString
 ```
@@ -54,7 +55,7 @@ Then reference it from the example:
 /// </example>
 ```
 
-When FsLiveDocs generates the runner, it emits setup code before the example body and uses the scenario name to bind the fixture.
+When FsLiveDocs generates the runner, it looks up `ScenarioModel.Name = "with-db"` and calls the corresponding `MethodId` before it executes the example body. That is what connects the setup function to the `scenario` attribute.
 
 ## Using dependency injection
 
@@ -78,7 +79,7 @@ let buildServices () =
 /// </example>
 ```
 
-The scenario runs first and assigns the shared `service` binding. The example then reads like a caller, not like a bootstrap script.
+The scenario runs first and assigns the shared `service` binding. The example then reads like a caller, not like a bootstrap script. The important part is that the scenario name binds the setup function to the example, not that the variable name happens to be `service`.
 
 ## Recommended patterns
 
