@@ -28,6 +28,16 @@ module View =
         |> WebUtility.HtmlDecode
         |> fun text -> Regex.Replace(text, @"\s+", " ").Trim()
 
+    let private escapeJs (value: string) =
+        value.Replace("\\", "\\\\").Replace("'", "\\'")
+
+    let private highlightSignatureHtml (text: string) =
+        let encoded = WebUtility.HtmlEncode(text)
+        Regex.Replace(
+            encoded,
+            @"\b(option|list|seq|array|map|set|unit|string|int|bool|byte|sbyte|int16|int32|int64|uint16|uint32|uint64|decimal|float|double|char|obj)\b",
+            "<span class=\"text-secondary font-semibold\">$1</span>")
+
     let private synopsisFromHtml (html: string) =
         let text = stripHtml html
         if String.IsNullOrWhiteSpace text then "No description available."
@@ -74,10 +84,10 @@ module View =
 
     let sidebarPageLink (rootPath: string) (p: ContentPage) =
         let fileName = Path.GetFileNameWithoutExtension(p.FilePath).ToLower() + ".html"
-        li [] [ a [ _href (Url.resolve rootPath fileName); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ] [ str p.Metadata.Title ] ]
+        li [ attr "data-sidebar-item" "true" ] [ a [ _href (Url.resolve rootPath fileName); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ] [ str p.Metadata.Title ] ]
 
     let rec sidebarEntityLink (rootPath: string) (e: EntityModel) =
-        li [] [
+        li [ attr "data-sidebar-item" "true" ] [
             if e.Entities.IsEmpty then
                 a [ _href (Url.resolve rootPath ("api/" + e.Id + ".html")); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm" ] [ str e.Name ]
             else
@@ -97,14 +107,24 @@ module View =
             package.Entities 
             |> List.groupBy (fun e -> e.Id.Split('.').[0])
 
-        div [ _class "flex flex-col gap-10 pb-32" ] [
+        div [ _class "flex flex-col gap-10 pb-32"; _id "sidebar-root" ] [
+            div [ _class "sticky top-0 z-10 bg-base-100/95 backdrop-blur border-b border-base-300 -mx-10 px-10 pb-6 pt-2" ] [
+                label [ _for "sidebar-filter"; _class "text-[10px] font-black uppercase tracking-[0.3em] opacity-40 block mb-3" ] [ str "Filter" ]
+                input [
+                    _id "sidebar-filter"
+                    _type "search"
+                    _placeholder "Filter guides and API"
+                    _class "input input-bordered input-sm w-full rounded-2xl"
+                    attr "autocomplete" "off"
+                ]
+            ]
             // Guides Section
-            div [] [
+            div [ attr "data-sidebar-section" "true" ] [
                 h3WithAnchor "guides" "Guides" "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
                 ul [ _class "menu menu-sm p-0 gap-1" ] (pages |> List.sortBy (fun p -> p.Metadata.Weight) |> List.map (sidebarPageLink rootPath))
             ]
             // API Reference Section
-            div [] [
+            div [ attr "data-sidebar-section" "true" ] [
                 h3WithAnchor "api-reference" "API Reference" "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
                 ul [ _class "menu menu-sm p-0 gap-2" ] (
                     apiGroups |> List.map (fun (area, entities) ->
@@ -116,7 +136,7 @@ module View =
                                 e.Entities
                             | _ -> entities
 
-                        li [] [
+                        li [ attr "data-sidebar-item" "true" ] [
                             details [ _class "group"; attr "open" "true" ] [
                                 summary [ _class "flex items-center justify-between py-2 px-4 text-primary font-black hover:bg-base-300 rounded-lg cursor-pointer list-none uppercase tracking-widest text-[10px]" ] [
                                     str area
@@ -155,7 +175,7 @@ module View =
                     | None -> emptyText
                 ]
                 div [ _class "text-xs font-mono text-primary bg-primary/5 px-3 py-1.5 rounded-full border border-primary/10 shadow-inner overflow-x-auto max-w-full block" ] [
-                    rawText memberModel.Signature
+                    rawText (highlightSignatureHtml memberModel.Signature)
                 ]
                 span [ _class "text-[10px] font-black uppercase opacity-30 tracking-widest" ] [ str "Member" ]
             ]
@@ -179,7 +199,7 @@ module View =
                                 tbody [] (memberModel.Parameters |> List.map (fun p ->
                                     tr [] [
                                         td [ _class "font-bold font-mono text-sm text-primary"; attr "style" "padding-left: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ str p.Name ]
-                                        td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ span [ _class "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText p.Type ] ]
+                                        td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ span [ _class "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText (highlightSignatureHtml p.Type) ] ]
                                         td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ rawText p.DescriptionHtml ]
                                     ]
                                 ))
@@ -192,7 +212,7 @@ module View =
                     h4 [ _class "text-[11px] font-black uppercase opacity-40 tracking-widest flex items-center gap-2" ] [ 
                         i [ _class "bi bi-arrow-return-right text-accent/60" ] []; str "Returns" 
                     ]
-                    div [ _class "text-accent font-mono text-sm font-black bg-accent/5 px-4 py-2.5 rounded-xl border border-accent/10 overflow-x-auto w-full" ] [ rawText memberModel.ReturnType ]
+                    div [ _class "text-accent font-mono text-sm font-black bg-accent/5 px-4 py-2.5 rounded-xl border border-accent/10 overflow-x-auto w-full" ] [ rawText (highlightSignatureHtml memberModel.ReturnType) ]
                 ]
 
                 (if not memberModel.Examples.IsEmpty then
@@ -215,6 +235,8 @@ module View =
 
     let layout (pageTitle: string) (pages: ContentPage list) (package: PackageModel) (versions: string list) (theme: string) (rootPath: string) (content: XmlNode list) =
         let safeRoot = Url.ensureTrailing rootPath
+        let homeHref = Url.resolve safeRoot "index.html"
+        let apiHref = Url.resolve safeRoot "api.html"
         html [ _lang "en"; attr "data-theme" theme; _class "scroll-smooth" ] [
             head [] [
                 meta [ _charset "utf-8" ]
@@ -254,9 +276,24 @@ module View =
                         outline: 2px solid hsl(var(--p)) !important;
                         outline-offset: 1px !important;
                     }
+                    .code-frame {
+                        position: relative;
+                    }
+                    .code-frame .code-copy-button {
+                        position: absolute;
+                        top: 0.75rem;
+                        right: 0.75rem;
+                        z-index: 2;
+                    }
+                    .prompt-unselectable {
+                        user-select: none;
+                        pointer-events: none;
+                        opacity: 0.72;
+                    }
                     .not-prose pre {
                         background-color: hsl(var(--n)) !important;
                         padding: 1.5rem !important;
+                        padding-top: 3rem !important;
                     }
                 """ ]
                 title [] [ str $"{pageTitle} - FsLiveDocs" ]
@@ -339,6 +376,104 @@ module View =
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" ] []
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-fsharp.min.js" ] []
                 script [] [ rawText "document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => { const t = el.getAttribute('data-set-theme'); document.documentElement.setAttribute('data-theme', t); localStorage.setItem('theme', t); }))" ]
+                script [] [ rawText $"""
+                    window.addEventListener('DOMContentLoaded', () => {{
+                        const codeBlocks = Array.from(document.querySelectorAll('pre code'));
+                        const escapeHtml = (text) => text
+                            .replace(/&/g, '&amp;')
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;')
+                            .replace(/"/g, '&quot;')
+                            .replace(/'/g, '&#39;');
+
+                        codeBlocks.forEach((code, index) => {{
+                            const pre = code.parentElement;
+                            if (!pre || pre.dataset.enhanced === 'true') return;
+                            pre.dataset.enhanced = 'true';
+                            pre.classList.add('code-frame');
+
+                            const raw = code.textContent.replace(/\r\n/g, '\n');
+                            const lines = raw.split('\n');
+                            const copyText = raw.replace(/^(\s*)(iex\(\d+\)>|iex>|fsi>|\.{3}>|>)\s?/gm, '$1');
+
+                            code.innerHTML = lines.map(line => {{
+                                const match = line.match(/^(\s*)(iex\(\d+\)>|iex>|fsi>|\.{3}>|>)(\s?)(.*)$/);
+                                if (!match) return escapeHtml(line);
+                                const [, indent, prompt, spacer, rest] = match;
+                                return `${{escapeHtml(indent)}}<span class="prompt-unselectable">${{escapeHtml(prompt + spacer)}}</span>${{escapeHtml(rest)}}`;
+                            }}).join('<br>');
+
+                            code.dataset.copyText = copyText;
+
+                            const button = document.createElement('button');
+                            button.type = 'button';
+                            button.className = 'code-copy-button btn btn-xs btn-outline';
+                            button.innerHTML = '<i class="bi bi-clipboard"></i><span class="ml-1">Copy</span>';
+                            button.addEventListener('click', async () => {{
+                                try {{
+                                    await navigator.clipboard.writeText(code.dataset.copyText || raw);
+                                    button.innerHTML = '<i class="bi bi-check2"></i><span class="ml-1">Copied</span>';
+                                    setTimeout(() => {{
+                                        button.innerHTML = '<i class="bi bi-clipboard"></i><span class="ml-1">Copy</span>';
+                                    }}, 1200);
+                                }} catch {{
+                                    button.innerHTML = '<i class="bi bi-x"></i><span class="ml-1">Failed</span>';
+                                    setTimeout(() => {{
+                                        button.innerHTML = '<i class="bi bi-clipboard"></i><span class="ml-1">Copy</span>';
+                                    }}, 1200);
+                                }}
+                            }});
+                            pre.appendChild(button);
+                        }});
+                    }});
+                """ ]
+                script [] [ rawText $"""
+                    window.addEventListener('DOMContentLoaded', () => {{
+                        const filter = document.getElementById('sidebar-filter');
+                        if (filter) {{
+                            const apply = () => {{
+                                const query = filter.value.trim().toLowerCase();
+                                document.querySelectorAll('#sidebar-root [data-sidebar-item="true"]').forEach(item => {{
+                                    const text = item.textContent.toLowerCase();
+                                    item.style.display = !query || text.includes(query) ? '' : 'none';
+                                }});
+                                document.querySelectorAll('#sidebar-root [data-sidebar-section="true"]').forEach(section => {{
+                                    const visible = Array.from(section.querySelectorAll('[data-sidebar-item="true"]')).some(el => el.style.display !== 'none');
+                                    section.style.display = visible ? '' : 'none';
+                                }});
+                            }};
+                            filter.addEventListener('input', apply);
+                            apply();
+                        }}
+
+                        const focusSearch = () => {{
+                            const input = document.querySelector('#search-ui input, .pagefind-ui__search-input');
+                            if (input) {{
+                                input.focus();
+                                input.select?.();
+                                return true;
+                            }}
+                            return false;
+                        }};
+
+                        document.addEventListener('keydown', (event) => {{
+                            if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+                            const active = document.activeElement;
+                            const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+                            if (typing) return;
+
+                            if (event.key === '/' || event.key === 's') {{
+                                if (focusSearch()) {{
+                                    event.preventDefault();
+                                }}
+                            }} else if (event.key === 'd') {{
+                                window.location.href = '{homeHref}';
+                            }} else if (event.key === 'a') {{
+                                window.location.href = '{apiHref}';
+                            }}
+                        }});
+                    }});
+                """ ]
                 // Dynamic On-This-Page Generator
                 script [] [ rawText """
                     window.addEventListener('DOMContentLoaded', () => {

@@ -27,6 +27,13 @@ module SiteBuilder =
             let sentence = Regex.Match(text, @"^(.+?[.!?])(?:\s|$)")
             if sentence.Success then sentence.Groups.[1].Value else text
 
+    let private highlightSignatureHtml (text: string) =
+        let encoded = WebUtility.HtmlEncode(text)
+        Regex.Replace(
+            encoded,
+            @"\b(option|list|seq|array|map|set|unit|string|int|bool|byte|sbyte|int16|int32|int64|uint16|uint32|uint64|decimal|float|double|char|obj)\b",
+            "<span class=\"text-secondary font-semibold\">$1</span>")
+
     let rec private flattenEntities (entities: EntityModel list) =
         entities
         |> List.collect (fun e -> e :: flattenEntities e.Entities)
@@ -86,6 +93,43 @@ module SiteBuilder =
                         )
                     ]
                 else emptyText)
+
+                if ent.Kind <> "Module" && not ent.Members.IsEmpty then
+                    div [ _class "mb-16 not-prose" ] [
+                        View.h2WithAnchor (ent.Id + "-spec") "Specification" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
+                        div [ _class "rounded-3xl border border-base-300 bg-base-100 shadow-sm overflow-hidden" ] [
+                            div [ _class "grid grid-cols-1 md:grid-cols-3 gap-0 border-b border-base-300" ] [
+                                div [ _class "p-5 md:p-6" ] [
+                                    div [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ] [ str "Kind" ]
+                                    div [ _class "text-lg font-black" ] [ str ent.Kind ]
+                                ]
+                                div [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ] [
+                                    div [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ] [ str "Members" ]
+                                    div [ _class "text-lg font-black" ] [ str (string ent.Members.Length) ]
+                                ]
+                                div [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ] [
+                                    div [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ] [ str "Examples" ]
+                                    div [ _class "text-lg font-black" ] [ str (string (entityExamples ent).Length) ]
+                                ]
+                            ]
+                            div [ _class "p-5 md:p-6 space-y-3" ] (
+                                ent.Members
+                                |> List.take (min 5 ent.Members.Length)
+                                |> List.map (fun m ->
+                                    div [ _class "flex flex-col gap-2 rounded-2xl border border-base-300 bg-base-200/20 p-4" ] [
+                                        div [ _class "flex items-center justify-between gap-4" ] [
+                                            span [ _class "font-bold text-primary" ] [ str m.Name ]
+                                            span [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 font-black" ] [ str "Signature" ]
+                                        ]
+                                        div [ _class "font-mono text-sm text-accent overflow-x-auto" ] [
+                                            rawText (highlightSignatureHtml m.Signature)
+                                        ]
+                                    ]
+                                )
+                            )
+                        ]
+                    ]
+                else emptyText
 
                 if not ent.Members.IsEmpty then
                     div [ _class "mb-16 not-prose" ] [
