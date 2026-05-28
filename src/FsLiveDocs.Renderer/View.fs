@@ -196,10 +196,22 @@ module View =
                                 e.Entities
                             | _ -> entities
 
+                        let areaPageId =
+                            entities
+                            |> List.tryFind (fun e -> e.Kind = "Namespace" && e.Name.Equals(area, StringComparison.OrdinalIgnoreCase))
+                            |> Option.map (fun e -> e.Id)
+                            |> Option.defaultValue area
+
                         li [ attr "data-sidebar-item" "true" ] [
                             details [ _class "group"; attr "open" "true" ] [
                                 summary [ _class "flex items-center justify-between py-2 px-4 text-primary font-black hover:bg-base-300 rounded-lg cursor-pointer list-none uppercase tracking-widest text-[10px]" ] [
-                                    str area
+                                    a [
+                                        _href (Url.resolve rootPath ("api/" + areaPageId + ".html"))
+                                        attr "onclick" "event.stopPropagation();"
+                                        _class "flex-1 truncate hover:link"
+                                    ] [
+                                        str area
+                                    ]
                                     i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
                                 ]
                                 ul [ _class "menu menu-sm p-0 mt-2 gap-1 border-l-2 border-primary/10 ml-4" ] (entitiesToRender |> List.map (sidebarEntityLink rootPath))

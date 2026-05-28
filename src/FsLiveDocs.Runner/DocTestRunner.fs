@@ -92,6 +92,7 @@ module DocTestRunner =
             |> List.map (fun ns -> "    open " + ns)
             |> String.concat "\n"
 
+        // <snippet:ScenarioBinding>
         let testModules = 
             examples 
             |> List.mapi (fun i ex -> 
@@ -107,6 +108,7 @@ module DocTestRunner =
                 
                 sprintf "module Test%d =\n    open System\n%s\n    printfn \"--- TEST: %s ---\"\n    try\n%s%s\n            ()\n    with e -> printfn \"ERROR: %%s\" e.Message\n    printfn \"--- END TEST ---\"\n" i allNamespaces ex.Name scenarioCall body)
             |> String.concat "\n"
+        // </snippet:ScenarioBinding>
 
         let programContent = sprintf "%s\n\n[<EntryPoint>]\nlet main _ = 0" testModules
         File.WriteAllText(programFile, programContent)

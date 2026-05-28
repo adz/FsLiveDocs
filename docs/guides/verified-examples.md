@@ -57,6 +57,27 @@ Then reference it from the example:
 
 When FsLiveDocs generates the runner, it looks up `ScenarioModel.Name = "with-db"` and calls the corresponding `MethodId` before it executes the example body. That is what connects the setup function to the `scenario` attribute.
 
+## What actually runs
+
+The example body is extracted from the XML doc comment and copied into a generated test project. It is run in the context of that generated project, not pasted into this guide page.
+
+The scenario function is different. FsLiveDocs discovers it from the compiled project assembly by looking for `[<DocScenario>]`, then calls the compiled method before the example body runs.
+
+The real code paths are here:
+
+{{< snippet id="DocScenarioAttributeUsage" >}}
+
+{{< snippet id="DocScenarioPattern" >}}
+
+{{< snippet id="ScenarioBinding" >}}
+
+This means:
+
+1. the scenario does not have to be written inline next to the guide text,
+2. the example is still tested verbatim, with its original lines preserved,
+3. the scenario can live in the same project or any other project you pass to the build,
+4. the runner uses the scenario name to connect the example to the compiled setup function.
+
 ## Using dependency injection
 
 For service-heavy code, keep the setup function responsible for construction and keep the doc snippet focused on behavior.

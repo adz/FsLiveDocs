@@ -96,6 +96,20 @@ module ContentProvider =
             Some relative
 
     let private validateLinks (currentOutputPath: string) (allowedOutputs: Set<string>) (body: string) =
+        let protectedSegments = ResizeArray<string>()
+        let protectCodeSegments (text: string) =
+            let codePattern = @"(?s)```.*?```|`[^`\r\n]+`"
+            System.Text.RegularExpressions.Regex.Replace(text, codePattern, fun (m: System.Text.RegularExpressions.Match) ->
+                let token = $"@@FSLIVEDOCS_VALIDATE_CODE_{protectedSegments.Count}@@"
+                protectedSegments.Add(m.Value)
+                token)
+
+        let restoreCodeSegments (text: string) =
+            protectedSegments
+            |> Seq.mapi (fun i (segment: string) -> $"@@FSLIVEDOCS_VALIDATE_CODE_{i}@@", segment)
+            |> Seq.fold (fun (acc: string) (token, segment) -> acc.Replace(token, segment)) text
+
+        let body = protectCodeSegments body
         let linkPattern = @"(?<!\!)\[[^\]]+\]\((?<href>[^)]+)\)"
         for m in System.Text.RegularExpressions.Regex.Matches(body, linkPattern) do
             let href = m.Groups.["href"].Value.Trim().Trim('"')
@@ -110,6 +124,7 @@ module ContentProvider =
                         else target
                     if not (allowedOutputs.Contains normalizedTarget) then
                         invalidOp $"Broken documentation link in {currentOutputPath}: [{href}] resolves to {normalizedTarget}, which does not exist."
+        ignore (restoreCodeSegments body)
 
     let private collectEntityIds (entities: EntityModel list) =
         let rec walk acc (items: EntityModel list) =
@@ -178,6 +193,7 @@ module ContentProvider =
             | None -> invalidOp $"Example '{id}' was not found."
         )
 
+        // <snippet:XrefResolution>
         // 3. Resolve xref: with relative rootPath
         let xrefPattern = @"xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
         let body3 = System.Text.RegularExpressions.Regex.Replace(body2, xrefPattern, fun (m: System.Text.RegularExpressions.Match) ->
@@ -198,6 +214,7 @@ module ContentProvider =
             | None, Some ent -> $"[{ent.Name}]({rootPath}api/{ent.Id}.html)"
             | None, None -> invalidOp $"Cross-reference '{id}' was not found."
         )
+        // </snippet:XrefResolution>
         restoreCodeSegments body3
 
     /// <summary>Loads and processes a single Markdown page.</summary>

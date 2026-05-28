@@ -7,6 +7,7 @@ open FSharp.Formatting.Templating
 open FSharp.Compiler.Symbols
 open System.Text.RegularExpressions
 open System.Xml.Linq
+open System.Reflection
 
 /// <summary>Provides capabilities to scan F# projects and extract symbols using FSharp.Formatting.</summary>
 /// <example name="ExtractExamplesExample">
@@ -137,6 +138,40 @@ module SymbolLister =
         with _ ->
             Path.GetFileNameWithoutExtension(projectPath)
 
+    let private extractScenariosFromAssembly (dllPath: string) =
+        let scenarioAttributeName = "FsLiveDocs.Core.DocScenarioAttribute"
+        let assembly = Assembly.LoadFrom(dllPath)
+        let types =
+            try
+                assembly.GetTypes() |> Array.toList
+            with :? ReflectionTypeLoadException as ex ->
+                ex.Types |> Array.choose (fun t -> if isNull t then None else Some t) |> Array.toList
+
+        types
+        |> List.collect (fun t ->
+            t.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static ||| BindingFlags.Instance ||| BindingFlags.DeclaredOnly)
+            |> Array.toList
+            |> List.choose (fun m ->
+                m.GetCustomAttributesData()
+                |> Seq.tryFind (fun cad -> cad.AttributeType.FullName = scenarioAttributeName)
+                |> Option.bind (fun cad ->
+                    let scenarioName =
+                        cad.ConstructorArguments
+                        |> Seq.tryHead
+                        |> Option.map (fun arg -> string arg.Value)
+                        |> Option.defaultValue ""
+
+                    if String.IsNullOrWhiteSpace scenarioName then None
+                    else
+                        let typeName =
+                            if String.IsNullOrWhiteSpace t.FullName then t.Name else t.FullName
+
+                        Some {
+                            Name = scenarioName
+                            MethodId = $"{typeName.Replace('+', '.')}.{m.Name}"
+                        })))
+        |> List.distinctBy (fun s -> s.Name)
+
     /// <summary>Groups flattened entities into a hierarchical tree based on their IDs.</summary>
     let reconstructHierarchy (entities: EntityModel list) =
         let rec buildTree (currentPath: string) (available: EntityModel list) =
@@ -255,7 +290,7 @@ module SymbolLister =
                     |> Seq.collect (fun ei -> flatten ei.Entity)
                     |> Seq.toList
 
-                return { Version = "0.1.0"; Entities = entities; Scenarios = [] }
+                return { Version = "0.1.0"; Entities = entities; Scenarios = extractScenariosFromAssembly dllPath }
     }
 
     /// <summary>Merges multiple PackageModels into a single unified documentation model and reconstructs hierarchy.</summary>
@@ -264,7 +299,8 @@ module SymbolLister =
             { Version = "0.1.0"; Entities = []; Scenarios = [] }
         else
             let allFlatEntities = packages |> List.collect (fun p -> p.Entities) |> List.distinctBy (fun e -> e.Id)
+            let allScenarios = packages |> List.collect (fun p -> p.Scenarios) |> List.distinctBy (fun s -> s.Name)
             let hierarchical = reconstructHierarchy allFlatEntities |> pruneSyntheticDefaults
             { Version = (packages |> List.head).Version
               Entities = hierarchical
-              Scenarios = [] }
+              Scenarios = allScenarios }
