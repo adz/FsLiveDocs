@@ -102,5 +102,5 @@ module ViewTests =
         let html = SiteBuilder.renderEntityPage recordEntity [] package { RepoUrl = None } [] "light" "../"
 
         Assert.Contains("Fields", html)
-        Assert.Contains("Use a record when you want a single value made up of named fields.", html)
+        Assert.Contains("Represents a parameter of a function or method.", html)
         Assert.DoesNotContain("Specification", html)

@@ -245,15 +245,6 @@ module SiteBuilder =
 
                 renderSummaryBlock ent.SummaryHtml
 
-                div [ _class "mb-10 rounded-3xl border border-base-300 bg-base-200/20 p-8" ] [
-                    div [ _class "max-w-3xl" ] [
-                        div [ _class "text-[10px] font-black uppercase tracking-[0.3em] opacity-40 mb-3" ] [ str "Record" ]
-                        p [ _class "text-lg leading-relaxed opacity-80 mb-0" ] [
-                            str "Use a record when you want a single value made up of named fields. Records are a good fit for domain data, configuration, and other values that should be read as a unit."
-                        ]
-                    ]
-                ]
-
                 renderFieldTable "Fields" ent.Members
 
                 let examples = entityExamples ent
