@@ -82,26 +82,32 @@ module View =
     let navItem (title: string) (url: string) =
         li [] [ a [ _href url; _class "hover:text-primary transition-colors px-4 py-2 font-bold" ] [ str title ] ]
 
-    let private normalizeGuideType (pageType: string option) =
-        match pageType with
-        | Some value when not (String.IsNullOrWhiteSpace value) -> value.Trim().ToLowerInvariant()
-        | _ -> "guide"
+    let private docsSectionKey (page: ContentPage) =
+        let relative =
+            page.FilePath.Replace('\\', '/')
+            |> fun path -> if path.StartsWith("docs/") then path.Substring(5) else path
+        let directory = Path.GetDirectoryName(relative)
+        if String.IsNullOrWhiteSpace directory then
+            "overview"
+        else
+            directory.Replace('\\', '/').TrimStart('/')
+            |> fun path ->
+                let folder = path.Split('/').[0].ToLowerInvariant()
+                if folder = "guides" then "guides"
+                elif folder = "api" then "api-docs"
+                else folder
 
-    let private guideSectionOrder = function
-        | "tutorial" -> 0
-        | "how-to" -> 1
-        | "explanation" -> 2
-        | "reference" -> 3
-        | "guide" -> 4
-        | _ -> 5
+    let private docsSectionLabel = function
+        | "overview" -> "Overview"
+        | "guides" -> "Guides"
+        | "api-docs" -> "API Docs"
+        | other -> other.Split('-') |> Array.map (fun part -> part.Substring(0, 1).ToUpperInvariant() + part.Substring(1)) |> String.concat " "
 
-    let private guideSectionLabel = function
-        | "tutorial" -> "Tutorials"
-        | "how-to" -> "How-To"
-        | "explanation" -> "Explanations"
-        | "reference" -> "Reference"
-        | "guide" -> "Guides"
-        | other -> other.ToUpperInvariant()
+    let private docsSectionOrder = function
+        | "overview" -> 0
+        | "guides" -> 1
+        | "api-docs" -> 2
+        | _ -> 3
 
     let sidebarPageLink (rootPath: string) (p: ContentPage) =
         let fileName = Path.GetFileNameWithoutExtension(p.FilePath).ToLower() + ".html"
@@ -129,14 +135,12 @@ module View =
             |> List.groupBy (fun e -> e.Id.Split('.').[0])
             |> List.sortBy fst
 
-        let guideGroups =
+        let docsGroups =
             pages
             |> List.filter (fun p -> not (Path.GetFileNameWithoutExtension(p.FilePath).Equals("index", StringComparison.OrdinalIgnoreCase)))
-            |> List.sortBy (fun p ->
-                let key = normalizeGuideType p.Metadata.Type
-                guideSectionOrder key, p.Metadata.Weight, p.Metadata.Title)
-            |> List.groupBy (fun p -> normalizeGuideType p.Metadata.Type)
-            |> List.sortBy (fun (groupKey, _) -> guideSectionOrder groupKey)
+            |> List.sortBy (fun p -> docsSectionOrder (docsSectionKey p), p.Metadata.Weight, p.Metadata.Title)
+            |> List.groupBy docsSectionKey
+            |> List.sortBy (fun (groupKey, _) -> docsSectionOrder groupKey)
 
         div [ _class "flex flex-col gap-10 pb-32"; _id "sidebar-root" ] [
             div [ _class "sticky top-0 z-10 bg-base-100/95 backdrop-blur border-b border-base-300 -mx-10 px-10 pb-6 pt-2" ] [
@@ -156,21 +160,26 @@ module View =
                     li [ attr "data-sidebar-item" "true" ] [ a [ _href (Url.resolve rootPath "api.html"); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ] [ str "API Reference" ] ]
                 ]
             ]
-            // Guides Section
+            // Docs Sections
             div [ attr "data-sidebar-section" "true" ] [
-                h3WithAnchor "guides" "Guides" "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
+                h3WithAnchor "docs" "Docs" "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
                 ul [ _class "menu menu-sm p-0 gap-2" ] (
-                    guideGroups
+                    docsGroups
                     |> List.map (fun (groupKey, items) ->
-                        li [ attr "data-sidebar-item" "true" ] [
-                            details [ _class "group"; attr "open" "true" ] [
-                                summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none font-black text-[10px] uppercase tracking-[0.2em] opacity-70" ] [
-                                    span [] [ str (guideSectionLabel groupKey) ]
-                                    i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
-                                ]
-                                ul [ _class "menu menu-sm p-0 mt-2 ml-2 border-l border-base-300" ] (items |> List.map (sidebarPageLink rootPath))
+                        if groupKey = "overview" then
+                            li [ attr "data-sidebar-item" "true" ] [
+                                ul [ _class "menu menu-sm p-0 gap-1" ] (items |> List.map (sidebarPageLink rootPath))
                             ]
-                        ]
+                        else
+                            li [ attr "data-sidebar-item" "true" ] [
+                                details [ _class "group"; attr "open" "true" ] [
+                                    summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none font-black text-[10px] uppercase tracking-[0.2em] opacity-70" ] [
+                                        span [] [ str (docsSectionLabel groupKey) ]
+                                        i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
+                                    ]
+                                    ul [ _class "menu menu-sm p-0 mt-2 ml-2 border-l border-base-300" ] (items |> List.map (sidebarPageLink rootPath))
+                                ]
+                            ]
                     )
                 )
             ]

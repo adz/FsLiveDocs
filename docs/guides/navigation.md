@@ -6,25 +6,26 @@ type: explanation
 
 # Sidebar Ordering and Sections
 
-FsLiveDocs groups the left sidebar into categories so the documentation reads in a predictable order.
+FsLiveDocs groups the left sidebar automatically from the `docs/` folder structure so the navigation stays predictable as the site grows.
 
 ## How ordering works
 
-1. Pages with `type: tutorial` appear first.
-2. Pages with `type: how-to` appear next.
-3. Pages with `type: explanation` follow.
-4. Pages with `type: reference` come after that.
-5. Pages without a `type` fall back to the generic Guides bucket.
+1. Pages in the `docs/` root appear in the Overview section.
+2. Pages in `docs/guides/` appear in the Guides section.
+3. Pages in `docs/api/` appear in the API Docs section.
+4. Generated API reference pages appear in the API Reference section.
 
-Within each category, pages are sorted by `weight` and then by title.
+Within each folder-based group, pages are sorted by `weight` and then by title.
 
 ## Why this matters
 
-The sidebar is meant to reflect the Diátaxis structure:
+The docs are written with the Diátaxis structure in mind:
 
 1. tutorials for first-time setup,
 2. how-to guides for repeatable tasks,
 3. explanations for architecture and trade-offs,
 4. API reference for the generated code model.
 
-If you add a new guide, set its `type` and `weight` in frontmatter so it lands in the right place automatically.
+That structure informs the content, while the sidebar follows the folder layout so it remains automatic and easy to predict.
+
+If you add a new page, place it in the right folder and set its `weight` if you want a specific order. The `type` frontmatter is advisory metadata for the page itself, not the sidebar.
