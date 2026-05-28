@@ -21,7 +21,7 @@ type DocScenarioAttribute(name: string) =
 // </snippet:DocScenarioAttributeUsage>
 
 // <snippet:DocScenarioPattern>
-module internal DocScenarioSamples =
+module DocScenarioSamples =
     let mutable currentUser = "anonymous"
 
     [<DocScenario("with-user")>]
