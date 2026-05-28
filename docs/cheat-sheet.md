@@ -1,4 +1,4 @@
-# FsLiveDocs (Atlas) Cheat Sheet
+# FsLiveDocs Cheat Sheet
 
 ## 🛠 Project Structure
 

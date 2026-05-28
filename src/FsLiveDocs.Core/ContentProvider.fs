@@ -6,6 +6,12 @@ open YamlDotNet.Serialization
 open YamlDotNet.Serialization.NamingConventions
 
 /// <summary>Provides capabilities to load, parse, and resolve Markdown documentation pages.</summary>
+/// <example name="ResolveSnippetExample">
+/// let package = { Version = "1.0"; Entities = []; Scenarios = [] }
+/// let resolved = ContentProvider.resolveSnippets "Hello" "." package ""
+/// printfn "RESOLVED: %s" resolved
+/// // EXPECTED: RESOLVED: Hello
+/// </example>
 module ContentProvider =
 
     /// <summary>The shared Markdig pipeline with advanced extensions enabled.</summary>
@@ -130,7 +136,8 @@ module ContentProvider =
             let html = Markdown.ToHtml(resolved, pipeline)
             { Metadata = metadata; ContentHtml = html; FilePath = filePath }
         | None ->
-            let html = Markdown.ToHtml(raw, pipeline)
+            let resolved = resolveSnippets raw sourceDir package rootPath
+            let html = Markdown.ToHtml(resolved, pipeline)
             { Metadata = { Title = Path.GetFileNameWithoutExtension(filePath); Weight = 0; Type = None }; ContentHtml = html; FilePath = filePath }
 
     /// <summary>Scans the docs directory and loads all guide pages.</summary>
@@ -142,3 +149,25 @@ module ContentProvider =
             |> Array.toList
         else
             []
+
+    /// <summary>Applies long-form documentation from docs/api/*.md to the package model.</summary>
+    let applyApiDocs (docsDir: string) (sourceDir: string) (package: PackageModel) =
+        let apiDocsDir = Path.Combine(docsDir, "api")
+        if not (Directory.Exists(apiDocsDir)) then package
+        else
+            let rec updateEntity (e: EntityModel) (docs: Map<string, string>) =
+                let summary = docs |> Map.tryFind e.Id |> Option.defaultValue e.SummaryHtml
+                { e with 
+                    SummaryHtml = summary
+                    Entities = e.Entities |> List.map (fun child -> updateEntity child docs) }
+
+            let docFiles = Directory.GetFiles(apiDocsDir, "*.md")
+            let docsMap = 
+                docFiles 
+                |> Array.map (fun f -> 
+                    let id = Path.GetFileNameWithoutExtension(f)
+                    let page = loadPage f sourceDir package ""
+                    id, page.ContentHtml)
+                |> Map.ofArray
+            
+            { package with Entities = package.Entities |> List.map (fun e -> updateEntity e docsMap) }

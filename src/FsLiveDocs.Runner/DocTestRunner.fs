@@ -6,27 +6,39 @@ open System.Diagnostics
 open FsLiveDocs.Core
 
 /// <summary>The execution engine for verified docstrings (DocTests).</summary>
+/// <example name="VerifyExamplesExample">
+/// let package = { Version = "1.0"; Entities = []; Scenarios = [] }
+/// let results = Async.RunSynchronously(DocTestRunner.verifyExamples package "FsLiveDocs.Runner.fsproj" [])
+/// printfn "RESULTS: %d" results.Length
+/// // EXPECTED: RESULTS: 0
+/// </example>
 module DocTestRunner =
 
-    let private indentExample (content: string) =
+    let private indentExample (content: string) (spaces: int) =
         let lines = content.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
         let nonEmpty = lines |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line))
-        let minIndent =
-            nonEmpty
-            |> Array.map (fun line -> line.Length - line.TrimStart().Length)
-            |> Array.fold min Int32.MaxValue
+        if nonEmpty.Length = 0 then ""
+        else
+            let minIndent =
+                nonEmpty
+                |> Array.map (fun line -> line.Length - line.TrimStart().Length)
+                |> Array.fold min Int32.MaxValue
 
-        lines
-        |> Array.map (fun line ->
-            let normalized =
-                if String.IsNullOrWhiteSpace line then ""
-                elif minIndent = Int32.MaxValue then line.TrimStart()
-                elif line.Length >= minIndent then line.Substring(minIndent)
-                else line.TrimStart()
-            let xmlDocNormalized =
-                if normalized.StartsWith(" ") then normalized.Substring(1) else normalized
-            "        " + xmlDocNormalized)
-        |> String.concat "\n"
+            let indent = String(' ', spaces)
+            lines
+            |> Array.map (fun line ->
+                let stripped = 
+                    if line.Length >= minIndent then line.Substring(minIndent)
+                    else line.TrimStart()
+                
+                // Final safety: if it looks like it should be top-level but has a lingering space, kill it
+                let normalized = 
+                    if stripped.StartsWith(" ") && (stripped.TrimStart().StartsWith("let ") || stripped.TrimStart().StartsWith("printfn ") || stripped.TrimStart().StartsWith("Say.")) then
+                        stripped.TrimStart()
+                    else stripped
+
+                indent + normalized.TrimEnd())
+            |> String.concat "\n"
 
     /// <summary>Generates a temporary .fsproj and Program.fs to execute code examples.</summary>
     let generateTestProject (examples: ExampleModel list) (scenarios: ScenarioModel list) (projectPath: string) (references: string list) (tempDir: string) =
@@ -44,6 +56,7 @@ module DocTestRunner =
             "    <OutputType>Exe</OutputType>\n" +
             "    <TargetFramework>net10.0</TargetFramework>\n" +
             "    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>\n" +
+            "    <OtherFlags>$(OtherFlags) --strict-indentation-</OtherFlags>\n" +
             "  </PropertyGroup>\n" +
             "  <ItemGroup>\n" +
             "    <PackageReference Include=\"FSharp.Core\" Version=\"10.1.201\" />\n" +
@@ -57,28 +70,6 @@ module DocTestRunner =
             
         File.WriteAllText(projectFile, projectContent)
 
-        let testFuncs = 
-            examples 
-            |> List.mapi (fun i ex -> 
-                let scenarioCall = 
-                    match ex.Scenario with
-                    | Some sName -> 
-                        match scenarios |> List.tryFind (fun s -> s.Name = sName) with
-                        | Some s -> sprintf "    %s()\n" s.MethodId
-                        | None -> ""
-                    | None -> ""
-                
-                let body = indentExample ex.Content
-                
-                sprintf "let test%d () =\n%s\n    let _ =\n%s\n        ()\n    ()\n" i scenarioCall body)
-            |> String.concat "\n"
-
-        let testCalls =
-            examples
-            |> List.mapi (fun i ex ->
-                sprintf "    printfn \"--- TEST: %s ---\"\n    try test%d() with e -> printfn \"ERROR: %%s\" e.Message\n    printfn \"--- END TEST ---\"\n" ex.Name i)
-            |> String.concat "\n"
-
         let scenarioNamespaces = 
             scenarios |> List.map (fun s -> 
                 let lastDot = s.MethodId.LastIndexOf('.')
@@ -90,12 +81,28 @@ module DocTestRunner =
         let projNamespace = Path.GetFileNameWithoutExtension(projectPath)
         
         let allNamespaces = 
-            projNamespace :: scenarioNamespaces
+            "FsLiveDocs.Core" :: projNamespace :: scenarioNamespaces
             |> List.distinct
-            |> List.map (fun ns -> "open " + ns)
+            |> List.map (fun ns -> "    open " + ns)
             |> String.concat "\n"
 
-        let programContent = sprintf "module GeneratedTests\nopen System\n%s\n\n%s\n\n[<EntryPoint>]\nlet main _ =\n%s\n    0" allNamespaces testFuncs testCalls
+        let testModules = 
+            examples 
+            |> List.mapi (fun i ex -> 
+                let scenarioCall = 
+                    match ex.Scenario with
+                    | Some sName -> 
+                        match scenarios |> List.tryFind (fun s -> s.Name = sName) with
+                        | Some s -> sprintf "        %s()\n" s.MethodId
+                        | None -> ""
+                    | None -> ""
+                
+                let body = indentExample ex.Content 12
+                
+                sprintf "module Test%d =\n    open System\n%s\n    printfn \"--- TEST: %s ---\"\n    try\n%s%s\n            ()\n    with e -> printfn \"ERROR: %%s\" e.Message\n    printfn \"--- END TEST ---\"\n" i allNamespaces ex.Name scenarioCall body)
+            |> String.concat "\n"
+
+        let programContent = sprintf "%s\n\n[<EntryPoint>]\nlet main _ = 0" testModules
         File.WriteAllText(programFile, programContent)
         projectFile
 
@@ -133,7 +140,11 @@ module DocTestRunner =
                 let startMarker = sprintf "--- TEST: %s ---" ex.Name
                 let endMarker = "--- END TEST ---"
                 let startIndex = output.IndexOf(startMarker)
-                if startIndex <> -1 then
+                let ran = startIndex <> -1
+                if not ran then
+                    let programContent = if Directory.Exists(tempDir) && File.Exists(Path.Combine(tempDir, "Program.fs")) then File.ReadAllText(Path.Combine(tempDir, "Program.fs")) else "Program.fs not found"
+                    results <- (ex.Name, false, "Test did not run. Output:\n" + output + "\n\nGenerated Program.fs:\n" + programContent) :: results
+                elif startIndex <> -1 then
                     let contentStart = startIndex + startMarker.Length
                     let endIndex = output.IndexOf(endMarker, contentStart)
                     if endIndex <> -1 then
@@ -145,7 +156,6 @@ module DocTestRunner =
                         | None -> results <- (ex.Name, true, actual) :: results
                     else
                         results <- (ex.Name, false, "Test crashed or timed out") :: results
-                else
-                    results <- (ex.Name, false, "Test did not run. Output:\n" + output) :: results
+            
             return List.rev results
     }

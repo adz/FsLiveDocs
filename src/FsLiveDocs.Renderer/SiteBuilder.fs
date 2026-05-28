@@ -2,10 +2,17 @@ namespace FsLiveDocs.Renderer
 
 open System
 open System.IO
+open System.Text.RegularExpressions
 open Giraffe.ViewEngine
 open FsLiveDocs.Core
 
 /// <summary>The high-level site assembly engine.</summary>
+/// <example name="BuildSummaryExample">
+/// let package = { Version = "1.0"; Entities = []; Scenarios = [] }
+/// let summary = SiteBuilder.generateLlmsTxt package
+/// printfn "%s" summary
+/// // EXPECTED: # API Reference for LLMs
+/// </example>
 module SiteBuilder =
 
     let rec private flattenEntities (entities: EntityModel list) =
@@ -33,8 +40,27 @@ module SiteBuilder =
                 ]
                 
                 (if not (String.IsNullOrWhiteSpace(ent.SummaryHtml)) then
-                    div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ 
-                        rawText ent.SummaryHtml 
+                    let cleanSummary = Regex.Replace(ent.SummaryHtml, "^<h1.*?>.*?<\/h1>", String.Empty, RegexOptions.Singleline).Trim()
+                    if not (String.IsNullOrWhiteSpace(cleanSummary)) then
+                        div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ 
+                            rawText cleanSummary 
+                        ]
+                    else emptyText
+                else emptyText)
+
+                // Render children as a directory if this is a namespace or has many entities
+                (if not ent.Entities.IsEmpty then
+                    div [ _class "mb-16" ] [
+                        h2 [ _class "text-xl font-black mb-6 opacity-30 uppercase tracking-widest" ] [ str "Contents" ]
+                        div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4" ] (
+                            ent.Entities |> List.map (fun ne ->
+                                a [ _href (ne.Id + ".html")
+                                    _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
+                                    span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str ne.Name ]
+                                    span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str ne.Kind ]
+                                ]
+                            )
+                        )
                     ]
                 else emptyText)
 
@@ -42,23 +68,19 @@ module SiteBuilder =
 
                 let examples = entityExamples ent
                 (if not examples.IsEmpty then
-                    div [ _class "mt-12" ] [
-                        h2 [ _class "text-2xl font-black mb-6 tracking-tighter" ] [ str "Examples" ]
-                        div [ _class "space-y-8" ] (
+                    div [ _class "mt-24 border-t border-base-300 pt-16" ] [
+                        h2 [ _class "text-3xl font-black mb-10 tracking-tighter" ] [ str "Examples" ]
+                        div [ _class "space-y-12" ] (
                             examples |> List.map (fun ex ->
                                 div [ _class "not-prose" ] [
                                     if ex.Name <> "Example" then
-                                        h3 [ _class "text-sm font-black mb-3 opacity-60 uppercase tracking-widest" ] [ str ex.Name ]
+                                        h3 [ _class "text-sm font-black mb-4 opacity-40 tracking-[0.3em]" ] [ str ex.Name ]
                                     pre [ _class "bg-neutral text-neutral-content p-8 rounded-[2rem] text-sm font-mono overflow-x-auto border-0 shadow-2xl shadow-black/20" ] [
                                         code [ _class "language-fsharp" ] [ str ex.Content ]
                                     ]
                                 ])
                         )
                     ]
-                else emptyText)
-                
-                (if not ent.Entities.IsEmpty then
-                    div [ _class "space-y-16" ] (ent.Entities |> List.map (fun ne -> renderEntity ne true))
                 else emptyText)
             ]
 
@@ -107,13 +129,23 @@ module SiteBuilder =
         let apiOverview = [
             h1 [ _class "text-5xl font-black mb-12 tracking-tighter" ] [ str "API Reference" ]
             div [ _class "grid grid-cols-1 md:grid-cols-2 gap-6" ] (
-                package.Entities |> List.map (fun e ->
+                let topLevel = 
+                    match package.Entities with
+                    | [ e ] when e.Kind = "Namespace" && e.Members.IsEmpty -> e.Entities
+                    | _ -> package.Entities
+                
+                topLevel |> List.map (fun e ->
                     a [ _href (rootPath + "api/" + e.Id + ".html"); _class "card bg-base-100 border border-base-300 p-6 hover:shadow-xl hover:border-primary transition-all group" ] [
                         div [ _class "flex justify-between items-center" ] [
                             h3 [ _class "text-xl font-bold group-hover:text-primary transition-colors" ] [ str e.Name ]
                             span [ _class "badge badge-sm opacity-40" ] [ str e.Kind ]
                         ]
-                        p [ _class "text-sm opacity-60 mt-2 line-clamp-2" ] [ str (if String.IsNullOrEmpty(e.SummaryHtml) then "No description available." else e.SummaryHtml) ]
+                        let summary = 
+                            if String.IsNullOrEmpty(e.SummaryHtml) then "No description available."
+                            else 
+                                // Strip HTML tags for the card description
+                                Regex.Replace(e.SummaryHtml, "<.*?>", String.Empty).Trim()
+                        p [ _class "text-sm opacity-60 mt-2 line-clamp-2" ] [ str summary ]
                     ]
                 )
             )

@@ -23,8 +23,8 @@ module Say =
     /// <summary>Prints a friendly greeting to the console.</summary>
     /// <param name="name">The name of the person to greet.</param>
     /// <example name="HelloExample">
-    /// Say.hello "F#"
-    /// // EXPECTED: Hello F#
-    /// </example>
+/// Say.hello "F#"
+/// // EXPECTED: Hello F#
+/// </example>
     let hello name =
         printfn "Hello %s" name

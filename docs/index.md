@@ -7,7 +7,8 @@ weight: 1
 
 **Verified documentation for the F# ecosystem.**
 
-FsLiveDocs (Atlas) is a "verified documentation" engine. It treats your documentation as a first-class citizen of your codebase, ensuring every example compiles and runs exactly as shown.
+FsLiveDocs is a "verified documentation" engine.
+ It treats your documentation as a first-class citizen of your codebase, ensuring every example compiles and runs exactly as shown.
 
 ## 🔗 Key Features
 

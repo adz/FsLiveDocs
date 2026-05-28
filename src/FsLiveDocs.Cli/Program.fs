@@ -54,8 +54,9 @@ module Program =
     /// <summary>Orchestrates the build process for one or more projects.</summary>
     let buildAction (projectPaths: string list) (theme: string) =
         AnsiConsole.Status().Start("Building site...", fun ctx ->
-            let package = getUnifiedPackage projectPaths |> Async.RunSynchronously
+            let packageRaw = getUnifiedPackage projectPaths |> Async.RunSynchronously
             let sourceDir = Directory.GetCurrentDirectory() 
+            let package = ContentProvider.applyApiDocs "docs" sourceDir packageRaw
             let pages = ContentProvider.scanDocs "docs" sourceDir package ""
             
             let historyDir = ".livedocs/history"
@@ -168,36 +169,47 @@ jobs:
                     let projectPaths = results.GetResult Watch
                     buildAction projectPaths theme
                     
-                    for projectPath in projectPaths do
-                        let watcher = new FileSystemWatcher(Path.GetDirectoryName(projectPath))
+                    try
+                        let watcher = new FileSystemWatcher(Directory.GetCurrentDirectory())
                         watcher.IncludeSubdirectories <- true
                         watcher.EnableRaisingEvents <- true
-                        watcher.Changed.Add(fun _ -> 
-                            AnsiConsole.MarkupLine("[yellow]Change detected in {projectPath}, rebuilding...[/]")
-                            try buildAction projectPaths theme with e -> AnsiConsole.WriteException(e)
+                        watcher.Changed.Add(fun e -> 
+                            if e.Name.EndsWith(".fs") || e.Name.EndsWith(".fsproj") || e.Name.EndsWith(".md") || e.Name.EndsWith(".css") then
+                                if not (e.Name.Contains("bin") || e.Name.Contains("obj") || e.Name.Contains("output")) then
+                                    AnsiConsole.MarkupLine($"[yellow]Change detected in {e.Name}, rebuilding...[/]")
+                                    try buildAction projectPaths theme with e -> AnsiConsole.WriteException(e)
                         )
 
-                    let builder = WebApplication.CreateBuilder()
-                    let app = builder.Build()
-                    
-                    app.UseDefaultFiles() |> ignore
-                    let outputDir = Path.Combine(Directory.GetCurrentDirectory(), "output")
-                    app.UseStaticFiles(StaticFileOptions(
-                        FileProvider = new PhysicalFileProvider(outputDir),
-                        RequestPath = ""
-                    )) |> ignore
-                    
-                    app.Use(fun (context: HttpContext) (next: Func<Threading.Tasks.Task>) ->
-                        if context.Request.Path.Value = "/" then
-                            context.Response.Redirect("/index.html")
-                            Threading.Tasks.Task.CompletedTask
-                        else
-                            next.Invoke()
-                    ) |> ignore
+                        let builder = WebApplication.CreateBuilder()
+                        let app = builder.Build()
+                        
+                        app.UseDefaultFiles() |> ignore
+                        let outputDir = Path.Combine(Directory.GetCurrentDirectory(), "output")
+                        app.UseStaticFiles(StaticFileOptions(
+                            FileProvider = new PhysicalFileProvider(outputDir),
+                            RequestPath = ""
+                        )) |> ignore
+                        
+                        app.Use(fun (context: HttpContext) (next: Func<Threading.Tasks.Task>) ->
+                            if context.Request.Path.Value = "/" then
+                                context.Response.Redirect("/index.html")
+                                Threading.Tasks.Task.CompletedTask
+                            else
+                                next.Invoke()
+                        ) |> ignore
 
-                    AnsiConsole.MarkupLine("[blue]Starting dev server at http://localhost:5000[/]")
-                    app.Run("http://localhost:5000")
-                    0
+                        AnsiConsole.MarkupLine("[blue]Starting dev server at http://localhost:5000[/]")
+                        app.Run("http://localhost:5000")
+                        0
+                    with 
+                    | :? IOException as e when e.Message.Contains("inotify") ->
+                        AnsiConsole.MarkupLine("[red]ERROR: System inotify limit reached.[/]")
+                        AnsiConsole.MarkupLine("[yellow]To fix this, increase the limit by running:[/]")
+                        AnsiConsole.MarkupLine("[blue]echo fs.inotify.max_user_instances=512 | sudo tee -a /etc/sysctl.conf && sudo sysctl -p[/]")
+                        1
+                    | e ->
+                        AnsiConsole.WriteException(e)
+                        1
                 
                 else 
                     printUsage (Some "No command specified.")

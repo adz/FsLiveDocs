@@ -1,6 +1,7 @@
 # LiveDocs: The "Verified Documentation" Engine for F#
 
-**Project Codename:** Atlas  
+
+  
 **Official Name:** LiveDocs (FsLiveDocs)  
 **Status:** Design Phase (v2 - High Detail)
 

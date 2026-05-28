@@ -5,7 +5,8 @@ weight: 0
 
 # 🚀 Getting Started with FsLiveDocs
 
-FsLiveDocs (Atlas) is a documentation engine built specifically for the F# ecosystem. It bridges the gap between your code and your guides by ensuring every example is verified against your actual implementation.
+FsLiveDocs is a documentation engine built specifically for the F# ecosystem.
+ It bridges the gap between your code and your guides by ensuring every example is verified against your actual implementation.
 
 ## 🏗 Why FsLiveDocs?
 

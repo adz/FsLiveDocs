@@ -21,6 +21,8 @@ type SourceLink = {
 ///     ExpectedOutput = Some "Hello"
 ///     Scenario = None 
 /// }
+/// printfn "%s" example.Name
+/// // EXPECTED: Basic Usage
 /// </example>
 type ExampleModel = {
     /// <summary>The unique name of the example, used for transclusion.</summary>

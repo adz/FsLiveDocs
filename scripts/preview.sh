@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -ex
 
 # Config
 THEME=${1:-dracula}

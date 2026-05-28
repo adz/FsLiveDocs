@@ -1,4 +1,4 @@
-# FsLiveDocs (Atlas)
+# FsLiveDocs
 
 FsLiveDocs is a "verified documentation" engine for F#. It treats your documentation as a first-class citizen of your codebase, ensuring every example compiles and runs exactly as shown.
 
