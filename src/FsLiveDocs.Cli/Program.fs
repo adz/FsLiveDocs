@@ -205,6 +205,7 @@ jobs:
                         builder.Logging.ClearProviders() |> ignore
                         builder.Logging.AddConsole() |> ignore
                         builder.Logging.SetMinimumLevel(LogLevel.Warning) |> ignore
+                        builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning) |> ignore
 
                         let app = builder.Build()
                         
