@@ -120,10 +120,21 @@ module View =
             else
                 details [ _class "group"; attr "open" "false" ] [
                     summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none" ] [
-                        span [ _class "text-sm font-medium truncate" ] [ 
-                            a [ _href (Url.resolve rootPath ("api/" + e.Id + ".html")); _class "hover:link" ] [ str e.Name ]
+                        a [
+                            _href (Url.resolve rootPath ("api/" + e.Id + ".html"))
+                            attr "onclick" "event.stopPropagation();"
+                            _class "flex-1 min-w-0 text-sm font-medium truncate hover:link"
+                        ] [
+                            str e.Name
                         ]
-                        i [ _class "bi bi-chevron-right text-[10px] transition-transform group-open:rotate-90" ] []
+                        button [
+                            _type "button"
+                            attr "onclick" "const d = this.closest('details'); if (d) d.open = !d.open; event.preventDefault(); event.stopPropagation();"
+                            _class "ml-2 shrink-0"
+                            attr "aria-label" $"Toggle {e.Name}"
+                        ] [
+                            i [ _class "bi bi-chevron-right text-[10px] transition-transform group-open:rotate-90" ] []
+                        ]
                     ]
                     ul [ _class "menu menu-sm p-0 mt-1 ml-2 border-l border-base-300" ] (e.Entities |> List.map (sidebarEntityLink rootPath))
                 ]
