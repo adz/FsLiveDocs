@@ -331,9 +331,9 @@ module View =
                         position: relative;
                     }
                     .code-frame code {
-                        white-space: pre-wrap !important;
-                        word-break: break-word !important;
-                        overflow-wrap: anywhere !important;
+                        white-space: pre !important;
+                        word-break: normal !important;
+                        overflow-wrap: normal !important;
                         display: block;
                     }
                     .code-frame .code-copy-button {
@@ -458,7 +458,7 @@ module View =
                                 if (!match) return escapeHtml(line);
                                 const [, indent, prompt, spacer, rest] = match;
                                 return `${{escapeHtml(indent)}}<span class="prompt-unselectable">${{escapeHtml(prompt + spacer)}}</span>${{escapeHtml(rest)}}`;
-                            }}).join('<br>');
+                            }}).join('\n');
 
                             code.dataset.copyText = copyText;
 
