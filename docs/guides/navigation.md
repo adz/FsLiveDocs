@@ -19,13 +19,13 @@ Within each folder-based group, pages are sorted by `weight` and then by title.
 
 ## Why this matters
 
-The docs are written with the Diátaxis structure in mind:
+We use the Diátaxis structure to decide what kind of content belongs in the docs:
 
 1. tutorials for first-time setup,
 2. how-to guides for repeatable tasks,
 3. explanations for architecture and trade-offs,
 4. API reference for the generated code model.
 
-That structure informs the content, while the sidebar follows the folder layout so it remains automatic and easy to predict.
+That structure informs the content. The sidebar still follows the `docs/` folder layout so it remains automatic and easy to predict.
 
 If you add a new page, place it in the right folder and set its `weight` if you want a specific order. The `type` frontmatter is advisory metadata for the page itself, not the sidebar.
