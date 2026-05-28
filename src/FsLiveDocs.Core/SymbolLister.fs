@@ -219,7 +219,16 @@ module SymbolLister =
                         Path.GetDirectoryName(dllPath)
                         System.AppContext.BaseDirectory
                     ] |> List.distinct
-                let model = ApiDocs.GenerateModel([input], "Project", Substitutions.Empty, qualify=false, libDirs = libDirs)
+                
+                let model = 
+                    let oldOut = Console.Out
+                    try
+                        using (new StringWriter()) (fun sw -> 
+                            Console.SetOut(sw)
+                            ApiDocs.GenerateModel([input], "Project", Substitutions.Empty, qualify=false, libDirs = libDirs)
+                        )
+                    finally
+                        Console.SetOut(oldOut)
                 
                 let rec flatten (e: ApiDocEntity) =
                     seq {

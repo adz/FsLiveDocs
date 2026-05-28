@@ -19,6 +19,12 @@ type SourceLink = {
 // </snippet:ProjectStructure>
 ```
 
-Then reference it in Markdown:
+Then reference it in your markdown docs:
+
+```
+\{{snippet id="ProjectStructure" }}
+```
+
+Here it's actually pulling from the snippet: xref:T:FsLiveDocs.Core.SourceLink
 
 {{< snippet id="ProjectStructure" >}}
