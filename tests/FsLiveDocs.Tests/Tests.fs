@@ -104,3 +104,12 @@ module ViewTests =
         Assert.Contains("Fields", html)
         Assert.Contains("Represents a parameter of a function or method.", html)
         Assert.DoesNotContain("Specification", html)
+
+module SiteBuilderTests =
+
+    [<Fact>]
+    let ``generateLlmsTxt includes the expected heading`` () =
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = [] }
+        let summary = SiteBuilder.generateLlmsTxt package
+
+        Assert.StartsWith("# API Reference for LLMs", summary)

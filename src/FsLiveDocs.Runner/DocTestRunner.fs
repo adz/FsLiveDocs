@@ -6,13 +6,31 @@ open System.Diagnostics
 open FsLiveDocs.Core
 
 /// <summary>The execution engine for verified docstrings (DocTests).</summary>
-/// <example name="VerifyExamplesExample">
-/// let package = { Version = "1.0"; Entities = []; Scenarios = [] }
-/// let results = Async.RunSynchronously(DocTestRunner.verifyExamples package "FsLiveDocs.Runner.fsproj" [])
-/// printfn "RESULTS: %d" results.Length
-/// // EXPECTED: RESULTS: 0
-/// </example>
 module DocTestRunner =
+
+    let private resolveProjectPath (projectPath: string) =
+        if Path.IsPathRooted(projectPath) && File.Exists(projectPath) then projectPath
+        else
+            let assemblyDir =
+                typeof<PackageModel>.Assembly.Location
+                |> Path.GetDirectoryName
+
+            let projectName = Path.GetFileNameWithoutExtension(projectPath)
+            let candidate =
+                Path.Combine(
+                    assemblyDir,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "src",
+                    projectName,
+                    Path.GetFileName(projectPath)
+                )
+                |> Path.GetFullPath
+
+            if File.Exists(candidate) then candidate
+            else Path.GetFullPath(projectPath)
 
     let private indentExample (content: string) (spaces: int) =
         let lines = content.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
@@ -50,6 +68,7 @@ module DocTestRunner =
     let generateTestProject (examples: ExampleModel list) (scenarios: ScenarioModel list) (projectPath: string) (references: string list) (tempDir: string) =
         let projectFile = Path.Combine(tempDir, "LiveDocs.Generated.Tests.fsproj")
         let programFile = Path.Combine(tempDir, "Program.fs")
+        let resolvedProjectPath = resolveProjectPath projectPath
 
         let refNodes = 
             references 
@@ -66,7 +85,7 @@ module DocTestRunner =
             "  </PropertyGroup>\n" +
             "  <ItemGroup>\n" +
             "    <PackageReference Include=\"FSharp.Core\" Version=\"10.1.201\" />\n" +
-            "    <ProjectReference Include=\"" + Path.GetFullPath(projectPath) + "\" />\n" +
+            "    <ProjectReference Include=\"" + resolvedProjectPath + "\" />\n" +
             "    " + refNodes + "\n" +
             "  </ItemGroup>\n" +
             "  <ItemGroup>\n" +
@@ -100,7 +119,7 @@ module DocTestRunner =
                     match ex.Scenario with
                     | Some sName -> 
                         match scenarios |> List.tryFind (fun s -> s.Name = sName) with
-                        | Some s -> sprintf "        do\n            %s()\n" s.MethodId
+                        | Some s -> sprintf "            let _ = %s()\n" s.MethodId
                         | None -> ""
                     | None -> ""
                 

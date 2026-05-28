@@ -8,12 +8,6 @@ open Giraffe.ViewEngine
 open FsLiveDocs.Core
 
 /// <summary>The high-level site assembly engine.</summary>
-/// <example name="BuildSummaryExample">
-/// let package = { Version = "1.0"; Entities = []; Scenarios = [] }
-/// let summary = SiteBuilder.generateLlmsTxt package
-/// printfn "%s" summary
-/// // EXPECTED: # API Reference for LLMs
-/// </example>
 module SiteBuilder =
 
     let private summarize (html: string) =
