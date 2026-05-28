@@ -1,6 +1,7 @@
 ---
 title: Verified Examples
 weight: 1
+type: how-to
 ---
 
 # Verified Examples for Real Projects
@@ -60,12 +61,13 @@ When FsLiveDocs generates the runner, it emits setup code before the example bod
 For service-heavy code, keep the setup function responsible for construction and keep the doc snippet focused on behavior.
 
 ```fsharp
+let mutable service = Unchecked.defaultof<UserService>
+
 [<DocScenario("with-services")>]
 let buildServices () =
     let clock = FakeClock(System.DateTime(2024, 1, 1))
     let store = InMemoryStore()
-    let service = UserService(store, clock)
-    service
+    service <- UserService(store, clock)
 ```
 
 ```fsharp
@@ -76,7 +78,7 @@ let buildServices () =
 /// </example>
 ```
 
-The example should read like a caller, not like a bootstrap script.
+The scenario runs first and assigns the shared `service` binding. The example then reads like a caller, not like a bootstrap script.
 
 ## Recommended patterns
 

@@ -82,6 +82,27 @@ module View =
     let navItem (title: string) (url: string) =
         li [] [ a [ _href url; _class "hover:text-primary transition-colors px-4 py-2 font-bold" ] [ str title ] ]
 
+    let private normalizeGuideType (pageType: string option) =
+        match pageType with
+        | Some value when not (String.IsNullOrWhiteSpace value) -> value.Trim().ToLowerInvariant()
+        | _ -> "guide"
+
+    let private guideSectionOrder = function
+        | "tutorial" -> 0
+        | "how-to" -> 1
+        | "explanation" -> 2
+        | "reference" -> 3
+        | "guide" -> 4
+        | _ -> 5
+
+    let private guideSectionLabel = function
+        | "tutorial" -> "Tutorials"
+        | "how-to" -> "How-To"
+        | "explanation" -> "Explanations"
+        | "reference" -> "Reference"
+        | "guide" -> "Guides"
+        | other -> other.ToUpperInvariant()
+
     let sidebarPageLink (rootPath: string) (p: ContentPage) =
         let fileName = Path.GetFileNameWithoutExtension(p.FilePath).ToLower() + ".html"
         li [ attr "data-sidebar-item" "true" ] [ a [ _href (Url.resolve rootPath fileName); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ] [ str p.Metadata.Title ] ]
@@ -106,6 +127,16 @@ module View =
         let apiGroups = 
             package.Entities 
             |> List.groupBy (fun e -> e.Id.Split('.').[0])
+            |> List.sortBy fst
+
+        let guideGroups =
+            pages
+            |> List.filter (fun p -> not (Path.GetFileNameWithoutExtension(p.FilePath).Equals("index", StringComparison.OrdinalIgnoreCase)))
+            |> List.sortBy (fun p ->
+                let key = normalizeGuideType p.Metadata.Type
+                guideSectionOrder key, p.Metadata.Weight, p.Metadata.Title)
+            |> List.groupBy (fun p -> normalizeGuideType p.Metadata.Type)
+            |> List.sortBy (fun (groupKey, _) -> guideSectionOrder groupKey)
 
         div [ _class "flex flex-col gap-10 pb-32"; _id "sidebar-root" ] [
             div [ _class "sticky top-0 z-10 bg-base-100/95 backdrop-blur border-b border-base-300 -mx-10 px-10 pb-6 pt-2" ] [
@@ -118,10 +149,30 @@ module View =
                     attr "autocomplete" "off"
                 ]
             ]
+            div [ attr "data-sidebar-section" "true" ] [
+                h3WithAnchor "overview" "Overview" "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
+                ul [ _class "menu menu-sm p-0 gap-1" ] [
+                    li [ attr "data-sidebar-item" "true" ] [ a [ _href (Url.resolve rootPath "index.html"); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ] [ str "Home" ] ]
+                    li [ attr "data-sidebar-item" "true" ] [ a [ _href (Url.resolve rootPath "api.html"); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ] [ str "API Reference" ] ]
+                ]
+            ]
             // Guides Section
             div [ attr "data-sidebar-section" "true" ] [
                 h3WithAnchor "guides" "Guides" "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
-                ul [ _class "menu menu-sm p-0 gap-1" ] (pages |> List.sortBy (fun p -> p.Metadata.Weight) |> List.map (sidebarPageLink rootPath))
+                ul [ _class "menu menu-sm p-0 gap-2" ] (
+                    guideGroups
+                    |> List.map (fun (groupKey, items) ->
+                        li [ attr "data-sidebar-item" "true" ] [
+                            details [ _class "group"; attr "open" "true" ] [
+                                summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none font-black text-[10px] uppercase tracking-[0.2em] opacity-70" ] [
+                                    span [] [ str (guideSectionLabel groupKey) ]
+                                    i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
+                                ]
+                                ul [ _class "menu menu-sm p-0 mt-2 ml-2 border-l border-base-300" ] (items |> List.map (sidebarPageLink rootPath))
+                            ]
+                        ]
+                    )
+                )
             ]
             // API Reference Section
             div [ attr "data-sidebar-section" "true" ] [
@@ -163,8 +214,8 @@ module View =
                     attr "title" $"View source for {memberModel.Name}"
                 ] [ i [ _class "bi bi-code-slash" ] [] ])
 
-        div [ _class "card bg-base-100 shadow-sm border border-base-300 overflow-hidden hover:shadow-lg transition-all duration-300 group/card" ] [
-            div [ _class "bg-base-200/30 px-4 py-4 border-b border-base-300 flex flex-col gap-3 group-hover/card:bg-base-200/50 transition-colors" ] [
+        div [ _class "border border-base-300 rounded-2xl bg-base-100 overflow-hidden" ] [
+            div [ _class "bg-base-200/20 px-4 py-3 border-b border-base-300 flex flex-col gap-3" ] [
                 div [ _class "flex items-start justify-between gap-4" ] [
                     h3 [ _id memberModel.Id; attr "data-toc-title" memberModel.Name; _class "group text-xl font-black tracking-tight flex items-center gap-3 scroll-mt-24" ] [
                         span [ _class "leading-tight" ] [ str memberModel.Name ]
@@ -179,11 +230,11 @@ module View =
                 ]
                 span [ _class "text-[10px] font-black uppercase opacity-30 tracking-widest" ] [ str "Member" ]
             ]
-            div [ _class "p-5 md:p-6" ] [
-                div [ _class "prose prose-sm md:prose-base max-w-none mb-6 opacity-80 leading-relaxed" ] [ rawText memberModel.SummaryHtml ]
+            div [ _class "p-4 md:p-5" ] [
+                div [ _class "prose prose-sm md:prose-base max-w-none mb-5 opacity-80 leading-relaxed" ] [ rawText memberModel.SummaryHtml ]
 
                 (if not memberModel.Parameters.IsEmpty then
-                    div [ _class "mb-10" ] [
+                    div [ _class "mb-8" ] [
                         h4 [ _class "text-[11px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2" ] [ 
                             i [ _class "bi bi-list-nested" ] []; str "Parameters" 
                         ]
@@ -208,7 +259,7 @@ module View =
                     ]
                 else emptyText)
 
-                div [ _class "mb-10 p-5 bg-base-200/20 rounded-xl border border-base-300 shadow-inner flex flex-col gap-3" ] [
+                div [ _class "mb-8 p-4 bg-base-200/15 rounded-xl border border-base-300 flex flex-col gap-3" ] [
                     h4 [ _class "text-[11px] font-black uppercase opacity-40 tracking-widest flex items-center gap-2" ] [ 
                         i [ _class "bi bi-arrow-return-right text-accent/60" ] []; str "Returns" 
                     ]
@@ -221,9 +272,9 @@ module View =
                              i [ _class "bi bi-play-circle-fill text-primary/60" ] []; str "Verification Examples" 
                         ]
                         (memberModel.Examples |> List.map (fun ex ->
-                            div [ _class "mb-8" ] [
+                            div [ _class "mb-6" ] [
                                 if ex.Name <> "Example" then p [ _class "text-[10px] font-black mb-2 opacity-50 uppercase tracking-[0.2em]" ] [ str ex.Name ]
-                                pre [ _class "bg-neutral text-neutral-content p-6 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-md" ] [
+                                pre [ _class "bg-neutral text-neutral-content p-5 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-sm" ] [
                                     code [ _class "language-fsharp" ] [ str ex.Content ]
                                 ]
                             ]

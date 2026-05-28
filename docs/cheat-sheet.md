@@ -1,3 +1,9 @@
+---
+title: Cheat Sheet
+weight: 9
+type: reference
+---
+
 # FsLiveDocs Cheat Sheet
 
 ## 🛠 Project Structure

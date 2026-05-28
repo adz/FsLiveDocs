@@ -1,6 +1,7 @@
 ---
 title: Snippet Transclusion
 weight: 2
+type: how-to
 ---
 # Snippet Transclusion
 

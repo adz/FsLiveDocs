@@ -41,6 +41,12 @@ module DocTestRunner =
             |> String.concat "\n"
 
     /// <summary>Generates a temporary .fsproj and Program.fs to execute code examples.</summary>
+    /// <param name="examples">The examples to embed into the generated runner.</param>
+    /// <param name="scenarios">The available setup scenarios keyed by example scenario name.</param>
+    /// <param name="projectPath">The project under test.</param>
+    /// <param name="references">Additional assembly references required by examples.</param>
+    /// <param name="tempDir">The temporary directory used for generated files.</param>
+    /// <returns>The generated test project file path.</returns>
     let generateTestProject (examples: ExampleModel list) (scenarios: ScenarioModel list) (projectPath: string) (references: string list) (tempDir: string) =
         let projectFile = Path.Combine(tempDir, "LiveDocs.Generated.Tests.fsproj")
         let programFile = Path.Combine(tempDir, "Program.fs")
@@ -106,6 +112,9 @@ module DocTestRunner =
         File.WriteAllText(programFile, programContent)
         projectFile
 
+    /// <summary>Runs the generated test project and captures console output.</summary>
+    /// <param name="projectFile">The generated test project file.</param>
+    /// <returns>The combined stdout/stderr output produced by the execution.</returns>
     let runProject (projectFile: string) =
         let psi = ProcessStartInfo("dotnet", sprintf "run --project \"%s\"" projectFile)
         psi.RedirectStandardOutput <- true
@@ -117,6 +126,11 @@ module DocTestRunner =
         proc.WaitForExit()
         if not (String.IsNullOrWhiteSpace(error)) then output + "\nSTDERR:\n" + error else output
 
+    /// <summary>Verifies all docstring examples extracted from a package.</summary>
+    /// <param name="package">The package model containing examples and scenarios.</param>
+    /// <param name="projectPath">The project that produced the package.</param>
+    /// <param name="references">Additional references needed by generated examples.</param>
+    /// <returns>A list of example names paired with pass/fail results and diagnostic output.</returns>
     let verifyExamples (package: PackageModel) (projectPath: string) (references: string list) = async {
         let tempDir = Path.Combine(Path.GetTempPath(), "FsLiveDocs", Guid.NewGuid().ToString())
         Directory.CreateDirectory(tempDir) |> ignore

@@ -1,6 +1,7 @@
 ---
 title: Dogfooding FsLiveDocs
 weight: 4
+type: explanation
 ---
 
 # Dogfooding FsLiveDocs

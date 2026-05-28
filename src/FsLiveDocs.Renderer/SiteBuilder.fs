@@ -42,6 +42,13 @@ module SiteBuilder =
         if isNull (box entity.Examples) then [] else entity.Examples
 
     /// <summary>Renders a single Markdown guide page.</summary>
+    /// <param name="page">The processed content page to render.</param>
+    /// <param name="allPages">All content pages used for navigation and version links.</param>
+    /// <param name="package">The extracted package model.</param>
+    /// <param name="versions">Known history versions for the version switcher.</param>
+    /// <param name="theme">The active DaisyUI theme.</param>
+    /// <param name="rootPath">The relative root path for generated links.</param>
+    /// <returns>The rendered HTML document as a string.</returns>
     let renderPage (page: ContentPage) (allPages: ContentPage list) (package: PackageModel) (versions: string list) (theme: string) (rootPath: string) =
         let content = [
             div [] [ rawText page.ContentHtml ]
@@ -50,6 +57,14 @@ module SiteBuilder =
         |> fun node -> RenderView.AsString.htmlNode node
 
     /// <summary>Renders a single API entity page (Module or Type).</summary>
+    /// <param name="e">The entity to render.</param>
+    /// <param name="allPages">All guide pages used for navigation and the toc.</param>
+    /// <param name="package">The extracted package model.</param>
+    /// <param name="config">Build-time site configuration.</param>
+    /// <param name="versions">Known history versions for the version switcher.</param>
+    /// <param name="theme">The active DaisyUI theme.</param>
+    /// <param name="rootPath">The relative root path for generated links.</param>
+    /// <returns>The rendered HTML document as a string.</returns>
     let renderEntityPage (e: EntityModel) (allPages: ContentPage list) (package: PackageModel) (config: SiteConfig) (versions: string list) (theme: string) (rootPath: string) =
         let rec renderEntity (ent: EntityModel) isNested =
             div [ _class (if isNested then "mt-12 pl-8 border-l-4 border-base-200" else ""); _id ent.Id ] [
@@ -192,6 +207,8 @@ module SiteBuilder =
         |> fun node -> RenderView.AsString.htmlNode node
 
     /// <summary>Generates a text-based summary of the API for LLM consumption.</summary>
+    /// <param name="package">The package model to summarize.</param>
+    /// <returns>A plaintext `llms.txt` document.</returns>
     let generateLlmsTxt (package: PackageModel) =
         let sb = System.Text.StringBuilder()
         sb.AppendLine("# API Reference for LLMs") |> ignore
@@ -207,6 +224,13 @@ module SiteBuilder =
         sb.ToString()
 
     /// <summary>Builds the primary documentation site.</summary>
+    /// <param name="package">The package model that drives the API pages.</param>
+    /// <param name="pages">The guide pages to render.</param>
+    /// <param name="config">Build-time site configuration.</param>
+    /// <param name="versions">Known history versions for the version switcher.</param>
+    /// <param name="theme">The active DaisyUI theme.</param>
+    /// <param name="rootPath">The relative root path for generated links.</param>
+    /// <param name="outputDir">The output directory that will receive the rendered site.</param>
     let build (package: PackageModel) (pages: ContentPage list) (config: SiteConfig) (versions: string list) (theme: string) (rootPath: string) (outputDir: string) =
         if Directory.Exists(outputDir) then Directory.Delete(outputDir, true)
         Directory.CreateDirectory(outputDir) |> ignore
@@ -307,6 +331,13 @@ module SiteBuilder =
         let (html: string) = View.layout "Home" pages package versions theme rootPath indexContent |> RenderView.AsString.htmlNode
         File.WriteAllText(indexPath, html)
 
+    /// <summary>Builds the current site and computes the version list from history snapshots.</summary>
+    /// <param name="historyDir">The directory containing previous package snapshots.</param>
+    /// <param name="currentPackage">The latest package model.</param>
+    /// <param name="pages">The guide pages to render.</param>
+    /// <param name="config">Build-time site configuration.</param>
+    /// <param name="theme">The active DaisyUI theme.</param>
+    /// <param name="outputDir">The output directory that will receive the rendered site.</param>
     let buildAll (historyDir: string) (currentPackage: PackageModel) (pages: ContentPage list) (config: SiteConfig) (theme: string) (outputDir: string) =
         let versions = 
             if Directory.Exists(historyDir) then

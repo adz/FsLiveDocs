@@ -1,6 +1,7 @@
 ---
 title: DocTest Design
 weight: 6
+type: explanation
 ---
 
 # When Not to Use DocTests

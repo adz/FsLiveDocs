@@ -1,6 +1,7 @@
 ---
 title: Advanced Guide
 weight: 5
+type: explanation
 ---
 
 # 🧬 Advanced Guide: Under the Hood

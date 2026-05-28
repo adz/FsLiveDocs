@@ -2,6 +2,13 @@
 
 Welcome to the FsLiveDocs API reference. The project is organized into several key areas, each responsible for a different part of the documentation lifecycle.
 
+## Solution Map
+
+- [FsLiveDocs.Core](FsLiveDocs.Core.html): data models, markdown resolution, and symbol extraction.
+- [FsLiveDocs.Runner](FsLiveDocs.Runner.html): compiled doc-test execution.
+- [FsLiveDocs.Renderer](FsLiveDocs.Renderer.html): HTML output and navigation.
+- [FsLiveDocs.Cli](FsLiveDocs.Cli.html): command-line entry point.
+
 ## Core Components
 
 - **FsLiveDocs.Core**: The heart of the engine. Contains the data models, Markdown processing logic, and symbol extraction bridges.

@@ -1,6 +1,7 @@
 ---
 title: Introduction
 weight: 0
+type: tutorial
 ---
 
 # Build Your First Verified Docs Site

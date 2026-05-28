@@ -1,6 +1,7 @@
 ---
 title: Cross References
 weight: 3
+type: how-to
 ---
 # Cross References
 

@@ -201,6 +201,13 @@ module ContentProvider =
         restoreCodeSegments body3
 
     /// <summary>Loads and processes a single Markdown page.</summary>
+    /// <param name="filePath">The markdown file to read.</param>
+    /// <param name="sourceDir">The root directory used to resolve snippet shortcodes.</param>
+    /// <param name="package">The extracted package model used for examples and xrefs.</param>
+    /// <param name="rootPath">The relative root path used when generating links.</param>
+    /// <param name="currentOutputPath">The output HTML path used for link validation.</param>
+    /// <param name="allowedOutputs">The set of known output pages used to validate local links.</param>
+    /// <returns>A processed content page ready for rendering.</returns>
     let loadPage (filePath: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (currentOutputPath: string) (allowedOutputs: Set<string>) =
         let raw = File.ReadAllText(filePath)
         match parseFrontMatter raw with
@@ -216,6 +223,11 @@ module ContentProvider =
             { Metadata = { Title = Path.GetFileNameWithoutExtension(filePath); Weight = 0; Type = None }; ContentHtml = html; FilePath = filePath }
 
     /// <summary>Scans the docs directory and loads all guide pages.</summary>
+    /// <param name="docsDir">The docs root containing markdown pages.</param>
+    /// <param name="sourceDir">The source root used for snippet resolution.</param>
+    /// <param name="package">The extracted package model used for xrefs and examples.</param>
+    /// <param name="rootPath">The relative root path used when rendering links.</param>
+    /// <returns>All guide pages found under the docs directory.</returns>
     let scanDocs (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
         if Directory.Exists(docsDir) then
             let allowedOutputs = collectAllowedOutputs docsDir package
@@ -229,6 +241,10 @@ module ContentProvider =
             []
 
     /// <summary>Applies long-form documentation from docs/api/*.md to the package model.</summary>
+    /// <param name="docsDir">The docs root that contains the api subdirectory.</param>
+    /// <param name="sourceDir">The source root used for snippet resolution.</param>
+    /// <param name="package">The current package model to enrich.</param>
+    /// <returns>A package model with API summaries replaced by markdown content where present.</returns>
     let applyApiDocs (docsDir: string) (sourceDir: string) (package: PackageModel) =
         let apiDocsDir = Path.Combine(docsDir, "api")
         if not (Directory.Exists(apiDocsDir)) then package
