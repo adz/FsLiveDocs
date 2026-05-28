@@ -11,4 +11,4 @@ Welcome to the FsLiveDocs API reference. The project is organized into several k
 
 ## Getting Started
 
-If you are new to FsLiveDocs, we recommend starting with the [Introduction](introduction.html) guide. For a quick reference of all features, see the [Cheat Sheet](cheat-sheet.html).
+If you are new to FsLiveDocs, we recommend starting with the [Introduction](../introduction.html) guide. For a quick reference of all features, see the [Cheat Sheet](../cheat-sheet.html).

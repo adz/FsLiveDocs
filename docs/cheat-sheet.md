@@ -35,9 +35,9 @@ let add x y = x + y
 
 | Shortcode | Description |
 | :--- | :--- |
-| `{{&lt; snippet id="X" &gt;}}` | Pull code from source file marked with `<snippet:X>`. |
-| `{{&lt; example id="X" &gt;}}` | Pull verified example with name `X`. |
-| `xref&#58;M&#58;Namespace.Func` | Create a semantic link to an API member. |
+| `{{< snippet id="X" >}}` | Pull code from source file marked with `<snippet:X>`. |
+| `{{< example id="X" >}}` | Pull verified example with name `X`. |
+| `xref:M:Namespace.Func` | Create a semantic link to an API member. |
 
 ## 🎨 DaisyUI Themes
 

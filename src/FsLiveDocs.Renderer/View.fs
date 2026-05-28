@@ -32,7 +32,7 @@ module View =
         value.Replace("\\", "\\\\").Replace("'", "\\'")
 
     let private highlightSignatureHtml (text: string) =
-        let encoded = WebUtility.HtmlEncode(text)
+        let encoded = WebUtility.HtmlEncode(stripHtml text)
         Regex.Replace(
             encoded,
             @"\b(option|list|seq|array|map|set|unit|string|int|bool|byte|sbyte|int16|int32|int64|uint16|uint32|uint64|decimal|float|double|char|obj)\b",

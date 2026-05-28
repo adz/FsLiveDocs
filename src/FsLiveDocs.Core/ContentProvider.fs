@@ -14,6 +14,8 @@ open YamlDotNet.Serialization.NamingConventions
 /// </example>
 module ContentProvider =
 
+    let private siteOutputRoot = Path.GetFullPath("output")
+
     /// <summary>The shared Markdig pipeline with advanced extensions enabled.</summary>
     let pipeline = MarkdownPipelineBuilder().UseAdvancedExtensions().Build()
     
@@ -63,23 +65,94 @@ module ContentProvider =
         searchEntities package.Entities
 
     let findExample (id: string) (package: PackageModel) =
-        let rec searchEntities (entities: EntityModel list) =
-            entities |> Seq.tryPick (fun e ->
-                let entityExamples = if isNull (box e.Examples) then [] else e.Examples
-                match entityExamples |> List.tryFind (fun ex -> ex.Name = id) with
-                | Some ex -> Some ex
-                | None ->
-                    match e.Members |> Seq.collect (fun m -> m.Examples) |> Seq.tryFind (fun ex -> ex.Name = id) with
-                    | Some ex -> Some ex
-                    | None -> searchEntities e.Entities
-            )
-        searchEntities package.Entities
+        let rec collect (entities: EntityModel list) =
+            seq {
+                for e in entities do
+                    if not (isNull (box e.Examples)) then
+                        yield! e.Examples
+                    for m in e.Members do
+                        yield! m.Examples
+                    yield! collect e.Entities
+            }
+
+        collect package.Entities |> Seq.tryFind (fun ex -> ex.Name = id)
+
+    let private normalizeOutputPath (currentOutputPath: string) (href: string) =
+        let cleaned = href.Split([| '#'; '?' |], 2).[0].Trim()
+        if System.String.IsNullOrWhiteSpace(cleaned) then None
+        elif cleaned.StartsWith("http://", System.StringComparison.OrdinalIgnoreCase)
+             || cleaned.StartsWith("https://", System.StringComparison.OrdinalIgnoreCase)
+             || cleaned.StartsWith("mailto:", System.StringComparison.OrdinalIgnoreCase)
+             || cleaned.StartsWith("tel:", System.StringComparison.OrdinalIgnoreCase) then None
+        else
+            let currentDir = Path.GetDirectoryName(currentOutputPath)
+            let candidate =
+                if cleaned.StartsWith("/") then cleaned.TrimStart('/')
+                elif System.String.IsNullOrWhiteSpace currentDir then cleaned
+                else Path.Combine(currentDir, cleaned)
+
+            let full = Path.GetFullPath(Path.Combine(siteOutputRoot, candidate))
+            let relative = Path.GetRelativePath(siteOutputRoot, full).Replace('\\', '/')
+            Some relative
+
+    let private validateLinks (currentOutputPath: string) (allowedOutputs: Set<string>) (body: string) =
+        let linkPattern = @"(?<!\!)\[[^\]]+\]\((?<href>[^)]+)\)"
+        for m in System.Text.RegularExpressions.Regex.Matches(body, linkPattern) do
+            let href = m.Groups.["href"].Value.Trim().Trim('"')
+            match normalizeOutputPath currentOutputPath href with
+            | None -> ()
+            | Some target ->
+                if target.EndsWith(".html", System.StringComparison.OrdinalIgnoreCase)
+                   || target.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
+                    let normalizedTarget =
+                        if target.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
+                            Path.ChangeExtension(target, ".html").Replace('\\', '/')
+                        else target
+                    if not (allowedOutputs.Contains normalizedTarget) then
+                        invalidOp $"Broken documentation link in {currentOutputPath}: [{href}] resolves to {normalizedTarget}, which does not exist."
+
+    let private collectEntityIds (entities: EntityModel list) =
+        let rec walk acc (items: EntityModel list) =
+            match items with
+            | [] -> acc
+            | e :: rest ->
+                walk (e.Id :: acc) (e.Entities @ rest)
+        walk [] entities
+
+    let private collectGuideOutputs (docsDir: string) =
+        if Directory.Exists(docsDir) then
+            Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
+            |> Array.filter (fun f -> not (f.Contains($"{Path.DirectorySeparatorChar}api{Path.DirectorySeparatorChar}")))
+            |> Array.map (fun f -> Path.GetFileNameWithoutExtension(f).ToLowerInvariant() + ".html")
+            |> Array.toList
+        else
+            []
+
+    let private collectAllowedOutputs (docsDir: string) (package: PackageModel) =
+        let guideOutputs = collectGuideOutputs docsDir
+        let apiOutputs = collectEntityIds package.Entities |> List.map (fun id -> $"api/{id}.html")
+        Set.ofList (guideOutputs @ apiOutputs @ [ "index.html"; "api.html" ])
 
     /// <summary>Resolves shortcodes (snippets, examples) and semantic links (xrefs) in Markdown content.</summary>
     let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
+        let protectedSegments = ResizeArray<string>()
+        let protectCodeSegments (text: string) =
+            let codePattern = @"(?s)```.*?```|`[^`\r\n]+`"
+            System.Text.RegularExpressions.Regex.Replace(text, codePattern, fun (m: System.Text.RegularExpressions.Match) ->
+                let token = $"@@FSLIVEDOCS_CODE_{protectedSegments.Count}@@"
+                protectedSegments.Add(m.Value)
+                token)
+
+        let restoreCodeSegments (text: string) =
+            protectedSegments
+            |> Seq.mapi (fun i (segment: string) -> $"@@FSLIVEDOCS_CODE_{i}@@", segment)
+            |> Seq.fold (fun (acc: string) (token, segment) -> acc.Replace(token, segment)) text
+
+        let protectedBody = protectCodeSegments body
+
         // 1. Resolve {{< snippet id="X" >}}
         let snippetPattern = @"{{<\s*snippet\s+id=""(?<id>[^""]+)""\s*(?:showOutput=""(?<showOutput>[^""]+)"")?\s*>}}"
-        let body1 = System.Text.RegularExpressions.Regex.Replace(body, snippetPattern, fun (m: System.Text.RegularExpressions.Match) ->
+        let body1 = System.Text.RegularExpressions.Regex.Replace(protectedBody, snippetPattern, fun (m: System.Text.RegularExpressions.Match) ->
             let id = m.Groups.["id"].Value
             let files = Directory.GetFiles(sourceDir, "*.fs", SearchOption.AllDirectories)
             let snippet = 
@@ -125,27 +198,32 @@ module ContentProvider =
             | None, Some ent -> $"[{ent.Name}]({rootPath}api/{ent.Id}.html)"
             | None, None -> invalidOp $"Cross-reference '{id}' was not found."
         )
-        body3
+        restoreCodeSegments body3
 
     /// <summary>Loads and processes a single Markdown page.</summary>
-    let loadPage (filePath: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
+    let loadPage (filePath: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (currentOutputPath: string) (allowedOutputs: Set<string>) =
         let raw = File.ReadAllText(filePath)
         match parseFrontMatter raw with
         | Some (metadata, body) ->
             let resolved = resolveSnippets body sourceDir package rootPath
+            validateLinks currentOutputPath allowedOutputs resolved
             let html = Markdown.ToHtml(resolved, pipeline)
             { Metadata = metadata; ContentHtml = html; FilePath = filePath }
         | None ->
             let resolved = resolveSnippets raw sourceDir package rootPath
+            validateLinks currentOutputPath allowedOutputs resolved
             let html = Markdown.ToHtml(resolved, pipeline)
             { Metadata = { Title = Path.GetFileNameWithoutExtension(filePath); Weight = 0; Type = None }; ContentHtml = html; FilePath = filePath }
 
     /// <summary>Scans the docs directory and loads all guide pages.</summary>
     let scanDocs (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
         if Directory.Exists(docsDir) then
+            let allowedOutputs = collectAllowedOutputs docsDir package
             Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
             |> Array.filter (fun f -> not (f.Contains("/api/")))
-            |> Array.map (fun f -> loadPage f sourceDir package rootPath)
+            |> Array.map (fun f ->
+                let outputPath = Path.GetFileNameWithoutExtension(f).ToLowerInvariant() + ".html"
+                loadPage f sourceDir package rootPath outputPath allowedOutputs)
             |> Array.toList
         else
             []
@@ -155,6 +233,7 @@ module ContentProvider =
         let apiDocsDir = Path.Combine(docsDir, "api")
         if not (Directory.Exists(apiDocsDir)) then package
         else
+            let allowedOutputs = collectAllowedOutputs docsDir package
             let rec updateEntity (e: EntityModel) (docs: Map<string, string>) =
                 let summary = docs |> Map.tryFind e.Id |> Option.defaultValue e.SummaryHtml
                 { e with 
@@ -166,7 +245,7 @@ module ContentProvider =
                 docFiles 
                 |> Array.map (fun f -> 
                     let id = Path.GetFileNameWithoutExtension(f)
-                    let page = loadPage f sourceDir package ""
+                    let page = loadPage f sourceDir package "" $"api/{id}.html" allowedOutputs
                     id, page.ContentHtml)
                 |> Map.ofArray
             

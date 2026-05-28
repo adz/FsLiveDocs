@@ -96,4 +96,4 @@ That means the following are true:
 3. the combined execution is verified,
 4. the result is reflected back into the build.
 
-If you want the full design trade-offs around when not to use doc-tests, read the new [DocTest Design guide](../doctest-design.html).
+If you want the full design trade-offs around when not to use doc-tests, read the new [DocTest Design guide](doctest-design.html).
