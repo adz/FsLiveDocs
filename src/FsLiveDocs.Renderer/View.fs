@@ -330,10 +330,16 @@ module View =
                     .code-frame {
                         position: relative;
                     }
+                    .code-frame code {
+                        white-space: pre-wrap !important;
+                        word-break: break-word !important;
+                        overflow-wrap: anywhere !important;
+                        display: block;
+                    }
                     .code-frame .code-copy-button {
                         position: absolute;
-                        top: 0.75rem;
-                        right: 0.75rem;
+                        top: 0.5rem;
+                        right: 0.5rem;
                         z-index: 2;
                     }
                     .prompt-unselectable {
@@ -344,7 +350,7 @@ module View =
                     .not-prose pre {
                         background-color: hsl(var(--n)) !important;
                         padding: 1.5rem !important;
-                        padding-top: 3rem !important;
+                        padding-top: 3.75rem !important;
                     }
                 """ ]
                 title [] [ str $"{pageTitle} - FsLiveDocs" ]
