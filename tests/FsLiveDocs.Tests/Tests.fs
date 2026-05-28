@@ -71,3 +71,36 @@ module ViewTests =
     let ``sourceLinkHref builds github source links`` () =
         let link = View.sourceLinkHref (Some "https://github.com/user/repo") { File = "src/Example.fs"; Line = 42 }
         Assert.Equal(Some "https://github.com/user/repo/blob/main/src/Example.fs#L42", link)
+
+    [<Fact>]
+    let ``renderEntityPage renders record pages with a field table`` () =
+        let recordEntity : EntityModel =
+            {
+                Id = "FsLiveDocs.Core.ParameterModel"
+                Name = "ParameterModel"
+                Kind = "Record"
+                SummaryHtml = "<p>Represents a parameter of a function or method.</p>"
+                Members =
+                    [
+                        {
+                            Id = "FsLiveDocs.Core.ParameterModel.Name"
+                            Name = "Name"
+                            Signature = "string"
+                            Parameters = []
+                            ReturnType = "string"
+                            SummaryHtml = "<p>The name of the parameter.</p>"
+                            RemarksHtml = ""
+                            Examples = []
+                            Location = { File = ""; Line = 0 }
+                        }
+                    ]
+                Examples = []
+                Entities = []
+            }
+
+        let package : PackageModel = { Version = "1.0"; Entities = [ recordEntity ]; Scenarios = [] }
+        let html = SiteBuilder.renderEntityPage recordEntity [] package { RepoUrl = None } [] "light" "../"
+
+        Assert.Contains("Fields", html)
+        Assert.Contains("Use a record when you want a single value made up of named fields.", html)
+        Assert.DoesNotContain("Specification", html)

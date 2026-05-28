@@ -66,14 +66,54 @@ module SiteBuilder =
     /// <param name="rootPath">The relative root path for generated links.</param>
     /// <returns>The rendered HTML document as a string.</returns>
     let renderEntityPage (e: EntityModel) (allPages: ContentPage list) (package: PackageModel) (config: SiteConfig) (versions: string list) (theme: string) (rootPath: string) =
-        let rec renderEntity (ent: EntityModel) isNested =
-            div [ _class (if isNested then "mt-12 pl-8 border-l-4 border-base-200" else ""); _id ent.Id ] [
+        let renderSummaryBlock (summaryHtml: string) =
+            if String.IsNullOrWhiteSpace summaryHtml then
+                emptyText
+            else
+                let cleanSummary = Regex.Replace(summaryHtml, "^<h1.*?>.*?<\/h1>", String.Empty, RegexOptions.Singleline).Trim()
+                if String.IsNullOrWhiteSpace cleanSummary then emptyText
+                else div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ rawText cleanSummary ]
+
+        let renderFieldTable (title: string) (items: MemberModel list) =
+            if items.IsEmpty then emptyText
+            else
+                div [ _class "mb-16 not-prose" ] [
+                    View.h2WithAnchor (e.Id + "-fields") title "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
+                    div [ _class "overflow-x-auto rounded-2xl border border-base-300 shadow-sm" ] [
+                        table [ _class "table table-zebra w-full" ] [
+                            thead [ _class "bg-base-200/50" ] [
+                                tr [] [
+                                    th [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Name" ]
+                                    th [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Type" ]
+                                    th [ attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Description" ]
+                                ]
+                            ]
+                            tbody [] (
+                                items
+                                |> List.map (fun m ->
+                                    tr [] [
+                                        td [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
+                                            a [ _href ("#" + m.Id); _class "font-bold text-primary hover:underline" ] [ str m.Name ]
+                                        ]
+                                        td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
+                                            span [ _class "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText m.Signature ]
+                                        ]
+                                        td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
+                                            str (summarize m.SummaryHtml)
+                                        ]
+                                    ]
+                                )
+                            )
+                        ]
+                    ]
+                ]
+
+        let renderGenericEntity (ent: EntityModel) =
+            div [ _class ""; _id ent.Id ] [
                 h1 [
-                    _class (
-                        (if isNested then "text-2xl font-bold mb-4" else "text-4xl font-black mb-8 pb-4 border-b-8 border-primary/10 tracking-tight")
-                        + " group scroll-mt-24 flex items-center gap-3")
+                    _class "text-4xl font-black mb-8 pb-4 border-b-8 border-primary/10 tracking-tight group scroll-mt-24 flex items-center gap-3"
                     attr "data-toc-title" ent.Name
-                ] [ 
+                ] [
                     span [ _class "leading-tight" ] [ str ent.Name ]
                     span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str ent.Kind ]
                     a [
@@ -83,31 +123,21 @@ module SiteBuilder =
                         attr "title" $"Copy link to {ent.Name}"
                     ] [ i [ _class "bi bi-link-45deg text-base" ] [] ]
                 ]
-                
-                (if not (String.IsNullOrWhiteSpace(ent.SummaryHtml)) then
-                    let cleanSummary = Regex.Replace(ent.SummaryHtml, "^<h1.*?>.*?<\/h1>", String.Empty, RegexOptions.Singleline).Trim()
-                    if not (String.IsNullOrWhiteSpace(cleanSummary)) then
-                        div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ 
-                            rawText cleanSummary 
-                        ]
-                    else emptyText
-                else emptyText)
 
-                // Render children as a directory if this is a namespace or has many entities
-                (if not ent.Entities.IsEmpty then
+                renderSummaryBlock ent.SummaryHtml
+
+                if not ent.Entities.IsEmpty then
                     div [ _class "mb-16" ] [
                         View.h2WithAnchor (ent.Id + "-contents") "Contents" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
                         div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (
                             ent.Entities |> List.map (fun ne ->
-                                a [ _href (ne.Id + ".html")
-                                    _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
+                                a [ _href (ne.Id + ".html"); _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
                                     span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str ne.Name ]
                                     span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str ne.Kind ]
                                 ]
                             )
                         )
                     ]
-                else emptyText)
 
                 if ent.Kind <> "Module" && not ent.Members.IsEmpty then
                     div [ _class "mb-16 not-prose" ] [
@@ -136,15 +166,12 @@ module SiteBuilder =
                                             span [ _class "font-bold text-primary" ] [ str m.Name ]
                                             span [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 font-black" ] [ str "Signature" ]
                                         ]
-                                        div [ _class "font-mono text-sm text-accent overflow-x-auto" ] [
-                                            rawText (highlightSignatureHtml m.Signature)
-                                        ]
+                                        div [ _class "font-mono text-sm text-accent overflow-x-auto" ] [ rawText (highlightSignatureHtml m.Signature) ]
                                     ]
                                 )
                             )
                         ]
                     ]
-                else emptyText
 
                 if not ent.Members.IsEmpty then
                     div [ _class "mb-16 not-prose" ] [
@@ -177,12 +204,11 @@ module SiteBuilder =
                             ]
                         ]
                     ]
-                else emptyText
 
                 div [ _class "space-y-12" ] (ent.Members |> List.map (View.apiCard config.RepoUrl))
 
                 let examples = entityExamples ent
-                (if not examples.IsEmpty then
+                if not examples.IsEmpty then
                     div [ _class "mt-24 border-t border-base-300 pt-16" ] [
                         View.h2WithAnchor (ent.Id + "-examples") "Examples" "text-3xl font-black mb-10 tracking-tighter"
                         div [ _class "space-y-12" ] (
@@ -199,10 +225,58 @@ module SiteBuilder =
                                 ])
                         )
                     ]
-                else emptyText)
             ]
 
-        let content = [ renderEntity e false ]
+        let renderRecordEntity (ent: EntityModel) =
+            div [ _id ent.Id ] [
+                h1 [
+                    _class "text-4xl font-black mb-8 pb-4 border-b-8 border-primary/10 tracking-tight group scroll-mt-24 flex items-center gap-3"
+                    attr "data-toc-title" ent.Name
+                ] [
+                    span [ _class "leading-tight" ] [ str ent.Name ]
+                    span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str ent.Kind ]
+                    a [
+                        _href ("#" + ent.Id)
+                        _class "anchor-link opacity-0 group-hover:opacity-60 transition-opacity no-underline inline-flex items-center justify-center w-6 h-6 text-base-content/60 hover:text-primary"
+                        attr "aria-label" $"Copy link to {ent.Name}"
+                        attr "title" $"Copy link to {ent.Name}"
+                    ] [ i [ _class "bi bi-link-45deg text-base" ] [] ]
+                ]
+
+                renderSummaryBlock ent.SummaryHtml
+
+                div [ _class "mb-10 rounded-3xl border border-base-300 bg-base-200/20 p-8" ] [
+                    div [ _class "max-w-3xl" ] [
+                        div [ _class "text-[10px] font-black uppercase tracking-[0.3em] opacity-40 mb-3" ] [ str "Record" ]
+                        p [ _class "text-lg leading-relaxed opacity-80 mb-0" ] [
+                            str "Use a record when you want a single value made up of named fields. Records are a good fit for domain data, configuration, and other values that should be read as a unit."
+                        ]
+                    ]
+                ]
+
+                renderFieldTable "Fields" ent.Members
+
+                let examples = entityExamples ent
+                if not examples.IsEmpty then
+                    div [ _class "mt-24 border-t border-base-300 pt-16" ] [
+                        View.h2WithAnchor (ent.Id + "-examples") "Examples" "text-3xl font-black mb-10 tracking-tighter"
+                        div [ _class "space-y-12" ] (
+                            examples |> List.map (fun ex ->
+                                let exampleId =
+                                    let slug = Regex.Replace(ex.Name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-')
+                                    if String.IsNullOrWhiteSpace slug then "example" else slug
+                                div [ _class "not-prose" ] [
+                                    if ex.Name <> "Example" then
+                                        View.h3WithAnchor (ent.Id + "-example-" + exampleId) ex.Name "text-sm font-black mb-4 opacity-40 tracking-[0.3em]"
+                                    pre [ _class "bg-neutral text-neutral-content p-6 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-md" ] [
+                                        code [ _class "language-fsharp" ] [ str ex.Content ]
+                                    ]
+                                ])
+                        )
+                    ]
+            ]
+
+        let content = [ if e.Kind = "Record" then renderRecordEntity e else renderGenericEntity e ]
         View.layout e.Name allPages package versions theme rootPath content
         |> fun node -> RenderView.AsString.htmlNode node
 
