@@ -39,7 +39,7 @@ The `SymbolLister.merge` function handles deduplication and provides a unified f
 
 ## 📜 Long-Form Module Introductions
 
-XML docstrings can sometimes feel cramped for large modules. FsLiveDocs allows you to provide **Elixir-quality** introductions using standalone Markdown files.
+XML docstrings can sometimes feel cramped for large modules. FsLiveDocs lets you produce high-quality module introductions with standalone Markdown files because they can be longer, more structured, and easier to scan than a single docstring.
 
 Simply create a file in `docs/api/{Namespace.Module}.md`. The engine will automatically transclude this file's content as the high-level summary for that module in the generated API reference.
 
