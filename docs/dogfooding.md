@@ -22,16 +22,9 @@ All of these are passed to the `build` command to create a unified API reference
 
 We follow a strict rule: **Every public member must have an XML docstring.**
 
-Example from `Say.hello`:
+Example from `ContentProvider.resolveSnippets`:
 
-```fsharp
-/// <summary>Prints a friendly greeting to the console.</summary>
-/// <example name="HelloExample">
-/// Say.hello "F#"
-/// // EXPECTED: Hello F#
-/// </example>
-let hello name = ...
-```
+{{< example id="ResolveSnippetExample" >}}
 
 ## 🧪 Verified Examples
 

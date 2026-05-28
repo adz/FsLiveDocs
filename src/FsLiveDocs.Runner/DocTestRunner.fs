@@ -100,7 +100,7 @@ module DocTestRunner =
                     match ex.Scenario with
                     | Some sName -> 
                         match scenarios |> List.tryFind (fun s -> s.Name = sName) with
-                        | Some s -> sprintf "        %s()\n" s.MethodId
+                        | Some s -> sprintf "        do\n            %s()\n" s.MethodId
                         | None -> ""
                     | None -> ""
                 

@@ -35,14 +35,3 @@ module DocScenarioSamples =
     let greet () =
         printfn "Hello %s" currentUser
 // </snippet:DocScenarioPattern>
-
-/// <summary>Internal utility module for basic sanity checks.</summary>
-module Say =
-    /// <summary>Prints a friendly greeting to the console.</summary>
-    /// <param name="name">The name of the person to greet.</param>
-    /// <example name="HelloExample">
-/// Say.hello "F#"
-/// // EXPECTED: Hello F#
-/// </example>
-    let hello name =
-        printfn "Hello %s" name

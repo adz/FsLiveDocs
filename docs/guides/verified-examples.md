@@ -21,14 +21,11 @@ FsLiveDocs supports that shape by letting you pair a snippet with a named setup 
 
 ## Basic example
 
-```fsharp
-/// <example name="HelloExample">
-/// Say.hello "F#"
-/// // EXPECTED: Hello F#
-/// </example>
-```
+This is the simplest case: a plain example with no setup, no DI, and no extra state.
 
-That is the simplest case: no setup, no DI, no extra state.
+You can see the same pattern in the source example for `ContentProvider.resolveSnippets`:
+
+{{< example id="ResolveSnippetExample" >}}
 
 ## Adding a setup scenario
 
