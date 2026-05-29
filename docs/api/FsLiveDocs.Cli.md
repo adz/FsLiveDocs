@@ -6,7 +6,8 @@ The command-line interface for FsLiveDocs. This project provides the `livedocs` 
 
 - `init`: Scaffolds a new project.
 - `build`: Generates the static documentation site.
-- `test`: Runs all verified examples.
+- `generate-tests`: Generates a Verify-based snapshot test project for selected examples.
+- `test`: Runs the legacy direct docstring verifier.
 - `watch`: Starts a dev server with hot-reloading.
 - `extract`: Dumps the `PackageModel` to JSON.
 

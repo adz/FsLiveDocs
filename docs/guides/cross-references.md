@@ -102,7 +102,7 @@ See `xref:T:FsLiveDocs.Core.ExampleModel` for the example data structure.
 ### Function link
 
 ```md
-The runner uses `xref:M:FsLiveDocs.Runner.DocTestRunner.collectSnapshots` to prepare snapshot payloads for the generated Verify project, and `xref:M:FsLiveDocs.Runner.DocTestRunner.verifyExamples` remains as the legacy direct checker.
+The runner uses `xref:M:FsLiveDocs.Runner.DocTestRunner.collectSnapshots` to prepare snapshot payloads for the generated Verify project produced by `livedocs generate-tests`, and `xref:M:FsLiveDocs.Runner.DocTestRunner.verifyExamples` remains as the legacy direct checker.
 ```
 
 ### Namespace link

@@ -22,7 +22,7 @@ These examples show the real code paths that make the solution useful:
 
 - The snippet resolver turns markdown plus example metadata into rendered content: {{< example id="ResolveSnippetExample" >}}
 - The core data model example shows how a verified example is represented as an FSI session: {{< example id="CreateExample" >}}
-- The runner uses the same transcript format when it verifies a docstring example under a scenario: {{< example id="UserGreeting" >}}
+- The runner uses the same transcript format when it captures a scenario-backed example for the generated snapshot test project: {{< example id="UserGreeting" >}}
 - The renderer assembles the LLM summary page from the documented package model: {{< example id="GenerateLlmsTxtExample" >}}
 
 ## Getting Started

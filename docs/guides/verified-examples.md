@@ -13,6 +13,8 @@ The examples here follow two selection rules:
 1. transcript-style `<example>` blocks are picked up automatically when they already show FSI input/output,
 2. any `<example>` or `<code language="fsharp">` block can opt in explicitly with `data-livedocs="snapshot"`.
 
+That means the first cut is simple: write the example in source, run `livedocs generate-tests`, inspect the generated Verify snapshot, and accept it when the output is right.
+
 ## The problem
 
 Many docs examples work only when the process is already in the right state. That usually means:
@@ -66,6 +68,8 @@ When FsLiveDocs evaluates a snapshot example, it looks up `ScenarioModel.Name = 
 ## What actually runs
 
 The example body is extracted from the XML doc comment and copied into the snapshot runner. It is run in the context of the compiled project, not pasted into this guide page.
+
+If the example has no expected output yet, FsLiveDocs treats it as a first cut and includes the evaluated result in the generated snapshot project so you can review and update the source intentionally.
 
 The scenario function is different. FsLiveDocs discovers it from the compiled project assembly by looking for `[<DocScenario>]`, then calls the compiled method before the example body runs.
 
@@ -131,5 +135,7 @@ If you want to generate the snapshot test project, run:
 ```bash
 livedocs generate-tests src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj
 ```
+
+The generated project can then be tested directly with `dotnet test`, and any received snapshots can be accepted through the usual Verify workflow.
 
 If you want the full design trade-offs around when not to use doc-tests, read the new [DocTest Design guide](doctest-design.html).

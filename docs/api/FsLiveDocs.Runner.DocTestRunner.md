@@ -1,12 +1,12 @@
 # 🧪 FsLiveDocs.Runner.DocTestRunner
 
-Ensures your documentation never lies. The `DocTestRunner` extracts code examples from your XML docstrings and evaluates them so a generated Verify project can snapshot the result.
+Ensures your documentation never lies. The `DocTestRunner` extracts code examples from your XML docstrings and prepares snapshot payloads that a generated Verify project can verify.
 
 ## How it Works
 
 1.  **Extraction**: It finds transcript-style `<example>` tags in your source code, plus explicit snapshot examples marked with `data-livedocs="snapshot"`.
-2.  **Preparation**: It loads the built project assembly and any setup scenarios.
-3.  **Execution**: It runs each selected example as a transcript-style FSI session and records the result for snapshot verification.
+2.  **Preparation**: It loads the built project assembly, any setup scenarios, and the example metadata that will be written into the Verify project.
+3.  **Execution**: It runs each selected example as a transcript-style FSI session and records the evaluated result for snapshot verification.
 
 ## Examples
 
@@ -21,7 +21,7 @@ If you have a function like this:
 let add x y = x + y
 ```
 
-The `DocTestRunner` will verify that the example still produces `val it: int = 2`.
+The `DocTestRunner` will capture that example in the generated snapshot project and verify that it still produces `val it: int = 2`.
 
 ## Scenarios
 

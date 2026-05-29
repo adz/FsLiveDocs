@@ -1,0 +1,4 @@
+{
+  ProjectPath: {SolutionDirectory}src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj,
+  ProjectNamespace: FsLiveDocs.Renderer
+}

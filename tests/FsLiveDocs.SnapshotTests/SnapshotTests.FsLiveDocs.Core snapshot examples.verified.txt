@@ -1,0 +1,4 @@
+{
+  ProjectPath: {SolutionDirectory}src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj,
+  ProjectNamespace: FsLiveDocs.Core
+}

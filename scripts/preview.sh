@@ -22,9 +22,11 @@ echo -e "\033[1;32m=> Rebuilding livedocs tool...\033[0m"
 echo -e "\033[1;32m=> Generating snapshot test project...\033[0m"
 ./artifacts/livedocs generate-tests "${PROJECTS[@]}"
 
-# 3. Run the generated snapshot tests
+# 3. Build and run the generated snapshot tests
+echo -e "\033[1;32m=> Building snapshot test project...\033[0m"
+dotnet build tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj --nologo -v minimal
 echo -e "\033[1;32m=> Verifying docstrings via Verify...\033[0m"
-dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj --nologo -v minimal
+dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj --no-build --no-restore --nologo -v minimal
 # 4. Build Documentation Site
 echo -e "\033[1;32m=> Building static site (Theme: $THEME)...\033[0m"
 ./artifacts/livedocs build "${PROJECTS[@]}" --theme "$THEME"

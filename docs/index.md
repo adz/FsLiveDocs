@@ -12,7 +12,7 @@ FsLiveDocs is a "verified documentation" engine.
 
 ## 🔗 Key Features
 
-- **✅ Verified Docstrings**: Transcript-style examples in `/// <example>` tags are extracted and run against your actual project, while the generated snapshot test project uses Verify to lock the output in place.
+- **✅ Verified Docstrings**: Transcript-style examples in `/// <example>` tags are extracted and run against your actual project. FsLiveDocs can then generate a Verify-based snapshot test project so changes are reviewed and accepted explicitly.
 - **🔗 Snippet Transclusion**: Use `{{< snippet id="Name" >}}` to pull live code from `.fs` files.
 - **🧬 Semantic Cross-References**: Link to API members using `xref:M:Namespace.Type.Method`.
 - **📜 Version History**: Keep multiple versions of your API documentation using fast JSON snapshots.

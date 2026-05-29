@@ -18,7 +18,7 @@ That same shape is used in the source docs for a scenario-backed example:
 
 {{< example id="UserGreeting" >}}
 
-The runner reads the transcript, loads the scenario, and verifies that the returned value matches the exact FSI output.
+The runner reads the transcript, loads the scenario, and captures the evaluated result for a generated Verify snapshot test project. The older direct verifier still exists, but the recommended path is to scaffold tests with `livedocs generate-tests` and accept the resulting snapshots explicitly.
 
 ## Why Verification Matters?
 

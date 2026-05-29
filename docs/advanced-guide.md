@@ -45,9 +45,11 @@ Simply create a file in `docs/api/{Namespace.Module}.md`. The engine will automa
 
 ## 🧪 Custom Scenarios
 
-If your code examples require a specific state (like a logged-in user), use the `[<DocScenario>]` attribute. This allows you to define a setup function that runs before your example code.
+If your code examples require a specific state, use the `[<DocScenario>]` attribute. This lets you define a setup function in source and connect it to examples by name. The generated snapshot project uses that link to run the setup before evaluating the transcript.
 
 {{< example id="DocScenarioUsage" >}}
+
+For the full selection and acceptance workflow, see the [Verified Examples](verified-examples.html) guide.
 
 ---
 
