@@ -6,8 +6,12 @@ open YamlDotNet.Serialization
 open YamlDotNet.Serialization.NamingConventions
 
 /// <summary>Provides capabilities to load, parse, and resolve Markdown documentation pages.</summary>
-/// <example name="ResolveSnippetExample">
+/// <example name="ResolveSnippetExample" data-livedocs="snapshot">
 /// > let package = { Version = "1.0"; Entities = []; Scenarios = [] };;
+/// val package: PackageModel = { Version = "1.0"
+///   Entities = []
+///   Scenarios = [] }
+///
 /// > ContentProvider.resolveSnippets "Hello" "." package "";;
 /// val it: string = "Hello"
 /// </example>

@@ -15,6 +15,24 @@ module SymbolListerTests =
         Assert.True(true)
 
     [<Fact>]
+    let ``extractExamples marks transcript and explicit snapshot examples`` () =
+        let xml =
+            """
+            <example name="Transcript">
+            > let x = 1;;
+            val x: int = 1
+            </example>
+            <code name="Explicit" language="fsharp" data-livedocs="snapshot">
+            let value = 42
+            </code>
+            """
+
+        let examples = SymbolLister.extractExamples xml
+        Assert.Equal(2, examples.Length)
+        Assert.True(List.item 0 examples |> fun ex -> ex.IsSnapshotTest)
+        Assert.True(List.item 1 examples |> fun ex -> ex.IsSnapshotTest)
+
+    [<Fact>]
     let ``merge removes empty synthetic Default namespace`` () =
         let child = { Id = "Default.Sample"; Name = "Sample"; Kind = "Module"; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
         let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = "Namespace"; SummaryHtml = ""; Members = []; Examples = []; Entities = [ child ] }
@@ -40,7 +58,7 @@ module ContentProviderTests =
     let ``resolveSnippets handles transclusion and xrefs`` () =
         let package : PackageModel = { 
             Version = "1.0"
-            Entities = [ { Id = "M1"; Name = "add"; Kind = "Module"; SummaryHtml = ""; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; SummaryHtml = ""; RemarksHtml = ""; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
+            Entities = [ { Id = "M1"; Name = "add"; Kind = "Module"; SummaryHtml = ""; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; SummaryHtml = ""; RemarksHtml = ""; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None; IsSnapshotTest = false } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
             Scenarios = []
         }
         let body = "Look at {{< example id=\"E1\" >}} and xref:M:M1.add"
@@ -71,11 +89,11 @@ module DocTestRunnerTests =
             ExampleTranscript.parse
                 """
                 > ExampleModel.Create("Basic Usage", "1+1", Some "2", None);;
-                val it: ExampleModel = { Name = "Basic Usage"; Content = "1+1"; ExpectedOutput = Some "2"; Scenario = None }
+                val it: ExampleModel = { Name = "Basic Usage"; Content = "1+1"; ExpectedOutput = Some "2"; Scenario = None; IsSnapshotTest = false }
                 """
 
         Assert.Contains("ExampleModel.Create(\"Basic Usage\"", parsed.Script)
-        Assert.Equal(Some "val it: ExampleModel = { Name = \"Basic Usage\"; Content = \"1+1\"; ExpectedOutput = Some \"2\"; Scenario = None }", parsed.ExpectedOutput)
+        Assert.Equal(Some "val it: ExampleModel = { Name = \"Basic Usage\"; Content = \"1+1\"; ExpectedOutput = Some \"2\"; Scenario = None; IsSnapshotTest = false }", parsed.ExpectedOutput)
 
     [<Fact>]
     let ``verifyExamples executes transcript style examples`` () =
@@ -103,6 +121,7 @@ module DocTestRunnerTests =
                                             """
                                         ExpectedOutput = Some "val x: int = 1\nval it: int = 3"
                                         Scenario = None
+                                        IsSnapshotTest = true
                                     }
                                 ]
                             Entities = []
@@ -115,6 +134,47 @@ module DocTestRunnerTests =
         let results = DocTestRunner.verifyExamples package projectPath [] |> Async.RunSynchronously
         let (_, passed, output) = Assert.Single(results)
         Assert.True(passed, output)
+
+    [<Fact>]
+    let ``collectSnapshots returns structured snapshot payload`` () =
+        let package : PackageModel =
+            {
+                Version = "1.0"
+                Entities =
+                    [
+                        {
+                            Id = "Test.Module"
+                            Name = "Module"
+                            Kind = "Module"
+                            SummaryHtml = ""
+                            Members = []
+                            Examples =
+                                [
+                                    {
+                                        Name = "SnapshotExample"
+                                        Content =
+                                            """
+                                            > let x = 1;;
+                                            > x + 2;;
+                                            val x: int = 1
+                                            val it: int = 3
+                                            """
+                                        ExpectedOutput = Some "val x: int = 1\nval it: int = 3"
+                                        Scenario = None
+                                        IsSnapshotTest = true
+                                    }
+                                ]
+                            Entities = []
+                        }
+                    ]
+                Scenarios = []
+            }
+
+        let projectPath = Path.GetFullPath("src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj")
+        let snapshot = DocTestRunner.collectSnapshots package projectPath [] |> Async.RunSynchronously
+        let example = Assert.Single(snapshot.Examples)
+        Assert.Equal("verified", example.Status)
+        Assert.Equal(Some "val x: int = 1\nval it: int = 3", example.ExpectedOutput)
 
 module ViewTests =
 

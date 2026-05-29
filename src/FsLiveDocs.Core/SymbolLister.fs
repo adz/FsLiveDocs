@@ -10,7 +10,7 @@ open System.Xml.Linq
 open System.Reflection
 
 /// <summary>Provides capabilities to scan F# projects and extract symbols using FSharp.Formatting.</summary>
-/// <example name="ExtractExamplesExample">
+/// <example name="ExtractExamplesExample" data-livedocs="snapshot">
 /// > SymbolLister.extractExamples "<summary>No examples here</summary>";;
 /// val it: ExampleModel list = []
 /// </example>
@@ -21,17 +21,56 @@ module SymbolLister =
         | Some xml -> xml.ToString(SaveOptions.DisableFormatting)
         | None -> ""
 
+    let private tryGetAttribute (name: string) (attrs: string) =
+        let pattern = $"\\b{name}\\s*=\\s*\"(?<value>[^\"]*)\""
+        let matchResult = Regex.Match(attrs, pattern, RegexOptions.IgnoreCase)
+        if matchResult.Success then Some matchResult.Groups.["value"].Value else None
+
+    let private hasSnapshotMarker (attrs: string) =
+        match tryGetAttribute "data-livedocs" attrs |> Option.orElseWith (fun () -> tryGetAttribute "test" attrs) with
+        | Some value when value.Equals("snapshot", StringComparison.OrdinalIgnoreCase) -> true
+        | Some value when value.Equals("true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ ->
+            match tryGetAttribute "snapshot" attrs with
+            | Some value when value.Equals("true", StringComparison.OrdinalIgnoreCase) -> true
+            | _ -> false
+
     /// <summary>Extracts &lt;example&gt; tags from XML documentation for verification and transclusion.</summary>
     let extractExamples (xmlDoc: string) =
-        let pattern = @"<example(?:\s+name=""(?<name>[^""]+)"")?(?:\s+scenario=""(?<scenario>[^""]+)"")?>(?<code>.*?)<\/example>"
+        let pattern = @"<(?<tag>example|code)(?<attrs>[^>]*)>(?<code>.*?)</\k<tag>>"
         let matches = Regex.Matches(xmlDoc, pattern, RegexOptions.Singleline)
         [ for m in matches do
-            let parsed = ExampleTranscript.parse m.Groups.["code"].Value
+            let tag = m.Groups.["tag"].Value
+            let attrs = m.Groups.["attrs"].Value
+            let rawCode = System.Net.WebUtility.HtmlDecode(m.Groups.["code"].Value)
+            let parsed = ExampleTranscript.parse rawCode
+            let explicitSnapshot = hasSnapshotMarker attrs
+            let language =
+                tryGetAttribute "language" attrs
+                |> Option.orElseWith (fun () -> tryGetAttribute "lang" attrs)
+            let isFSharpCode =
+                match language with
+                | Some lang when lang.Equals("fsharp", StringComparison.OrdinalIgnoreCase)
+                                 || lang.Equals("fs", StringComparison.OrdinalIgnoreCase) -> true
+                | _ -> false
+            let transcriptMarker =
+                tag.Equals("example", StringComparison.OrdinalIgnoreCase)
+                && (rawCode.Contains("> ") || rawCode.Contains("- "))
             yield { 
-                Name = if m.Groups.["name"].Success then m.Groups.["name"].Value else "Example"
+                Name =
+                    match tryGetAttribute "name" attrs with
+                    | Some value when not (String.IsNullOrWhiteSpace value) -> value
+                    | _ -> "Example"
                 Content = parsed.DisplayText
                 ExpectedOutput = parsed.ExpectedOutput
-                Scenario = if m.Groups.["scenario"].Success then Some m.Groups.["scenario"].Value else None
+                Scenario =
+                    match tryGetAttribute "scenario" attrs with
+                    | Some value when not (String.IsNullOrWhiteSpace value) -> Some value
+                    | _ -> None
+                IsSnapshotTest =
+                    transcriptMarker
+                    || (tag.Equals("example", StringComparison.OrdinalIgnoreCase) && explicitSnapshot)
+                    || (tag.Equals("code", StringComparison.OrdinalIgnoreCase) && explicitSnapshot && isFSharpCode)
             }
         ]
 

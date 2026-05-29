@@ -8,6 +8,11 @@ type: how-to
 
 This guide shows how to move beyond toy snippets and use FsLiveDocs for code that needs setup, dependencies, and controlled test fixtures.
 
+The examples here follow two selection rules:
+
+1. transcript-style `<example>` blocks are picked up automatically when they already show FSI input/output,
+2. any `<example>` or `<code language="fsharp">` block can opt in explicitly with `data-livedocs="snapshot"`.
+
 ## The problem
 
 Many docs examples work only when the process is already in the right state. That usually means:
@@ -17,7 +22,7 @@ Many docs examples work only when the process is already in the right state. Tha
 3. a service dependency is already wired,
 4. a temporary folder is available.
 
-FsLiveDocs supports that shape by letting you pair a transcript-style example with a named setup scenario.
+FsLiveDocs supports that shape by letting you pair a transcript-style example with a named setup scenario, then generate a Verify-based test project that snapshots the evaluated result.
 
 ## Basic example
 
@@ -33,7 +38,7 @@ For a fuller FSI session, the core library also includes a multiline transcript 
 
 ## Adding a setup scenario
 
-Mark a function with `[<DocScenario>]` and give the example a matching `scenario` name. The shared name is the join key: the generator scans all examples, finds the matching scenario, and runs that setup function before the example body.
+Mark a function with `[<DocScenario>]` and give the example a matching `scenario` name. The shared name is the join key: the generated test project scans the extracted examples, finds the matching scenario, and runs that setup function before the example body.
 
 ```fsharp
 open FsLiveDocs.Core
@@ -56,11 +61,11 @@ Then reference it from the example:
 /// </example>
 ```
 
-When FsLiveDocs generates the runner, it looks up `ScenarioModel.Name = "with-db"` and calls the corresponding `MethodId` before it executes the example body. That is what connects the setup function to the `scenario` attribute.
+When FsLiveDocs evaluates a snapshot example, it looks up `ScenarioModel.Name = "with-db"` and calls the corresponding `MethodId` before it executes the example body. That is what connects the setup function to the `scenario` attribute.
 
 ## What actually runs
 
-The example body is extracted from the XML doc comment and copied into the transcript runner. It is run in the context of the compiled project, not pasted into this guide page.
+The example body is extracted from the XML doc comment and copied into the snapshot runner. It is run in the context of the compiled project, not pasted into this guide page.
 
 The scenario function is different. FsLiveDocs discovers it from the compiled project assembly by looking for `[<DocScenario>]`, then calls the compiled method before the example body runs.
 
@@ -75,7 +80,8 @@ This means:
 1. the scenario does not have to be written inline next to the guide text,
 2. the example is still tested verbatim, with its original lines preserved,
 3. the scenario can live in the same project or any other project you pass to the build,
-4. the runner uses the scenario name to connect the example to the compiled setup function.
+4. the runner uses the scenario name to connect the example to the compiled setup function,
+5. the generated test project can snapshot the evaluated result with Verify so changes are reviewed explicitly.
 
 ## Using dependency injection
 
@@ -110,13 +116,20 @@ The scenario runs first and assigns the shared `service` binding. The example th
 
 ## What the runner does
 
-The runner collects examples, looks up scenario functions, runs the setup, and then executes the transcript in that context.
+The runner collects selected examples, looks up scenario functions, runs the setup, and then executes the transcript in that context.
 
 That means the following are true:
 
 1. the snippet is compiled,
 2. the setup function is compiled,
 3. the combined execution is verified,
-4. the result is reflected back into the build.
+4. the result is reflected back into the build,
+5. if the example does not yet have expected output, it is treated as a first cut and shows up in the snapshot payload for later source update.
+
+If you want to generate the snapshot test project, run:
+
+```bash
+livedocs generate-tests src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj
+```
 
 If you want the full design trade-offs around when not to use doc-tests, read the new [DocTest Design guide](doctest-design.html).

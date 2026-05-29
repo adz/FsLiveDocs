@@ -19,18 +19,19 @@ type: reference
 | :--- | :--- |
 | `livedocs init` | Scaffold a new project structure (`docs/` folder). |
 | `livedocs ci` | Generate GitHub Actions workflow. |
-| `livedocs test <fsproj>` | Extract and run all docstring examples. |
+| `livedocs generate-tests <fsproj...>` | Generate a Verify-based snapshot test project. |
+| `livedocs test <fsproj>` | Run the legacy direct docstring verifier. |
 | `livedocs build <fsproj>` | Generate the static documentation site. |
 | `livedocs watch <fsproj>` | Start dev server with live rebuilds. |
 | `livedocs theme <name>` | Set DaisyUI theme (e.g., `dark`, `cupcake`). |
 
 ## 🧪 Verifying Docstrings
 
-Add examples directly to your function documentation:
+Add examples directly to your function documentation. Transcript-style examples are picked up automatically; if you want to be explicit, add `data-livedocs="snapshot"`:
 
 ```fsharp
 /// <summary>Adds two integers.</summary>
-/// <example name="AddTest">
+/// <example name="AddTest" data-livedocs="snapshot">
 /// > Math.add 1 2;;
 /// val it: int = 3
 /// </example>

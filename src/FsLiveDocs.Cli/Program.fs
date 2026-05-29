@@ -19,6 +19,8 @@ type Arguments =
     | [<CliPrefix(CliPrefix.None)>] Init
     /// <summary>Generates CI/CD templates for GitHub Actions.</summary>
     | [<CliPrefix(CliPrefix.None)>] CI
+    /// <summary>Generates a Verify-based snapshot test project that calls into LiveDocs.</summary>
+    | [<CliPrefix(CliPrefix.None); AltCommandLine("generate-tests")>] GenerateTests of projectPaths:string list
     /// <summary>Extracts symbol metadata from projects into JSON snapshots.</summary>
     | [<CliPrefix(CliPrefix.None)>] Extract of projectPaths:string list
     /// <summary>Runs verified code examples found in docstrings.</summary>
@@ -34,8 +36,9 @@ type Arguments =
             match s with
             | Init -> "Scaffold a new LiveDocs project."
             | CI -> "Generate CI/CD templates (GitHub Actions)."
+            | GenerateTests _ -> "Generate a Verify-based snapshot test project for the given projects."
             | Extract _ -> "Extract symbols from one or more projects into a JSON blob."
-            | Test _ -> "Run all verified docstrings and snippets for the given projects."
+            | Test _ -> "Run the legacy direct docstring verifier for the given projects."
             | Build _ -> "Render the final static site for the given projects."
             | Watch _ -> "Start a dev server with file watching."
             | Theme _ -> "Set the visual theme (default: light)."
@@ -68,6 +71,114 @@ module Program =
                 { RepoUrl = None }
         else
             { RepoUrl = None }
+
+    let private writeIfChanged (path: string) (content: string) =
+        let normalized = content.Replace("\r\n", "\n").TrimEnd() + "\n"
+        let shouldWrite =
+            if File.Exists(path) then
+                File.ReadAllText(path).Replace("\r\n", "\n").TrimEnd() + "\n" <> normalized
+            else
+                true
+
+        if shouldWrite then
+            let dir = Path.GetDirectoryName(path)
+            if not (String.IsNullOrWhiteSpace dir) && not (Directory.Exists(dir)) then
+                Directory.CreateDirectory(dir) |> ignore
+            File.WriteAllText(path, normalized)
+
+    let private generateSnapshotTests (projectPaths: string list) =
+        printBanner()
+
+        if List.isEmpty projectPaths then
+            AnsiConsole.MarkupLine("[red]No project paths were provided.[/]")
+            1
+        else
+            let outputDir = Path.GetFullPath("tests/FsLiveDocs.SnapshotTests")
+            if not (Directory.Exists(outputDir)) then Directory.CreateDirectory(outputDir) |> ignore
+            let eol = Environment.NewLine
+
+            let resolvedProjects =
+                projectPaths
+                |> List.map Path.GetFullPath
+
+            let relativeProjects =
+                resolvedProjects
+                |> List.map (fun projectPath -> Path.GetRelativePath(outputDir, projectPath).Replace('\\', '/'))
+
+            let projectRefs =
+                relativeProjects
+                |> List.map (fun relative -> $"    <ProjectReference Include=\"{relative}\" />")
+                |> String.concat eol
+
+            let fsproj =
+                [
+                    """<Project Sdk="Microsoft.NET.Sdk">"""
+                    ""
+                    "  <PropertyGroup>"
+                    "    <TargetFramework>net10.0</TargetFramework>"
+                    "    <IsPackable>false</IsPackable>"
+                    "  </PropertyGroup>"
+                    ""
+                    "  <ItemGroup>"
+                    "    <Compile Include=\"SnapshotTests.fs\" />"
+                    "  </ItemGroup>"
+                    ""
+                    "  <ItemGroup>"
+                    "    <PackageReference Include=\"Microsoft.NET.Test.Sdk\" Version=\"17.14.1\" />"
+                    "    <PackageReference Include=\"xunit\" Version=\"2.9.3\" />"
+                    "    <PackageReference Include=\"xunit.runner.visualstudio\" Version=\"3.1.4\" />"
+                    "    <PackageReference Include=\"Verify.Xunit\" Version=\"31.12.5\" />"
+                    "  </ItemGroup>"
+                    ""
+                    "  <ItemGroup>"
+                    projectRefs
+                    "  </ItemGroup>"
+                    ""
+                    "</Project>"
+                ]
+                |> String.concat eol
+
+            let testBodies =
+                List.zip resolvedProjects relativeProjects
+                |> List.map (fun (projectPath, relativeProjectPath) ->
+                    let projectName = Path.GetFileNameWithoutExtension(projectPath)
+                    let escapedProjectPath = relativeProjectPath.Replace("\"", "\"\"")
+                    [
+                        "    [<Fact>]"
+                        $"    let ``{projectName} snapshot examples`` () ="
+                        "        task {"
+                        $"            let projectPath = @\"{escapedProjectPath}\""
+                        "            let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously"
+                        "            let! snapshot = DocTestRunner.collectSnapshots package projectPath []"
+                        "            return! Verifier.Verify(snapshot)"
+                        "        }"
+                    ]
+                    |> String.concat eol)
+                |> String.concat eol
+
+            let testsFs =
+                [
+                    "namespace FsLiveDocs.SnapshotTests"
+                    ""
+                    "open System.Threading.Tasks"
+                    "open FsLiveDocs.Core"
+                    "open FsLiveDocs.Runner"
+                    "open VerifyXunit"
+                    "open Xunit"
+                    ""
+                    "module SnapshotTests ="
+                    testBodies
+                ]
+                |> String.concat eol
+
+            let fsprojPath = Path.Combine(outputDir, "FsLiveDocs.SnapshotTests.fsproj")
+            let testsPath = Path.Combine(outputDir, "SnapshotTests.fs")
+
+            writeIfChanged fsprojPath fsproj
+            writeIfChanged testsPath testsFs
+
+            AnsiConsole.MarkupLine($"[green]✔ Snapshot test project generated:[/] {outputDir}")
+            0
 
     /// <summary>Orchestrates the build process for one or more projects.</summary>
     let buildAction (projectPaths: string list) (theme: string) =
@@ -153,6 +264,10 @@ jobs:
                     File.WriteAllText(".github/workflows/livedocs.yml", workflow)
                     AnsiConsole.MarkupLine("[green]✔ Done:[/] .github/workflows/livedocs.yml")
                     0
+
+                elif results.Contains GenerateTests then
+                    let projectPaths = results.GetResult GenerateTests
+                    generateSnapshotTests projectPaths
 
                 elif results.Contains Extract then
                     printBanner()

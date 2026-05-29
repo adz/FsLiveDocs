@@ -58,26 +58,33 @@ module DocTestRunner =
     let private splitLines (text: string) =
         text.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
 
-    let private formatTypeName (valueType: Type) =
-        match valueType.FullName with
-        | "System.Int32" -> "int"
-        | "System.Int64" -> "int64"
-        | "System.Int16" -> "int16"
-        | "System.Byte" -> "byte"
-        | "System.Double" -> "float"
-        | "System.Single" -> "float32"
-        | "System.Decimal" -> "decimal"
-        | "System.String" -> "string"
-        | "System.Boolean" -> "bool"
-        | "System.Char" -> "char"
-        | "System.Void" -> "unit"
-        | fullName when fullName = typeof<unit>.FullName -> "unit"
-        | fullName when fullName = typeof<int option>.FullName -> "int option"
-        | fullName when fullName = typeof<string option>.FullName -> "string option"
-        | fullName when fullName <> null && fullName.StartsWith("Microsoft.FSharp.Collections.FSharpList") -> "list"
-        | _ -> valueType.Name
+    let rec private formatTypeName (valueType: Type) =
+        if valueType = typeof<unit> then "unit"
+        elif valueType = typeof<int> then "int"
+        elif valueType = typeof<int64> then "int64"
+        elif valueType = typeof<int16> then "int16"
+        elif valueType = typeof<byte> then "byte"
+        elif valueType = typeof<double> then "float"
+        elif valueType = typeof<single> then "float32"
+        elif valueType = typeof<decimal> then "decimal"
+        elif valueType = typeof<string> then "string"
+        elif valueType = typeof<bool> then "bool"
+        elif valueType = typeof<char> then "char"
+        elif valueType.IsGenericType && valueType.GetGenericTypeDefinition() = typedefof<option<_>> then
+            $"{formatTypeName (valueType.GetGenericArguments().[0])} option"
+        elif valueType.IsGenericType && valueType.GetGenericTypeDefinition() = typedefof<list<_>> then
+            $"{formatTypeName (valueType.GetGenericArguments().[0])} list"
+        elif valueType.IsGenericType && valueType.GetGenericTypeDefinition() = typedefof<Map<_, _>> then
+            let args = valueType.GetGenericArguments()
+            $"Map<{formatTypeName args.[0]},{formatTypeName args.[1]}>"
+        elif valueType.IsGenericType then
+            let name = valueType.Name.Split('`').[0]
+            let args = valueType.GetGenericArguments() |> Array.map formatTypeName |> String.concat ","
+            $"{name}<{args}>"
+        else
+            valueType.Name
 
-    let private buildLoadScript (assemblyPath: string) (references: string list) (projectNamespace: string) =
+    let private buildLoadScript (assemblyPath: string) (references: string list) (projectNamespace: string) (extraOpens: string list) =
         let refs =
             assemblyPath :: references
             |> List.distinct
@@ -88,6 +95,7 @@ module DocTestRunner =
             [
                 "open System"
                 if not (String.IsNullOrWhiteSpace projectNamespace) then $"open {projectNamespace}"
+                yield! extraOpens
             ]
 
         String.concat "\n" (refs @ opens)
@@ -108,16 +116,6 @@ module DocTestRunner =
         |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line))
         |> Array.iter target.Add
 
-    let private isDeclarationBlock (block: string) =
-        let trimmed = block.TrimStart()
-        trimmed.StartsWith("let ")
-        || trimmed.StartsWith("do ")
-        || trimmed.StartsWith("open ")
-        || trimmed.StartsWith("module ")
-        || trimmed.StartsWith("type ")
-        || trimmed.StartsWith("namespace ")
-        || trimmed.StartsWith("#")
-
     let private evalBlock (session: FsiEvaluationSession) (outStream: StringWriter) (errStream: StringWriter) (block: string) =
         let output = ResizeArray<string>()
         let outBuilder = outStream.GetStringBuilder()
@@ -127,39 +125,30 @@ module DocTestRunner =
 
         let normalized = block.Replace("\r\n", "\n").Replace("\r", "\n").Trim()
 
-        if isDeclarationBlock normalized then
-            let boundOutputs = ResizeArray<string>()
+        let boundOutputs = ResizeArray<string>()
 
-            use subscription =
-                session.ValueBound.Subscribe(fun (valueObj, valueType, name) ->
-                    let name = if String.IsNullOrWhiteSpace name then "it" else name
-                    let typeName = formatTypeName valueType
-                    let valueText = session.FormatValue(valueObj, valueType)
-                    boundOutputs.Add($"val {name}: {typeName} = {valueText}")
-                )
+        use subscription =
+            session.ValueBound.Subscribe(fun (valueObj, valueType, name) ->
+                let name = if String.IsNullOrWhiteSpace name then "it" else name
+                let typeName = formatTypeName valueType
+                let valueText = session.FormatValue(valueObj, valueType)
+                boundOutputs.Add($"val {name}: {typeName} = {valueText}")
+            )
 
-            try
+        try
+            if normalized.StartsWith("#", StringComparison.Ordinal) then
+                normalized.Split('\n')
+                |> Array.map (fun line -> line.Trim())
+                |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line))
+                |> Array.iter (fun line -> session.EvalInteraction(line) |> ignore)
+            elif normalized.EndsWith(";;", StringComparison.Ordinal) then
                 session.EvalInteraction(normalized) |> ignore
-            with ex ->
-                output.Add(ex.Message)
+            else
+                session.EvalExpression(normalized) |> ignore
+        with ex ->
+            output.Add(ex.Message)
 
-            boundOutputs |> Seq.iter output.Add
-        else
-            let expr =
-                if normalized.EndsWith(";;", StringComparison.Ordinal) then
-                    normalized.Substring(0, normalized.Length - 2).TrimEnd()
-                else
-                    normalized
-
-            try
-                match session.EvalExpression(expr) with
-                | Some value ->
-                    let valueText = session.FormatValue(value.ReflectionValue, value.ReflectionType)
-                    let typeName = formatTypeName value.ReflectionType
-                    output.Add($"val it: {typeName} = {valueText}")
-                | None -> ()
-            with ex ->
-                output.Add(ex.Message)
+        boundOutputs |> Seq.iter output.Add
 
         let outText = outBuilder.ToString(outStart, outBuilder.Length - outStart)
         let errText = errBuilder.ToString(errStart, errBuilder.Length - errStart)
@@ -186,16 +175,22 @@ module DocTestRunner =
         let scenarioCall =
             scenario
             |> Option.map (fun s -> $"{s.MethodId}()")
+        let scenarioOpens =
+            scenario
+            |> Option.map (fun s ->
+                let parts = s.MethodId.Split('.')
+                if parts.Length > 1 then parts.[parts.Length - 2] else s.MethodId)
+            |> Option.toList
 
         let scriptBlocks =
             [
-                buildLoadScript projectAssembly references projectNamespace
+                buildLoadScript projectAssembly references projectNamespace scenarioOpens
             ]
             @ (scenarioCall |> Option.map (fun call -> "do " + call) |> Option.toList)
-            |> List.append transcript.Interactions
+            @ transcript.Interactions
 
         let output = runFsiTranscript scriptBlocks
-        output, transcript.ExpectedOutput
+        output, transcript.ExpectedOutput, transcript.DisplayText
 
     let private getAllExamples (entities: EntityModel list) =
         let rec walk (e: EntityModel) =
@@ -204,6 +199,69 @@ module DocTestRunner =
             e.Examples @ members @ nested
 
         entities |> List.collect walk
+
+    let private getSnapshotExamples (entities: EntityModel list) =
+        getAllExamples entities
+        |> List.filter (fun ex -> ex.IsSnapshotTest)
+
+    let private statusOf (expected: string option) (actual: string) =
+        match expected with
+        | None -> "first-cut"
+        | Some expectedText when String.Equals(actual, expectedText.Trim(), StringComparison.Ordinal) -> "verified"
+        | Some _ -> "mismatch"
+
+    /// <summary>Runs snapshot-selected examples and returns structured results for a generated Verify project.</summary>
+    /// <param name="package">The package model containing examples and scenarios.</param>
+    /// <param name="projectPath">The project that produced the package.</param>
+    /// <param name="references">Additional references needed by generated examples.</param>
+    /// <returns>A snapshot payload that can be verified by a generated test project.</returns>
+    let collectSnapshots (package: PackageModel) (projectPath: string) (references: string list) = async {
+        let resolvedProjectPath = resolveProjectPath projectPath
+        let projectAssembly = resolveAssemblyPath resolvedProjectPath
+
+        if String.IsNullOrWhiteSpace projectAssembly || not (File.Exists projectAssembly) then
+            return {
+                ProjectPath = resolvedProjectPath
+                ProjectNamespace = Path.GetFileNameWithoutExtension(resolvedProjectPath)
+                Examples = [
+                    {
+                        Name = "project"
+                        Scenario = None
+                        Source = ""
+                        ExpectedOutput = None
+                        ActualOutput = $"Could not resolve built assembly for {resolvedProjectPath}"
+                        Status = "error"
+                    }
+                ]
+            }
+        else
+            let projectNamespace = Path.GetFileNameWithoutExtension(resolvedProjectPath)
+            let examples = getSnapshotExamples package.Entities
+
+            let results =
+                examples
+                |> List.map (fun ex ->
+                    let scenario =
+                        ex.Scenario
+                        |> Option.bind (fun sName -> package.Scenarios |> List.tryFind (fun s -> s.Name = sName))
+
+                    let output, expected, source = runExample projectAssembly projectNamespace references scenario ex
+                    let actual = output.Trim()
+                    {
+                        Name = ex.Name
+                        Scenario = ex.Scenario
+                        Source = source
+                        ExpectedOutput = expected
+                        ActualOutput = actual
+                        Status = statusOf expected actual
+                    })
+
+            return {
+                ProjectPath = resolvedProjectPath
+                ProjectNamespace = projectNamespace
+                Examples = results
+            }
+    }
 
     /// <summary>Verifies all docstring examples extracted from a package.</summary>
     /// <param name="package">The package model containing examples and scenarios.</param>
@@ -220,9 +278,9 @@ module DocTestRunner =
             ]
         else
             let projectNamespace = Path.GetFileNameWithoutExtension(resolvedProjectPath)
-            let allExamples = getAllExamples package.Entities
+            let allExamples = getSnapshotExamples package.Entities
 
-            if allExamples.IsEmpty then
+            if List.isEmpty allExamples then
                 return []
             else
                 let mutable results = []
@@ -231,7 +289,7 @@ module DocTestRunner =
                         ex.Scenario
                         |> Option.bind (fun sName -> package.Scenarios |> List.tryFind (fun s -> s.Name = sName))
 
-                    let output, expected = runExample projectAssembly projectNamespace references scenario ex
+                    let output, expected, _ = runExample projectAssembly projectNamespace references scenario ex
                     let actual = output.Trim()
 
                     match expected with

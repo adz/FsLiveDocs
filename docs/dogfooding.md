@@ -29,10 +29,10 @@ Example from `ContentProvider.resolveSnippets`:
 ## 🧪 Verified Examples
 
 The examples above are not just text. When we run `./scripts/preview.sh`, the following happens:
-1. `livedocs test` is called.
-2. It extracts the `<example>` tags.
+1. `livedocs generate-tests` can scaffold a Verify-based snapshot test project for the doc examples.
+2. The selected `<example>` and `<code>` blocks are extracted from XML doc comments.
 3. It resolves the compiled project assembly and scenario setup functions.
-4. It executes the code as an FSI-style transcript and verifies the same `val` bindings and outputs FSI would show.
+4. It executes the code as an FSI-style transcript and snapshots the evaluated result so changes are reviewed explicitly.
 
 ## 🔗 Live Transclusion
 

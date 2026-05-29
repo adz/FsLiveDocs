@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="SnapshotTests.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="Verify.Xunit" Version="31.12.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj" />
+    <ProjectReference Include="../../src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj" />
+    <ProjectReference Include="../../src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj" />
+    <ProjectReference Include="../../src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj" />
+  </ItemGroup>
+
+</Project>

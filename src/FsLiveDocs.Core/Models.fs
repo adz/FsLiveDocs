@@ -108,9 +108,13 @@ type SourceLink = {
 
 // <snippet:ExampleModel>
 /// <summary>Represents an executable code example extracted from documentation.</summary>
-/// <example name="CreateExample">
+/// <example name="CreateExample" data-livedocs="snapshot">
 /// > ExampleModel.Create("Basic Usage", "1+1", Some "2", None);;
-/// val it: ExampleModel = { Name = "Basic Usage"; Content = "1+1"; ExpectedOutput = Some "2"; Scenario = None }
+/// val it: ExampleModel = { Name = "Basic Usage"
+///   Content = "1+1"
+///   ExpectedOutput = Some "2"
+///   Scenario = None
+///   IsSnapshotTest = false }
 /// </example>
 type ExampleModel = {
     /// <summary>The unique name of the example, used for transclusion.</summary>
@@ -121,6 +125,8 @@ type ExampleModel = {
     ExpectedOutput: string option
     /// <summary>Optional scenario name to provide mocks/DI for this example.</summary>
     Scenario: string option
+    /// <summary>Whether this example should be picked up by the generated snapshot test project.</summary>
+    IsSnapshotTest: bool
 }
 // </snippet:ExampleModel>
 
@@ -194,13 +200,40 @@ type PackageModel = {
 
 type ExampleModel with
     /// <summary>Create an example record from its individual fields.</summary>
-    static member Create(name: string, content: string, expectedOutput: string option, scenario: string option) =
+    static member Create(name: string, content: string, expectedOutput: string option, scenario: string option, ?isSnapshotTest: bool) =
         {
             Name = name
             Content = content
             ExpectedOutput = expectedOutput
             Scenario = scenario
+            IsSnapshotTest = defaultArg isSnapshotTest false
         }
+
+/// <summary>Represents the evaluated result of a documentation example.</summary>
+type ExampleSnapshotModel = {
+    /// <summary>The unique name of the example.</summary>
+    Name: string
+    /// <summary>The scenario name, if one was applied.</summary>
+    Scenario: string option
+    /// <summary>The example source as extracted from the documentation comment.</summary>
+    Source: string
+    /// <summary>The expected output already present in the source, if any.</summary>
+    ExpectedOutput: string option
+    /// <summary>The actual output produced by running the example.</summary>
+    ActualOutput: string
+    /// <summary>The verification status for the example.</summary>
+    Status: string
+}
+
+/// <summary>Represents the snapshot payload for one project.</summary>
+type ProjectSnapshotModel = {
+    /// <summary>The project file that was evaluated.</summary>
+    ProjectPath: string
+    /// <summary>The project namespace used by the runner.</summary>
+    ProjectNamespace: string
+    /// <summary>The examples selected for snapshot verification.</summary>
+    Examples: ExampleSnapshotModel list
+}
 
 /// <summary>Build-time configuration for the generated documentation site.</summary>
 type SiteConfig = {
