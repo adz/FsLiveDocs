@@ -4,8 +4,6 @@ open Giraffe.ViewEngine
 open FsLiveDocs.Core
 open System
 open System.IO
-open System.Net
-open System.Text.RegularExpressions
 
 /// <summary>Centralized URL and path resolution helpers.</summary>
 module Url =
@@ -22,28 +20,8 @@ module Url =
 /// <summary>Contains the view components and layout templates for the documentation site.</summary>
 module View =
 
-    let private stripHtml (html: string) =
-        html
-        |> fun text -> Regex.Replace(text, "<.*?>", String.Empty)
-        |> WebUtility.HtmlDecode
-        |> fun text -> Regex.Replace(text, @"\s+", " ").Trim()
-
     let private escapeJs (value: string) =
         value.Replace("\\", "\\\\").Replace("'", "\\'")
-
-    let private highlightSignatureHtml (text: string) =
-        let encoded = WebUtility.HtmlEncode(stripHtml text)
-        Regex.Replace(
-            encoded,
-            @"\b(option|list|seq|array|map|set|unit|string|int|bool|byte|sbyte|int16|int32|int64|uint16|uint32|uint64|decimal|float|double|char|obj)\b",
-            "<span class=\"text-secondary font-semibold\">$1</span>")
-
-    let private synopsisFromHtml (html: string) =
-        let text = stripHtml html
-        if String.IsNullOrWhiteSpace text then "No description available."
-        else
-            let matchResult = Regex.Match(text, @"^(.+?[.!?])(?:\s|$)")
-            if matchResult.Success then matchResult.Groups.[1].Value else text
 
     let sourceLinkHref (repoUrl: string option) (location: SourceLink) =
         match repoUrl with
@@ -258,7 +236,7 @@ module View =
                     | None -> emptyText
                 ]
                 div [ _class "text-xs font-mono text-primary bg-primary/5 px-3 py-1.5 rounded-full border border-primary/10 shadow-inner overflow-x-auto max-w-full block" ] [
-                    rawText (highlightSignatureHtml memberModel.Signature)
+                    rawText (Presentation.highlightSignatureHtml memberModel.Signature)
                 ]
                 span [ _class "text-[10px] font-black uppercase opacity-30 tracking-widest" ] [ str "Member" ]
             ]
@@ -282,7 +260,7 @@ module View =
                                 tbody [] (memberModel.Parameters |> List.map (fun p ->
                                     tr [] [
                                         td [ _class "font-bold font-mono text-sm text-primary"; attr "style" "padding-left: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ str p.Name ]
-                                        td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ span [ _class "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText (highlightSignatureHtml p.Type) ] ]
+                                        td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ span [ _class "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText (Presentation.highlightSignatureHtml p.Type) ] ]
                                         td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ rawText p.DescriptionHtml ]
                                     ]
                                 ))
@@ -295,7 +273,7 @@ module View =
                     h4 [ _class "text-[11px] font-black uppercase opacity-40 tracking-widest flex items-center gap-2" ] [ 
                         i [ _class "bi bi-arrow-return-right text-accent/60" ] []; str "Returns" 
                     ]
-                    div [ _class "text-accent font-mono text-sm font-black bg-accent/5 px-4 py-2.5 rounded-xl border border-accent/10 overflow-x-auto w-full" ] [ rawText (highlightSignatureHtml memberModel.ReturnType) ]
+                    div [ _class "text-accent font-mono text-sm font-black bg-accent/5 px-4 py-2.5 rounded-xl border border-accent/10 overflow-x-auto w-full" ] [ rawText (Presentation.highlightSignatureHtml memberModel.ReturnType) ]
                 ]
 
                 (if not memberModel.Examples.IsEmpty then

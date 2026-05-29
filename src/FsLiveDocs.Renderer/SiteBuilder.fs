@@ -2,38 +2,12 @@ namespace FsLiveDocs.Renderer
 
 open System
 open System.IO
-open System.Net
 open System.Text.RegularExpressions
 open Giraffe.ViewEngine
 open FsLiveDocs.Core
 
 /// <summary>The high-level site assembly engine.</summary>
 module SiteBuilder =
-
-    let private summarize (html: string) =
-        let text =
-            html
-            |> fun value -> Regex.Replace(value, "<.*?>", String.Empty)
-            |> WebUtility.HtmlDecode
-            |> fun value -> Regex.Replace(value, @"\s+", " ").Trim()
-        if String.IsNullOrWhiteSpace text then "No description available."
-        else
-            let sentence = Regex.Match(text, @"^(.+?[.!?])(?:\s|$)")
-            if sentence.Success then sentence.Groups.[1].Value else text
-
-    let private highlightSignatureHtml (text: string) =
-        let encoded = WebUtility.HtmlEncode(text)
-        Regex.Replace(
-            encoded,
-            @"\b(option|list|seq|array|map|set|unit|string|int|bool|byte|sbyte|int16|int32|int64|uint16|uint32|uint64|decimal|float|double|char|obj)\b",
-            "<span class=\"text-secondary font-semibold\">$1</span>")
-
-    let rec private flattenEntities (entities: EntityModel list) =
-        entities
-        |> List.collect (fun e -> e :: flattenEntities e.Entities)
-
-    let private entityExamples (entity: EntityModel) =
-        if isNull (box entity.Examples) then [] else entity.Examples
 
     /// <summary>Renders a single Markdown guide page.</summary>
     /// <param name="page">The processed content page to render.</param>
@@ -93,7 +67,7 @@ module SiteBuilder =
                                             span [ _class "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText m.Signature ]
                                         ]
                                         td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                            str (summarize m.SummaryHtml)
+                                            str (Presentation.synopsisFromHtml m.SummaryHtml)
                                         ]
                                     ]
                                 )
@@ -148,7 +122,7 @@ module SiteBuilder =
                                 ]
                                 div [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ] [
                                     div [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ] [ str "Examples" ]
-                                    div [ _class "text-lg font-black" ] [ str (string (entityExamples ent).Length) ]
+                                    div [ _class "text-lg font-black" ] [ str (string (Presentation.entityExamples ent).Length) ]
                                 ]
                             ]
                             div [ _class "p-5 md:p-6 space-y-3" ] (
@@ -160,7 +134,7 @@ module SiteBuilder =
                                             span [ _class "font-bold text-primary" ] [ str m.Name ]
                                             span [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 font-black" ] [ str "Signature" ]
                                         ]
-                                        div [ _class "font-mono text-sm text-accent overflow-x-auto" ] [ rawText (highlightSignatureHtml m.Signature) ]
+                                        div [ _class "font-mono text-sm text-accent overflow-x-auto" ] [ rawText (Presentation.highlightSignatureHtml m.Signature) ]
                                     ]
                                 )
                             )
@@ -190,7 +164,7 @@ module SiteBuilder =
                                                 span [ _class "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText m.Signature ]
                                             ]
                                             td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                                str (summarize m.SummaryHtml)
+                                                str (Presentation.synopsisFromHtml m.SummaryHtml)
                                             ]
                                         ]
                                     )
@@ -201,7 +175,7 @@ module SiteBuilder =
 
                 div [ _class "space-y-12" ] (ent.Members |> List.map (View.apiCard config.RepoUrl))
 
-                let examples = entityExamples ent
+                let examples = Presentation.entityExamples ent
                 if not examples.IsEmpty then
                     div [ _class "mt-24 border-t border-base-300 pt-16" ] [
                         View.h2WithAnchor (ent.Id + "-examples") "Examples" "text-3xl font-black mb-10 tracking-tighter"
@@ -240,7 +214,7 @@ module SiteBuilder =
                 renderSummaryBlock ent.SummaryHtml
                 renderFieldTable "Fields" ent.Members
 
-                let examples = entityExamples ent
+                let examples = Presentation.entityExamples ent
                 if not examples.IsEmpty then
                     div [ _class "mt-24 border-t border-base-300 pt-16" ] [
                         View.h2WithAnchor (ent.Id + "-examples") "Examples" "text-3xl font-black mb-10 tracking-tighter"
@@ -312,7 +286,7 @@ module SiteBuilder =
         let apiDir = Path.Combine(outputDir, "api")
         if not (Directory.Exists(apiDir)) then Directory.CreateDirectory(apiDir) |> ignore
         
-        for e in flattenEntities package.Entities do
+        for e in Presentation.flattenEntities package.Entities do
             let html = renderEntityPage e pages package config versions theme (rootPath + "../")
             File.WriteAllText(Path.Combine(apiDir, e.Id + ".html"), html)
 
@@ -331,12 +305,7 @@ module SiteBuilder =
                             h3 [ _class "text-xl font-bold group-hover:text-primary transition-colors" ] [ str e.Name ]
                             span [ _class "badge badge-sm opacity-40" ] [ str e.Kind ]
                         ]
-                        let summary = 
-                            if String.IsNullOrEmpty(e.SummaryHtml) then "No description available."
-                            else 
-                                // Strip HTML tags for the card description
-                                Regex.Replace(e.SummaryHtml, "<.*?>", String.Empty).Trim()
-                        p [ _class "text-sm opacity-60 mt-2 line-clamp-2" ] [ str summary ]
+                        p [ _class "text-sm opacity-60 mt-2 line-clamp-2" ] [ str (Presentation.synopsisFromHtml e.SummaryHtml) ]
                     ]
                 )
             )

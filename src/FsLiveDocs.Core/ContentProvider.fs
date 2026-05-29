@@ -220,6 +220,29 @@ module ContentProvider =
         // </snippet:XrefResolution>
         restoreCodeSegments body3
 
+    type private MarkdownContext = {
+        SourceDir: string
+        Package: PackageModel
+        RootPath: string
+        CurrentOutputPath: string
+        AllowedOutputs: Set<string>
+    }
+
+    let private resolveMarkdown (context: MarkdownContext) (body: string) =
+        let resolved = resolveSnippets body context.SourceDir context.Package context.RootPath
+        validateLinks context.CurrentOutputPath context.AllowedOutputs resolved
+        Markdown.ToHtml(resolved, pipeline)
+
+    let private loadMarkdownPage (context: MarkdownContext) (filePath: string) =
+        let raw = File.ReadAllText(filePath)
+        match parseFrontMatter raw with
+        | Some (metadata, body) ->
+            let contentHtml = resolveMarkdown context body
+            { Metadata = metadata; ContentHtml = contentHtml; FilePath = filePath }
+        | None ->
+            let contentHtml = resolveMarkdown context raw
+            { Metadata = { Title = Path.GetFileNameWithoutExtension(filePath); Weight = 0; Type = None }; ContentHtml = contentHtml; FilePath = filePath }
+
     /// <summary>Loads and processes a single Markdown page.</summary>
     /// <param name="filePath">The markdown file to read.</param>
     /// <param name="sourceDir">The root directory used to resolve snippet shortcodes.</param>
@@ -229,18 +252,15 @@ module ContentProvider =
     /// <param name="allowedOutputs">The set of known output pages used to validate local links.</param>
     /// <returns>A processed content page ready for rendering.</returns>
     let loadPage (filePath: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (currentOutputPath: string) (allowedOutputs: Set<string>) =
-        let raw = File.ReadAllText(filePath)
-        match parseFrontMatter raw with
-        | Some (metadata, body) ->
-            let resolved = resolveSnippets body sourceDir package rootPath
-            validateLinks currentOutputPath allowedOutputs resolved
-            let html = Markdown.ToHtml(resolved, pipeline)
-            { Metadata = metadata; ContentHtml = html; FilePath = filePath }
-        | None ->
-            let resolved = resolveSnippets raw sourceDir package rootPath
-            validateLinks currentOutputPath allowedOutputs resolved
-            let html = Markdown.ToHtml(resolved, pipeline)
-            { Metadata = { Title = Path.GetFileNameWithoutExtension(filePath); Weight = 0; Type = None }; ContentHtml = html; FilePath = filePath }
+        loadMarkdownPage
+            {
+                SourceDir = sourceDir
+                Package = package
+                RootPath = rootPath
+                CurrentOutputPath = currentOutputPath
+                AllowedOutputs = allowedOutputs
+            }
+            filePath
 
     /// <summary>Scans the docs directory and loads all guide pages.</summary>
     /// <param name="docsDir">The docs root containing markdown pages.</param>
@@ -281,7 +301,16 @@ module ContentProvider =
                 docFiles 
                 |> Array.map (fun f -> 
                     let id = Path.GetFileNameWithoutExtension(f)
-                    let page = loadPage f sourceDir package "" $"api/{id}.html" allowedOutputs
+                    let page =
+                        loadMarkdownPage
+                            {
+                                SourceDir = sourceDir
+                                Package = package
+                                RootPath = ""
+                                CurrentOutputPath = $"api/{id}.html"
+                                AllowedOutputs = allowedOutputs
+                            }
+                            f
                     id, page.ContentHtml)
                 |> Map.ofArray
             

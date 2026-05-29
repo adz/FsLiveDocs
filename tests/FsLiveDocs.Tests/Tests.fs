@@ -224,3 +224,19 @@ module SiteBuilderTests =
         let summary = SiteBuilder.generateLlmsTxt package
 
         Assert.StartsWith("# API Reference for LLMs", summary)
+
+module PresentationTests =
+
+    [<Fact>]
+    let ``highlightSignatureHtml emphasizes common F# types`` () =
+        let html = Presentation.highlightSignatureHtml "string option -> int list"
+
+        Assert.Contains("<span class=\"text-secondary font-semibold\">string</span>", html)
+        Assert.Contains("<span class=\"text-secondary font-semibold\">option</span>", html)
+        Assert.Contains("<span class=\"text-secondary font-semibold\">list</span>", html)
+
+    [<Fact>]
+    let ``synopsisFromHtml strips markup and returns the first sentence`` () =
+        let summary = Presentation.synopsisFromHtml "<p>Represents a parameter. Additional details follow.</p>"
+
+        Assert.Equal("Represents a parameter.", summary)
