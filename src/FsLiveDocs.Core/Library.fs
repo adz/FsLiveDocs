@@ -9,9 +9,9 @@ open System
 /// dependency injection, required for a code example to execute successfully.
 /// </remarks>
 /// <example name="DocScenarioUsage">
-/// let attr = DocScenarioAttribute("AuthenticatedUser")
-/// printfn "%s" attr.Name
-/// // EXPECTED: AuthenticatedUser
+/// > let attr = DocScenarioAttribute("AuthenticatedUser");;
+/// > printfn "%s" attr.Name;;
+/// AuthenticatedUser
 /// </example>
 [<AttributeUsage(AttributeTargets.Method, AllowMultiple = false)>]
 type DocScenarioAttribute(name: string) =
@@ -29,8 +29,8 @@ module DocScenarioSamples =
         currentUser <- "Ada"
 
     /// <example name="UserGreeting" scenario="with-user">
-    /// printfn "Hello %s" currentUser
-    /// // EXPECTED: Hello Ada
+    /// > printfn "Hello %s" currentUser;;
+    /// Hello Ada
     /// </example>
     let greet () =
         printfn "Hello %s" currentUser

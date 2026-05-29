@@ -2,6 +2,77 @@ namespace FsLiveDocs.Core
 
 open System
 
+module ExampleTranscript =
+    let private normalizeIndent (text: string) =
+        let lines = text.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
+        let nonEmpty = lines |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line))
+        if nonEmpty.Length = 0 then ""
+        else
+            let minIndent =
+                nonEmpty
+                |> Array.map (fun line -> line.Length - line.TrimStart().Length)
+                |> Array.fold min Int32.MaxValue
+
+            lines
+            |> Array.map (fun line ->
+                if line.Length >= minIndent then line.Substring(minIndent)
+                else line.TrimStart())
+            |> String.concat "\n"
+            |> fun value -> value.Trim()
+
+    let private isFsiInputLine (line: string) =
+        let trimmed = line.TrimStart()
+        trimmed.StartsWith("> ") || trimmed.StartsWith("- ")
+
+    let private stripFsiPrompt (line: string) =
+        let trimmed = line.TrimStart()
+        if trimmed.StartsWith("> ") then trimmed.Substring(2)
+        elif trimmed.StartsWith("- ") then trimmed.Substring(2)
+        else trimmed
+
+    type Parsed = {
+        DisplayText: string
+        Script: string
+        ExpectedOutput: string option
+    }
+
+    let parse (raw: string) =
+        let normalized = normalizeIndent raw
+        let lines = normalized.Split('\n')
+        let isSession = lines |> Array.exists isFsiInputLine
+
+        if isSession then
+            let script =
+                lines
+                |> Array.choose (fun line ->
+                    if isFsiInputLine line then Some (stripFsiPrompt line)
+                    else None)
+                |> String.concat "\n"
+
+            let output =
+                lines
+                |> Array.choose (fun line ->
+                    if String.IsNullOrWhiteSpace line then None
+                    elif isFsiInputLine line then None
+                    else Some (line.TrimEnd()))
+                |> String.concat "\n"
+                |> fun value -> value.Trim()
+
+            {
+                DisplayText = normalized
+                Script = script
+                ExpectedOutput = if String.IsNullOrWhiteSpace output then None else Some output
+            }
+        else
+            let parts = normalized.Split([| "// EXPECTED:" |], StringSplitOptions.None)
+            let content = parts.[0].Trim()
+            let expected = if parts.Length > 1 then Some (parts.[1].Trim()) else None
+            {
+                DisplayText = content
+                Script = content
+                ExpectedOutput = expected
+            }
+
 // <snippet:ProjectStructure>
 /// <summary>Represents a link to a specific line in a source file.</summary>
 type SourceLink = {
@@ -15,14 +86,9 @@ type SourceLink = {
 // <snippet:ExampleModel>
 /// <summary>Represents an executable code example extracted from documentation.</summary>
 /// <example name="CreateExample">
-/// let example = { 
-///     Name = "Basic Usage"
-///     Content = "printfn \"Hello\""
-///     ExpectedOutput = Some "Hello"
-///     Scenario = None 
-/// }
-/// printfn "%s" example.Name
-/// // EXPECTED: Basic Usage
+/// > let example = { Name = "Basic Usage"; Content = "printfn \"Hello\""; ExpectedOutput = Some "Hello"; Scenario = None };;
+/// > printfn "%s" example.Name;;
+/// Basic Usage
 /// </example>
 type ExampleModel = {
     /// <summary>The unique name of the example, used for transclusion.</summary>

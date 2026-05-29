@@ -35,7 +35,7 @@ Prefer ordinary tests when:
 
 1. the behavior depends on timing or concurrency,
 2. the code writes to external systems,
-3. you need richer assertions than `EXPECTED:` output,
+3. you need richer assertions than the example transcript can reasonably express,
 4. the setup is so large that the example stops being instructional.
 
 ## Practical guidance

@@ -102,7 +102,7 @@ See `xref:T:FsLiveDocs.Core.ExampleModel` for the example data structure.
 ### Function link
 
 ```md
-The runner uses `xref:M:FsLiveDocs.Runner.DocTestRunner.generateTestProject` to build the temporary test project.
+The runner uses `xref:M:FsLiveDocs.Runner.DocTestRunner.verifyExamples` to check transcript-style examples.
 ```
 
 ### Namespace link

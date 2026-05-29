@@ -17,7 +17,7 @@ Many docs examples work only when the process is already in the right state. Tha
 3. a service dependency is already wired,
 4. a temporary folder is available.
 
-FsLiveDocs supports that shape by letting you pair a snippet with a named setup scenario.
+FsLiveDocs supports that shape by letting you pair a transcript-style example with a named setup scenario.
 
 ## Basic example
 
@@ -45,10 +45,10 @@ Then reference it from the example:
 
 ```fsharp
 /// <example name="RepositoryLookup" scenario="with-db">
-/// let repo = Repository.create()
-/// let user = repo.findUser 42
-/// printfn "%s" user.Name
-/// // EXPECTED: Ada
+/// > let repo = Repository.create();;
+/// > let user = repo.findUser 42;;
+/// > printfn "%s" user.Name;;
+/// Ada
 /// </example>
 ```
 
@@ -56,7 +56,7 @@ When FsLiveDocs generates the runner, it looks up `ScenarioModel.Name = "with-db
 
 ## What actually runs
 
-The example body is extracted from the XML doc comment and copied into a generated test project. It is run in the context of that generated project, not pasted into this guide page.
+The example body is extracted from the XML doc comment and copied into the transcript runner. It is run in the context of the compiled project, not pasted into this guide page.
 
 The scenario function is different. FsLiveDocs discovers it from the compiled project assembly by looking for `[<DocScenario>]`, then calls the compiled method before the example body runs.
 
@@ -65,8 +65,6 @@ The real code paths are here:
 {{< snippet id="DocScenarioAttributeUsage" >}}
 
 {{< snippet id="DocScenarioPattern" >}}
-
-{{< snippet id="ScenarioBinding" >}}
 
 This means:
 
@@ -91,9 +89,9 @@ let buildServices () =
 
 ```fsharp
 /// <example name="ServiceBehavior" scenario="with-services">
-/// let result = service.CreateUser "Jane"
-/// printfn "%s" result.Status
-/// // EXPECTED: Created
+/// > let result = service.CreateUser "Jane";;
+/// > printfn "%s" result.Status;;
+/// Created
 /// </example>
 ```
 
@@ -106,9 +104,9 @@ The scenario runs first and assigns the shared `service` binding. The example th
 3. Prefer pure assertions over logs or incidental output.
 4. Keep fixtures deterministic so the doc-test output does not drift.
 
-## What the generated runner does
+## What the runner does
 
-The generated `Program.fs` collects examples, looks up scenario functions, runs the setup, and then executes the snippet in that context.
+The runner collects examples, looks up scenario functions, runs the setup, and then executes the transcript in that context.
 
 That means the following are true:
 

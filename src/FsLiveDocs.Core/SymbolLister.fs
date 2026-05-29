@@ -11,9 +11,9 @@ open System.Reflection
 
 /// <summary>Provides capabilities to scan F# projects and extract symbols using FSharp.Formatting.</summary>
 /// <example name="ExtractExamplesExample">
-/// let examples = SymbolLister.extractExamples "EXAMPLE"
-/// printfn "COUNT: %d" examples.Length
-/// // EXPECTED: COUNT: 0
+/// > let examples = SymbolLister.extractExamples "<summary>No examples here</summary>";;
+/// > printfn "COUNT: %d" examples.Length;;
+/// COUNT: 0
 /// </example>
 module SymbolLister =
 
@@ -27,32 +27,11 @@ module SymbolLister =
         let pattern = @"<example(?:\s+name=""(?<name>[^""]+)"")?(?:\s+scenario=""(?<scenario>[^""]+)"")?>(?<code>.*?)<\/example>"
         let matches = Regex.Matches(xmlDoc, pattern, RegexOptions.Singleline)
         [ for m in matches do
-            let rawCode = m.Groups.["code"].Value
-            let lines = rawCode.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
-            let nonEmpty = lines |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line))
-            
-            let normalizedContent =
-                if nonEmpty.Length = 0 then ""
-                else
-                    let minIndent =
-                        nonEmpty
-                        |> Array.map (fun line -> line.Length - line.TrimStart().Length)
-                        |> Array.fold min Int32.MaxValue
-                    
-                    lines
-                    |> Array.map (fun line ->
-                        if line.Length >= minIndent then line.Substring(minIndent)
-                        else line.TrimStart())
-                    |> String.concat "\n"
-                    |> fun s -> s.Trim()
-
-            let parts = normalizedContent.Split([| "// EXPECTED:" |], StringSplitOptions.None)
-            let content = parts.[0].Trim()
-            let expected = if parts.Length > 1 then Some (parts.[1].Trim()) else None
+            let parsed = ExampleTranscript.parse m.Groups.["code"].Value
             yield { 
                 Name = if m.Groups.["name"].Success then m.Groups.["name"].Value else "Example"
-                Content = content
-                ExpectedOutput = expected
+                Content = parsed.DisplayText
+                ExpectedOutput = parsed.ExpectedOutput
                 Scenario = if m.Groups.["scenario"].Success then Some m.Groups.["scenario"].Value else None
             }
         ]

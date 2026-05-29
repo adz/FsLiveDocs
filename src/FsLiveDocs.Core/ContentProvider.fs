@@ -7,10 +7,10 @@ open YamlDotNet.Serialization.NamingConventions
 
 /// <summary>Provides capabilities to load, parse, and resolve Markdown documentation pages.</summary>
 /// <example name="ResolveSnippetExample">
-/// let package = { Version = "1.0"; Entities = []; Scenarios = [] }
-/// let resolved = ContentProvider.resolveSnippets "Hello" "." package ""
-/// printfn "RESOLVED: %s" resolved
-/// // EXPECTED: RESOLVED: Hello
+/// > let package = { Version = "1.0"; Entities = []; Scenarios = [] };;
+/// > let resolved = ContentProvider.resolveSnippets "Hello" "." package "";;
+/// > printfn "RESOLVED: %s" resolved;;
+/// RESOLVED: Hello
 /// </example>
 module ContentProvider =
 

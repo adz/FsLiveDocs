@@ -51,19 +51,57 @@ module ContentProviderTests =
 module DocTestRunnerTests =
 
     [<Fact>]
-    let ``generateTestProject creates valid fsproj content`` () =
-        let temp = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())
-        Directory.CreateDirectory(temp) |> ignore
-        let examples = [ { Name = "T1"; Content = "printfn \"hi\""; ExpectedOutput = None; Scenario = None } ]
-        let proj = DocTestRunner.generateTestProject examples [] "Sample.fsproj" [] temp
-        let content = File.ReadAllText(proj)
-        Assert.Contains("<TargetFramework>net10.0</TargetFramework>", content)
-        Assert.Contains("<ProjectReference Include=\"", content)
-        Assert.Contains("Sample.fsproj", content)
-        
-        let prog = File.ReadAllText(Path.Combine(temp, "Program.fs"))
-        Assert.Contains("printfn \"--- TEST: T1 ---\"", prog)
-        Assert.Contains("printfn \"hi\"", prog)
+    let ``ExampleTranscript parses FSI sessions`` () =
+        let parsed =
+            ExampleTranscript.parse
+                """
+                > let x = 1;;
+                > x;;
+                val x: int = 1
+                val it: int = 1
+                """
+
+        Assert.Contains("let x = 1;;", parsed.Script)
+        Assert.Contains("x;;", parsed.Script)
+        Assert.Equal(Some "val x: int = 1\nval it: int = 1", parsed.ExpectedOutput)
+
+    [<Fact>]
+    let ``verifyExamples executes transcript style examples`` () =
+        let package : PackageModel =
+            {
+                Version = "1.0"
+                Entities =
+                    [
+                        {
+                            Id = "Test.Module"
+                            Name = "Module"
+                            Kind = "Module"
+                            SummaryHtml = ""
+                            Members = []
+                            Examples =
+                                [
+                                    {
+                                        Name = "SessionExample"
+                                        Content =
+                                            """
+                                            > let x = 1;;
+                                            > printfn "%d" (x + 2);;
+                                            3
+                                            """
+                                        ExpectedOutput = Some "3"
+                                        Scenario = None
+                                    }
+                                ]
+                            Entities = []
+                        }
+                    ]
+                Scenarios = []
+            }
+
+        let projectPath = Path.GetFullPath("src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj")
+        let results = DocTestRunner.verifyExamples package projectPath [] |> Async.RunSynchronously
+        let (_, passed, output) = Assert.Single(results)
+        Assert.True(passed, output)
 
 module ViewTests =
 

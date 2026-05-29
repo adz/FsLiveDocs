@@ -15,8 +15,6 @@ The `SiteBuilder` uses **Giraffe.ViewEngine** for fast, type-safe HTML generatio
 - `renderEntityPage`: Generates the detailed view for a specific module or type.
 - `generateLlmsTxt`: Produces an `llms.txt` file for AI-assisted development.
 
-{{< example id="BuildSummaryExample" >}}
-
 ## Customization
 
 You can control the look and feel of your site by passing a `theme` parameter (e.g., `emerald`, `dark`, `retro`).
