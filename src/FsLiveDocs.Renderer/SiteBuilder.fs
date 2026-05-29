@@ -9,31 +9,41 @@ open FsLiveDocs.Core
 /// <summary>The high-level site assembly engine.</summary>
 module SiteBuilder =
 
+    /// <summary>Shared inputs for rendering a documentation page.</summary>
+    type SiteRenderContext = {
+        AllPages: ContentPage list
+        Package: PackageModel
+        Config: SiteConfig
+        Versions: string list
+        Theme: string
+        RootPath: string
+    }
+
+    /// <summary>Shared inputs for building the generated site.</summary>
+    type SiteBuildContext = {
+        Pages: ContentPage list
+        Package: PackageModel
+        Config: SiteConfig
+        Versions: string list
+        Theme: string
+        RootPath: string
+        OutputDir: string
+    }
+
     /// <summary>Renders a single Markdown guide page.</summary>
     /// <param name="page">The processed content page to render.</param>
-    /// <param name="allPages">All content pages used for navigation and version links.</param>
-    /// <param name="package">The extracted package model.</param>
-    /// <param name="versions">Known history versions for the version switcher.</param>
-    /// <param name="theme">The active DaisyUI theme.</param>
-    /// <param name="rootPath">The relative root path for generated links.</param>
     /// <returns>The rendered HTML document as a string.</returns>
-    let renderPage (page: ContentPage) (allPages: ContentPage list) (package: PackageModel) (versions: string list) (theme: string) (rootPath: string) =
+    let renderPage (page: ContentPage) (context: SiteRenderContext) =
         let content = [
             div [] [ rawText page.ContentHtml ]
         ]
-        View.layout page.Metadata.Title allPages package versions theme rootPath content
+        View.layout page.Metadata.Title context.AllPages context.Package context.Versions context.Theme context.RootPath content
         |> fun node -> RenderView.AsString.htmlNode node
 
     /// <summary>Renders a single API entity page (Module or Type).</summary>
     /// <param name="e">The entity to render.</param>
-    /// <param name="allPages">All guide pages used for navigation and the toc.</param>
-    /// <param name="package">The extracted package model.</param>
-    /// <param name="config">Build-time site configuration.</param>
-    /// <param name="versions">Known history versions for the version switcher.</param>
-    /// <param name="theme">The active DaisyUI theme.</param>
-    /// <param name="rootPath">The relative root path for generated links.</param>
     /// <returns>The rendered HTML document as a string.</returns>
-    let renderEntityPage (e: EntityModel) (allPages: ContentPage list) (package: PackageModel) (config: SiteConfig) (versions: string list) (theme: string) (rootPath: string) =
+    let renderEntityPage (e: EntityModel) (context: SiteRenderContext) =
         let renderSummaryBlock (summaryHtml: string) =
             if String.IsNullOrWhiteSpace summaryHtml then
                 emptyText
@@ -173,7 +183,7 @@ module SiteBuilder =
                         ]
                     ]
 
-                div [ _class "space-y-12" ] (ent.Members |> List.map (View.apiCard config.RepoUrl))
+                div [ _class "space-y-12" ] (ent.Members |> List.map (View.apiCard context.Config.RepoUrl))
 
                 let examples = Presentation.entityExamples ent
                 if not examples.IsEmpty then
@@ -240,7 +250,7 @@ module SiteBuilder =
                 | EntityKind.Record -> renderRecordEntity e
                 | _ -> renderGenericEntity e
             ]
-        View.layout e.Name allPages package versions theme rootPath content
+        View.layout e.Name context.AllPages context.Package context.Versions context.Theme context.RootPath content
         |> fun node -> RenderView.AsString.htmlNode node
 
     /// <summary>Generates a text-based summary of the API for LLM consumption.</summary>
@@ -267,32 +277,35 @@ module SiteBuilder =
         sb.ToString()
 
     /// <summary>Builds the primary documentation site.</summary>
-    /// <param name="package">The package model that drives the API pages.</param>
-    /// <param name="pages">The guide pages to render.</param>
-    /// <param name="config">Build-time site configuration.</param>
-    /// <param name="versions">Known history versions for the version switcher.</param>
-    /// <param name="theme">The active DaisyUI theme.</param>
-    /// <param name="rootPath">The relative root path for generated links.</param>
-    /// <param name="outputDir">The output directory that will receive the rendered site.</param>
-    let build (package: PackageModel) (pages: ContentPage list) (config: SiteConfig) (versions: string list) (theme: string) (rootPath: string) (outputDir: string) =
-        if Directory.Exists(outputDir) then Directory.Delete(outputDir, true)
-        Directory.CreateDirectory(outputDir) |> ignore
+    let build (context: SiteBuildContext) =
+        let renderContext = {
+            AllPages = context.Pages
+            Package = context.Package
+            Config = context.Config
+            Versions = context.Versions
+            Theme = context.Theme
+            RootPath = context.RootPath
+        }
+
+        if Directory.Exists(context.OutputDir) then Directory.Delete(context.OutputDir, true)
+        Directory.CreateDirectory(context.OutputDir) |> ignore
         
         // LLMS Integration
-        File.WriteAllText(Path.Combine(outputDir, "llms.txt"), generateLlmsTxt package)
+        File.WriteAllText(Path.Combine(context.OutputDir, "llms.txt"), generateLlmsTxt context.Package)
         
         // Render content pages
-        for page in pages do
-            let (html: string) = renderPage page pages package versions theme rootPath
+        for page in context.Pages do
+            let (html: string) = renderPage page renderContext
             let fileName = Path.GetFileNameWithoutExtension(page.FilePath).ToLower() + ".html"
-            File.WriteAllText(Path.Combine(outputDir, fileName), html)
+            File.WriteAllText(Path.Combine(context.OutputDir, fileName), html)
 
         // Render API docs - Multi-page approach
-        let apiDir = Path.Combine(outputDir, "api")
+        let apiDir = Path.Combine(context.OutputDir, "api")
         if not (Directory.Exists(apiDir)) then Directory.CreateDirectory(apiDir) |> ignore
         
-        for e in Presentation.flattenEntities package.Entities do
-            let html = renderEntityPage e pages package config versions theme (rootPath + "../")
+        let apiRenderContext = { renderContext with RootPath = context.RootPath + "../" }
+        for e in Presentation.flattenEntities context.Package.Entities do
+            let html = renderEntityPage e apiRenderContext
             File.WriteAllText(Path.Combine(apiDir, e.Id + ".html"), html)
 
         // Generate api.html (Overview / API Reference index)
@@ -300,12 +313,12 @@ module SiteBuilder =
             View.h1WithAnchor "api-reference" "API Reference" "text-5xl font-black mb-12 tracking-tighter"
             div [ _class "grid grid-cols-1 md:grid-cols-2 gap-6 not-prose" ] (
                 let topLevel = 
-                    match package.Entities with
+                    match context.Package.Entities with
                     | [ e ] when e.Kind = EntityKind.Namespace && e.Members.IsEmpty -> e.Entities
-                    | _ -> package.Entities
+                    | _ -> context.Package.Entities
                 
                 topLevel |> List.map (fun e ->
-                    a [ _href (rootPath + "api/" + e.Id + ".html"); _class "card bg-base-100 border border-base-300 p-6 hover:shadow-xl hover:border-primary transition-all group" ] [
+                    a [ _href (context.RootPath + "api/" + e.Id + ".html"); _class "card bg-base-100 border border-base-300 p-6 hover:shadow-xl hover:border-primary transition-all group" ] [
                         div [ _class "flex justify-between items-center" ] [
                             h3 [ _class "text-xl font-bold group-hover:text-primary transition-colors" ] [ str e.Name ]
                             span [ _class "badge badge-sm opacity-40" ] [ str (string e.Kind) ]
@@ -315,11 +328,11 @@ module SiteBuilder =
                 )
             )
         ]
-        let (apiHtml: string) = View.layout "API Reference" pages package versions theme rootPath apiOverview |> RenderView.AsString.htmlNode
-        File.WriteAllText(Path.Combine(outputDir, "api.html"), apiHtml)
+        let (apiHtml: string) = View.layout "API Reference" context.Pages context.Package context.Versions context.Theme context.RootPath apiOverview |> RenderView.AsString.htmlNode
+        File.WriteAllText(Path.Combine(context.OutputDir, "api.html"), apiHtml)
 
         // Generate index.html
-        let indexPath = Path.Combine(outputDir, "index.html")
+        let indexPath = Path.Combine(context.OutputDir, "index.html")
         let indexContent = [ 
             h1 [
                 _id "home"
@@ -339,8 +352,8 @@ module SiteBuilder =
                 str "Verified documentation for the F# ecosystem. Guaranteed to compile, guaranteed to run." 
             ]
             div [ _class "flex flex-wrap gap-6 not-prose" ] [
-                a [ _href (rootPath + "api.html"); _class "btn btn-primary btn-lg rounded-2xl px-12 h-20 shadow-2xl shadow-primary/20 text-lg no-underline" ] [ str "Explore API" ]
-                a [ _href (rootPath + "verified-examples.html"); _class "btn btn-outline btn-lg rounded-2xl px-12 h-20 text-lg hover:bg-base-300 no-underline" ] [ str "Read Guides" ]
+                a [ _href (context.RootPath + "api.html"); _class "btn btn-primary btn-lg rounded-2xl px-12 h-20 shadow-2xl shadow-primary/20 text-lg no-underline" ] [ str "Explore API" ]
+                a [ _href (context.RootPath + "verified-examples.html"); _class "btn btn-outline btn-lg rounded-2xl px-12 h-20 text-lg hover:bg-base-300 no-underline" ] [ str "Read Guides" ]
             ]
             div [ _class "grid grid-cols-1 md:grid-cols-3 gap-8 mt-24 not-prose" ] [
                 div [ _class "card bg-base-100 border border-base-300 p-8 rounded-3xl shadow-sm hover:shadow-xl transition-all group" ] [
@@ -366,7 +379,7 @@ module SiteBuilder =
                 ]
             ]
         ]
-        let (html: string) = View.layout "Home" pages package versions theme rootPath indexContent |> RenderView.AsString.htmlNode
+        let (html: string) = View.layout "Home" context.Pages context.Package context.Versions context.Theme context.RootPath indexContent |> RenderView.AsString.htmlNode
         File.WriteAllText(indexPath, html)
 
     /// <summary>Builds the current site and computes the version list from history snapshots.</summary>
@@ -386,7 +399,15 @@ module SiteBuilder =
         
         let allVersions = currentPackage.Version :: versions |> List.distinct
         
-        build currentPackage pages config allVersions theme "" outputDir
+        build {
+            Pages = pages
+            Package = currentPackage
+            Config = config
+            Versions = allVersions
+            Theme = theme
+            RootPath = ""
+            OutputDir = outputDir
+        }
 
         if Directory.Exists(historyDir) then
             for vJson in Directory.GetFiles(historyDir, "*.json") do
@@ -394,4 +415,12 @@ module SiteBuilder =
                 let json = File.ReadAllText(vJson)
                 let package = Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(json)
                 let vDir = Path.Combine(outputDir, "history", v)
-                build package pages config allVersions theme "../../" vDir
+                build {
+                    Pages = pages
+                    Package = package
+                    Config = config
+                    Versions = allVersions
+                    Theme = theme
+                    RootPath = "../../"
+                    OutputDir = vDir
+                }

@@ -210,7 +210,16 @@ module ViewTests =
             }
 
         let package : PackageModel = { Version = "1.0"; Entities = [ recordEntity ]; Scenarios = [] }
-        let html = SiteBuilder.renderEntityPage recordEntity [] package { RepoUrl = None } [] "light" "../"
+        let context : SiteBuilder.SiteRenderContext =
+            {
+                AllPages = []
+                Package = package
+                Config = { RepoUrl = None }
+                Versions = []
+                Theme = "light"
+                RootPath = "../"
+            }
+        let html = SiteBuilder.renderEntityPage recordEntity context
 
         Assert.Contains("Fields", html)
         Assert.Contains("Represents a parameter of a function or method.", html)
