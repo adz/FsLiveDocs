@@ -6,6 +6,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="ProjectResolver.fs" />
+    <Compile Include="FsiTranscriptRunner.fs" />
     <Compile Include="DocTestRunner.fs" />
     <Compile Include="Library.fs" />
   </ItemGroup>

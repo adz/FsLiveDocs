@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Transcript.fs" />
     <Compile Include="Models.fs" />
     <Compile Include="SymbolLister.fs" />
     <Compile Include="ContentProvider.fs" />
