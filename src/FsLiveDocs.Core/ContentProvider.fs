@@ -98,36 +98,40 @@ module ContentProvider =
             let relative = Path.GetRelativePath(siteOutputRoot, full).Replace('\\', '/')
             Some relative
 
-    let private validateLinks (currentOutputPath: string) (allowedOutputs: Set<string>) (body: string) =
+    let private withProtectedCodeSegments (text: string) (tokenPrefix: string) (action: string -> string) =
         let protectedSegments = ResizeArray<string>()
-        let protectCodeSegments (text: string) =
+        let protectCodeSegments (input: string) =
             let codePattern = @"(?s)```.*?```|`[^`\r\n]+`"
-            System.Text.RegularExpressions.Regex.Replace(text, codePattern, fun (m: System.Text.RegularExpressions.Match) ->
-                let token = $"@@FSLIVEDOCS_VALIDATE_CODE_{protectedSegments.Count}@@"
+            System.Text.RegularExpressions.Regex.Replace(input, codePattern, fun (m: System.Text.RegularExpressions.Match) ->
+                let token = $"@@{tokenPrefix}_{protectedSegments.Count}@@"
                 protectedSegments.Add(m.Value)
                 token)
 
-        let restoreCodeSegments (text: string) =
+        let restoreCodeSegments (input: string) =
             protectedSegments
-            |> Seq.mapi (fun i (segment: string) -> $"@@FSLIVEDOCS_VALIDATE_CODE_{i}@@", segment)
-            |> Seq.fold (fun (acc: string) (token, segment) -> acc.Replace(token, segment)) text
+            |> Seq.mapi (fun i (segment: string) -> $"@@{tokenPrefix}_{i}@@", segment)
+            |> Seq.fold (fun (acc: string) (token, segment) -> acc.Replace(token, segment)) input
 
-        let body = protectCodeSegments body
+        text |> protectCodeSegments |> action |> restoreCodeSegments
+
+    let private validateLinks (currentOutputPath: string) (allowedOutputs: Set<string>) (body: string) =
         let linkPattern = @"(?<!\!)\[[^\]]+\]\((?<href>[^)]+)\)"
-        for m in System.Text.RegularExpressions.Regex.Matches(body, linkPattern) do
-            let href = m.Groups.["href"].Value.Trim().Trim('"')
-            match normalizeOutputPath currentOutputPath href with
-            | None -> ()
-            | Some target ->
-                if target.EndsWith(".html", System.StringComparison.OrdinalIgnoreCase)
-                   || target.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
-                    let normalizedTarget =
-                        if target.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
-                            Path.ChangeExtension(target, ".html").Replace('\\', '/')
-                        else target
-                    if not (allowedOutputs.Contains normalizedTarget) then
-                        invalidOp $"Broken documentation link in {currentOutputPath}: [{href}] resolves to {normalizedTarget}, which does not exist."
-        ignore (restoreCodeSegments body)
+        withProtectedCodeSegments body "FSLIVEDOCS_VALIDATE_CODE" (fun protectedBody ->
+            for m in System.Text.RegularExpressions.Regex.Matches(protectedBody, linkPattern) do
+                let href = m.Groups.["href"].Value.Trim().Trim('"')
+                match normalizeOutputPath currentOutputPath href with
+                | None -> ()
+                | Some target ->
+                    if target.EndsWith(".html", System.StringComparison.OrdinalIgnoreCase)
+                       || target.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
+                        let normalizedTarget =
+                            if target.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
+                                Path.ChangeExtension(target, ".html").Replace('\\', '/')
+                            else target
+                        if not (allowedOutputs.Contains normalizedTarget) then
+                            invalidOp $"Broken documentation link in {currentOutputPath}: [{href}] resolves to {normalizedTarget}, which does not exist."
+            protectedBody)
+        |> ignore
 
     let private collectEntityIds (entities: EntityModel list) =
         let rec walk acc (items: EntityModel list) =
@@ -153,48 +157,36 @@ module ContentProvider =
 
     /// <summary>Resolves shortcodes (snippets, examples) and semantic links (xrefs) in Markdown content.</summary>
     let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
-        let protectedSegments = ResizeArray<string>()
-        let protectCodeSegments (text: string) =
-            let codePattern = @"(?s)```.*?```|`[^`\r\n]+`"
-            System.Text.RegularExpressions.Regex.Replace(text, codePattern, fun (m: System.Text.RegularExpressions.Match) ->
-                let token = $"@@FSLIVEDOCS_CODE_{protectedSegments.Count}@@"
-                protectedSegments.Add(m.Value)
-                token)
-
-        let restoreCodeSegments (text: string) =
-            protectedSegments
-            |> Seq.mapi (fun i (segment: string) -> $"@@FSLIVEDOCS_CODE_{i}@@", segment)
-            |> Seq.fold (fun (acc: string) (token, segment) -> acc.Replace(token, segment)) text
-
-        let protectedBody = protectCodeSegments body
-
         // 1. Resolve {{< snippet id="X" >}}
         let snippetPattern = @"{{<\s*snippet\s+id=""(?<id>[^""]+)""\s*(?:showOutput=""(?<showOutput>[^""]+)"")?\s*>}}"
-        let body1 = System.Text.RegularExpressions.Regex.Replace(protectedBody, snippetPattern, fun (m: System.Text.RegularExpressions.Match) ->
-            let id = m.Groups.["id"].Value
-            let files = Directory.GetFiles(sourceDir, "*.fs", SearchOption.AllDirectories)
-            let snippet = 
-                files |> Seq.tryPick (fun f ->
-                    let lines = File.ReadAllLines(f)
-                    let start = Array.tryFindIndex (fun (l: string) -> l.Contains($"<snippet:{id}>")) lines
-                    let stop = Array.tryFindIndex (fun (l: string) -> l.Contains($"</snippet:{id}>")) lines
-                    match start, stop with
-                    | Some s, Some e -> Some (String.concat "\n" lines.[s+1..e-1])
-                    | _ -> None
-                )
-            match snippet with
-            | Some s -> $"```fsharp\n{s}\n```"
-            | None -> invalidOp $"Snippet '{id}' was not found."
-        )
+        let body1 =
+            withProtectedCodeSegments body "FSLIVEDOCS_CODE" (fun protectedBody ->
+                System.Text.RegularExpressions.Regex.Replace(protectedBody, snippetPattern, fun (m: System.Text.RegularExpressions.Match) ->
+                    let id = m.Groups.["id"].Value
+                    let files = Directory.GetFiles(sourceDir, "*.fs", SearchOption.AllDirectories)
+                    let snippet =
+                        files |> Seq.tryPick (fun f ->
+                            let lines = File.ReadAllLines(f)
+                            let start = Array.tryFindIndex (fun (l: string) -> l.Contains($"<snippet:{id}>")) lines
+                            let stop = Array.tryFindIndex (fun (l: string) -> l.Contains($"</snippet:{id}>")) lines
+                            match start, stop with
+                            | Some s, Some e -> Some (String.concat "\n" lines.[s+1..e-1])
+                            | _ -> None
+                        )
+                    match snippet with
+                    | Some s -> $"```fsharp\n{s}\n```"
+                    | None -> invalidOp $"Snippet '{id}' was not found."
+                ))
 
         // 2. Resolve {{< example id="X" >}}
         let examplePattern = @"{{<\s*example\s+id=""(?<id>[^""]+)""\s*>}}"
-        let body2 = System.Text.RegularExpressions.Regex.Replace(body1, examplePattern, fun (m: System.Text.RegularExpressions.Match) ->
-            let id = m.Groups.["id"].Value
-            match findExample id package with
-            | Some ex -> $"```fsharp\n{ex.Content}\n```"
-            | None -> invalidOp $"Example '{id}' was not found."
-        )
+        let body2 =
+            System.Text.RegularExpressions.Regex.Replace(body1, examplePattern, fun (m: System.Text.RegularExpressions.Match) ->
+                let id = m.Groups.["id"].Value
+                match findExample id package with
+                | Some ex -> $"```fsharp\n{ex.Content}\n```"
+                | None -> invalidOp $"Example '{id}' was not found."
+            )
 
         // <snippet:XrefResolution>
         // 3. Resolve xref: with relative rootPath
@@ -202,7 +194,7 @@ module ContentProvider =
         let body3 = System.Text.RegularExpressions.Regex.Replace(body2, xrefPattern, fun (m: System.Text.RegularExpressions.Match) ->
             let id = m.Groups.["id"].Value
             match findMember id package, findEntity id package with
-            | Some mem, _ -> 
+            | Some mem, _ ->
                 // We point to the module/type page, not individual member pages yet
                 // Need to find the parent entity ID
                 let rec findParentId (entities: EntityModel list) parentId =
@@ -218,7 +210,7 @@ module ContentProvider =
             | None, None -> invalidOp $"Cross-reference '{id}' was not found."
         )
         // </snippet:XrefResolution>
-        restoreCodeSegments body3
+        body3
 
     type private MarkdownContext = {
         SourceDir: string
