@@ -5,13 +5,13 @@ FsLiveDocs is a "verified documentation" engine for F#. It treats your documenta
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
 [![Target](https://img.shields.io/badge/.NET-10.0-blue)](#)
 
-## 🚀 Key Features
+## Key Features
 
-- **✅ Verified Docstrings**: Code in `/// <example>` tags is extracted and run against your actual project.
-- **🔗 Snippet Transclusion**: Use `{{< snippet id="Name" >}}` to pull live code from `.fs` files.
-- **🧬 Semantic Cross-References**: Link to API members using `xref:M:Namespace.Type.Method`.
-- **📜 Version History**: Keep multiple versions of your API documentation using fast JSON snapshots.
-- **🔍 Modern Search**: Integrated **Pagefind** for lightning-fast, zero-config static search.
+- **Verified Docstrings**: Code in `/// <example>` tags is extracted and run against your actual project.
+- **Snippet Transclusion**: Use `{{< snippet id="Name" >}}` to pull live code from `.fs` files.
+- **Semantic Cross-References**: Link to API members using `xref:M:Namespace.Type.Method`.
+- **Version History**: Keep multiple versions of your API documentation using fast JSON snapshots.
+- **Modern Search**: Integrated **Pagefind** for lightning-fast, zero-config static search.
 - **🤖 LLM Ready**: Automatically generates `llms.txt` to help AI assistants understand your API.
 - **⚡ Hot Reload**: Use `livedocs watch` for a live-rebuilding dev server.
 
@@ -37,20 +37,6 @@ FsLiveDocs is a "verified documentation" engine for F#. It treats your documenta
    ```bash
    livedocs build path/to/your/project.fsproj
    ```
-
-## 🏗 Project Architecture
-
-- **FsLiveDocs.Core**: The heart of the system. Handles symbol extraction via `FSharp.Compiler.Service`, Markdown parsing with `Markdig`, and YAML metadata.
-- **FsLiveDocs.Runner**: The execution engine. Scaffolds temporary test projects and validates snippet outputs.
-- **FsLiveDocs.Renderer**: A performant HTML engine built on `Giraffe.ViewEngine` and **Bootstrap 5**.
-- **FsLiveDocs.Cli**: The unified entry point.
-
-## 🧪 Testing
-
-FsLiveDocs is self-tested with an extensive xUnit suite.
-```bash
-dotnet test
-```
 
 ## 📜 Publishing
 
