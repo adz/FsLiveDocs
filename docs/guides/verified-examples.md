@@ -27,6 +27,10 @@ You can see the same pattern in the source example for `ContentProvider.resolveS
 
 {{< example id="ResolveSnippetExample" >}}
 
+For a fuller FSI session, the core library also includes a multiline transcript example:
+
+{{< example id="MapTranscript" >}}
+
 ## Adding a setup scenario
 
 Mark a function with `[<DocScenario>]` and give the example a matching `scenario` name. The shared name is the join key: the generator scans all examples, finds the matching scenario, and runs that setup function before the example body.

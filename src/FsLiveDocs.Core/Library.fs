@@ -34,3 +34,24 @@ module DocScenarioSamples =
     let greet () =
         $"Hello {currentUser}"
 // </snippet:DocScenarioPattern>
+
+module TranscriptSamples =
+    // <snippet:MapTranscriptExample>
+    /// <summary>A transcript example that demonstrates multiline FSI input.</summary>
+    /// <example name="MapTranscript">
+    /// > let m = Map [("a", "1")];;
+    /// val m: Map&lt;string,string&gt; = map [("a", "1")]
+    ///
+    /// > m |> Map.tryFind "b";;
+    /// val it: string option = None
+    ///
+    /// > m |> Map.tryFind "a";;
+    /// val it: string option = Some "1"
+    ///
+    /// > let updatedA = m |> Map.add "b" "2"
+    /// - updatedA |> Map.tryFind "b";;
+    /// val updatedA: Map&lt;string,string&gt; = map [("a", "1"); ("b", "2")]
+    /// val it: string option = Some "2"
+    /// </example>
+    let mapTranscriptExample () = ()
+    // </snippet:MapTranscriptExample>

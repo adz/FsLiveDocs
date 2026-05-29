@@ -28,3 +28,7 @@ The same transcript style is used when an example depends on a setup scenario:
 {{< example id="UserGreeting" >}}
 
 This keeps the page anchored in actual source code instead of inventing a separate narrative for the documentation site.
+
+For a longer session that shows `>` and `-` continuation lines, see the transcript example used in the core library:
+
+{{< example id="MapTranscript" >}}
