@@ -14,6 +14,12 @@ The runner is designed around FSI transcripts, so the examples in this project a
 > `x;;`
 > `val x: int = 1`
 
+That same shape is used in the source docs for a scenario-backed example:
+
+{{< example id="UserGreeting" >}}
+
+The runner reads the transcript, loads the scenario, and verifies that the returned value matches the exact FSI output.
+
 ## Why Verification Matters?
 
 Documentation that is out of date is worse than no documentation at all. By treating every code example as a test case, `FsLiveDocs.Runner` guarantees that your users always see code that actually works with the current version of your library.

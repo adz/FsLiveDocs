@@ -22,3 +22,9 @@ The `ExampleModel` type includes a `CreateExample` sample in the source docs so 
 {{< example id="CreateExample" >}}
 
 That transcript shows a real multiline record literal, a binding, and a property access the way an FSI user would type it.
+
+The same transcript style is used when an example depends on a setup scenario:
+
+{{< example id="UserGreeting" >}}
+
+This keeps the page anchored in actual source code instead of inventing a separate narrative for the documentation site.
