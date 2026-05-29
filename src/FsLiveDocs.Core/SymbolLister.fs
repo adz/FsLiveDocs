@@ -114,12 +114,12 @@ module SymbolLister =
         {
             Id = e.Symbol.FullName
             Name = e.Name
-            Kind = 
-                if e.Symbol.IsFSharpModule then "Module"
-                elif e.Symbol.IsNamespace then "Namespace"
-                elif e.Symbol.IsFSharpRecord then "Record"
-                elif e.Symbol.IsFSharpUnion then "Union"
-                else "Type"
+            Kind =
+                if e.Symbol.IsFSharpModule then EntityKind.Module
+                elif e.Symbol.IsNamespace then EntityKind.Namespace
+                elif e.Symbol.IsFSharpRecord then EntityKind.Record
+                elif e.Symbol.IsFSharpUnion then EntityKind.Union
+                else EntityKind.Type
             SummaryHtml = e.Comment.Summary.HtmlText
             Members = members
             Examples = e.Comment |> rawXml |> extractExamples
@@ -127,7 +127,7 @@ module SymbolLister =
         }
 
     let private isSyntheticDefaultNamespace (e: EntityModel) =
-        e.Kind = "Namespace"
+        e.Kind = EntityKind.Namespace
         && e.Name.Equals("Default", StringComparison.OrdinalIgnoreCase)
         && String.IsNullOrWhiteSpace e.SummaryHtml
         && e.Members.IsEmpty
@@ -213,7 +213,7 @@ module SymbolLister =
                     { 
                         Id = fullId
                         Name = name
-                        Kind = "Namespace"
+                        Kind = EntityKind.Namespace
                         SummaryHtml = ""
                         Members = []
                         Examples = []

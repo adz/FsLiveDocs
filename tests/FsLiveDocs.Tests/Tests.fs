@@ -34,8 +34,8 @@ module SymbolListerTests =
 
     [<Fact>]
     let ``merge removes empty synthetic Default namespace`` () =
-        let child = { Id = "Default.Sample"; Name = "Sample"; Kind = "Module"; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
-        let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = "Namespace"; SummaryHtml = ""; Members = []; Examples = []; Entities = [ child ] }
+        let child = { Id = "Default.Sample"; Name = "Sample"; Kind = EntityKind.Module; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
+        let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = EntityKind.Namespace; SummaryHtml = ""; Members = []; Examples = []; Entities = [ child ] }
         let package = SymbolLister.merge [ { Version = "1.0"; Entities = [ defaultNamespace; child ]; Scenarios = [] } ]
 
         let onlyEntity = Assert.Single(package.Entities)
@@ -58,7 +58,7 @@ module ContentProviderTests =
     let ``resolveSnippets handles transclusion and xrefs`` () =
         let package : PackageModel = { 
             Version = "1.0"
-            Entities = [ { Id = "M1"; Name = "add"; Kind = "Module"; SummaryHtml = ""; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; SummaryHtml = ""; RemarksHtml = ""; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None; IsSnapshotTest = false } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
+            Entities = [ { Id = "M1"; Name = "add"; Kind = EntityKind.Module; SummaryHtml = ""; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; SummaryHtml = ""; RemarksHtml = ""; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None; IsSnapshotTest = false } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
             Scenarios = []
         }
         let body = "Look at {{< example id=\"E1\" >}} and xref:M:M1.add"
@@ -105,7 +105,7 @@ module DocTestRunnerTests =
                         {
                             Id = "Test.Module"
                             Name = "Module"
-                            Kind = "Module"
+                            Kind = EntityKind.Module
                             SummaryHtml = ""
                             Members = []
                             Examples =
@@ -145,7 +145,7 @@ module DocTestRunnerTests =
                         {
                             Id = "Test.Module"
                             Name = "Module"
-                            Kind = "Module"
+                            Kind = EntityKind.Module
                             SummaryHtml = ""
                             Members = []
                             Examples =
@@ -173,7 +173,7 @@ module DocTestRunnerTests =
         let projectPath = Path.GetFullPath("src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj")
         let snapshot = DocTestRunner.collectSnapshots package projectPath [] |> Async.RunSynchronously
         let example = Assert.Single(snapshot.Examples)
-        Assert.Equal("verified", example.Status)
+        Assert.Equal(ExampleStatus.Verified, example.Status)
         Assert.Equal(Some "val x: int = 1\nval it: int = 3", example.ExpectedOutput)
 
 module ViewTests =
@@ -189,7 +189,7 @@ module ViewTests =
             {
                 Id = "FsLiveDocs.Core.ParameterModel"
                 Name = "ParameterModel"
-                Kind = "Record"
+                Kind = EntityKind.Record
                 SummaryHtml = "<p>Represents a parameter of a function or method.</p>"
                 Members =
                     [

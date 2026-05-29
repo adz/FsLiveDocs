@@ -83,7 +83,7 @@ module SiteBuilder =
                     attr "data-toc-title" ent.Name
                 ] [
                     span [ _class "leading-tight" ] [ str ent.Name ]
-                    span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str ent.Kind ]
+                    span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str (string ent.Kind) ]
                     a [
                         _href ("#" + ent.Id)
                         _class "anchor-link opacity-0 group-hover:opacity-60 transition-opacity no-underline inline-flex items-center justify-center w-6 h-6 text-base-content/60 hover:text-primary"
@@ -101,20 +101,20 @@ module SiteBuilder =
                             ent.Entities |> List.map (fun ne ->
                                 a [ _href (ne.Id + ".html"); _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
                                     span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str ne.Name ]
-                                    span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str ne.Kind ]
+                                    span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string ne.Kind) ]
                                 ]
                             )
                         )
                     ]
 
-                if ent.Kind <> "Module" && not ent.Members.IsEmpty then
+                if ent.Kind <> EntityKind.Module && not ent.Members.IsEmpty then
                     div [ _class "mb-16 not-prose" ] [
                         View.h2WithAnchor (ent.Id + "-spec") "Specification" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
                         div [ _class "rounded-3xl border border-base-300 bg-base-100 shadow-sm overflow-hidden" ] [
                             div [ _class "grid grid-cols-1 md:grid-cols-3 gap-0 border-b border-base-300" ] [
                                 div [ _class "p-5 md:p-6" ] [
                                     div [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ] [ str "Kind" ]
-                                    div [ _class "text-lg font-black" ] [ str ent.Kind ]
+                                    div [ _class "text-lg font-black" ] [ str (string ent.Kind) ]
                                 ]
                                 div [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ] [
                                     div [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ] [ str "Members" ]
@@ -202,7 +202,7 @@ module SiteBuilder =
                     attr "data-toc-title" ent.Name
                 ] [
                     span [ _class "leading-tight" ] [ str ent.Name ]
-                    span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str ent.Kind ]
+                    span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str (string ent.Kind) ]
                     a [
                         _href ("#" + ent.Id)
                         _class "anchor-link opacity-0 group-hover:opacity-60 transition-opacity no-underline inline-flex items-center justify-center w-6 h-6 text-base-content/60 hover:text-primary"
@@ -234,7 +234,12 @@ module SiteBuilder =
                     ]
             ]
 
-        let content = [ if e.Kind = "Record" then renderRecordEntity e else renderGenericEntity e ]
+        let content =
+            [
+                match e.Kind with
+                | EntityKind.Record -> renderRecordEntity e
+                | _ -> renderGenericEntity e
+            ]
         View.layout e.Name allPages package versions theme rootPath content
         |> fun node -> RenderView.AsString.htmlNode node
 
@@ -296,14 +301,14 @@ module SiteBuilder =
             div [ _class "grid grid-cols-1 md:grid-cols-2 gap-6 not-prose" ] (
                 let topLevel = 
                     match package.Entities with
-                    | [ e ] when e.Kind = "Namespace" && e.Members.IsEmpty -> e.Entities
+                    | [ e ] when e.Kind = EntityKind.Namespace && e.Members.IsEmpty -> e.Entities
                     | _ -> package.Entities
                 
                 topLevel |> List.map (fun e ->
                     a [ _href (rootPath + "api/" + e.Id + ".html"); _class "card bg-base-100 border border-base-300 p-6 hover:shadow-xl hover:border-primary transition-all group" ] [
                         div [ _class "flex justify-between items-center" ] [
                             h3 [ _class "text-xl font-bold group-hover:text-primary transition-colors" ] [ str e.Name ]
-                            span [ _class "badge badge-sm opacity-40" ] [ str e.Kind ]
+                            span [ _class "badge badge-sm opacity-40" ] [ str (string e.Kind) ]
                         ]
                         p [ _class "text-sm opacity-60 mt-2 line-clamp-2" ] [ str (Presentation.synopsisFromHtml e.SummaryHtml) ]
                     ]

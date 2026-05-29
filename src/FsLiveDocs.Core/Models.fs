@@ -66,14 +66,42 @@ type MemberModel = {
     Location: SourceLink
 }
 
+/// <summary>The domain kind for a documented API entity.</summary>
+type EntityKind =
+    | Namespace
+    | Module
+    | Record
+    | Union
+    | Type
+    override this.ToString() =
+        match this with
+        | Namespace -> "Namespace"
+        | Module -> "Module"
+        | Record -> "Record"
+        | Union -> "Union"
+        | Type -> "Type"
+
+/// <summary>The evaluation status for a documentation example.</summary>
+type ExampleStatus =
+    | FirstCut
+    | Verified
+    | Mismatch
+    | Error
+    override this.ToString() =
+        match this with
+        | FirstCut -> "first-cut"
+        | Verified -> "verified"
+        | Mismatch -> "mismatch"
+        | Error -> "error"
+
 /// <summary>Represents an F# entity (Module, Type, Interface, etc.).</summary>
 type EntityModel = {
     /// <summary>The fully qualified unique identifier.</summary>
     Id: string
     /// <summary>The display name (normalized).</summary>
     Name: string
-    /// <summary>The kind of entity (e.g., "Module", "Type").</summary>
-    Kind: string
+    /// <summary>The kind of entity (e.g., Module, Type).</summary>
+    Kind: EntityKind
     /// <summary>The HTML-formatted introduction for this entity.</summary>
     SummaryHtml: string
     /// <summary>Members belonging to this entity.</summary>
@@ -126,7 +154,7 @@ type ExampleSnapshotModel = {
     /// <summary>The actual output produced by running the example.</summary>
     ActualOutput: string
     /// <summary>The verification status for the example.</summary>
-    Status: string
+    Status: ExampleStatus
 }
 
 /// <summary>Represents the snapshot payload for one project.</summary>
@@ -143,6 +171,16 @@ type ProjectSnapshotModel = {
 type SiteConfig = {
     /// <summary>Optional repository URL used to build source links for members.</summary>
     RepoUrl: string option
+}
+
+/// <summary>Resolved project paths and namespace information used by the doc-test runner.</summary>
+type ResolvedProject = {
+    /// <summary>The path to the source project file.</summary>
+    ProjectPath: string
+    /// <summary>The path to the built assembly used by FSI.</summary>
+    AssemblyPath: string
+    /// <summary>The project namespace opened before executing examples.</summary>
+    ProjectNamespace: string
 }
 
 /// <summary>Metadata extracted from Markdown frontmatter.</summary>

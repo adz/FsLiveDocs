@@ -58,7 +58,7 @@ module IntegrationTests =
         Assert.True(ns.IsSome, "Should find TestNamespace")
         
         let nsVal = ns.Value
-        Assert.Equal("Namespace", nsVal.Kind)
+        Assert.Equal(EntityKind.Namespace, nsVal.Kind)
         
         // Should have two modules as children
         Assert.Equal(2, nsVal.Entities.Length)

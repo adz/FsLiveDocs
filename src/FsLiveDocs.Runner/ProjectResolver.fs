@@ -45,3 +45,14 @@ module ProjectResolver =
             let files = Directory.GetFiles(path, $"{projectName}.dll", SearchOption.AllDirectories)
             if files.Length > 0 then Some files.[0] else None)
         |> Option.defaultValue ""
+
+    let resolve (projectPath: string) =
+        let resolvedProjectPath = resolveProjectPath projectPath
+        let assemblyPath = resolveAssemblyPath resolvedProjectPath
+        let projectNamespace = Path.GetFileNameWithoutExtension(resolvedProjectPath)
+
+        {
+            ProjectPath = resolvedProjectPath
+            AssemblyPath = assemblyPath
+            ProjectNamespace = projectNamespace
+        }

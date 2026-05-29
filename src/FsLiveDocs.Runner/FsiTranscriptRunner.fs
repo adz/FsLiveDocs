@@ -7,6 +7,13 @@ open FSharp.Compiler.Interactive.Shell
 
 /// <summary>Runs FSI transcripts and formats the resulting output.</summary>
 module FsiTranscriptRunner =
+    type DocTestExecutionContext = {
+        Project: ResolvedProject
+        References: string list
+        Scenario: ScenarioModel option
+        Example: ExampleModel
+    }
+
     let rec private formatTypeName (valueType: Type) =
         if valueType = typeof<unit> then "unit"
         elif valueType = typeof<int> then "int"
@@ -33,9 +40,9 @@ module FsiTranscriptRunner =
         else
             valueType.Name
 
-    let private buildLoadScript (assemblyPath: string) (references: string list) (projectNamespace: string) (extraOpens: string list) =
+    let private buildLoadScript (project: ResolvedProject) (references: string list) (extraOpens: string list) =
         let refs =
-            assemblyPath :: references
+            project.AssemblyPath :: references
             |> List.distinct
             |> List.filter (fun path -> not (String.IsNullOrWhiteSpace path))
             |> List.map (fun path -> $"#r @\"{Path.GetFullPath path}\"")
@@ -43,7 +50,7 @@ module FsiTranscriptRunner =
         let opens =
             [
                 "open System"
-                if not (String.IsNullOrWhiteSpace projectNamespace) then $"open {projectNamespace}"
+                if not (String.IsNullOrWhiteSpace project.ProjectNamespace) then $"open {project.ProjectNamespace}"
                 yield! extraOpens
             ]
 
@@ -119,13 +126,13 @@ module FsiTranscriptRunner =
         |> List.collect (fun block -> evalBlock session outStream errStream block)
         |> String.concat "\n"
 
-    let runExample (projectAssembly: string) (projectNamespace: string) (references: string list) (scenario: ScenarioModel option) (example: ExampleModel) =
-        let transcript = ExampleTranscript.parse example.Content
+    let runExample (context: DocTestExecutionContext) =
+        let transcript = ExampleTranscript.parse context.Example.Content
         let scenarioCall =
-            scenario
+            context.Scenario
             |> Option.map (fun s -> $"{s.MethodId}()")
         let scenarioOpens =
-            scenario
+            context.Scenario
             |> Option.map (fun s ->
                 let parts = s.MethodId.Split('.')
                 if parts.Length > 1 then parts.[parts.Length - 2] else s.MethodId)
@@ -133,7 +140,7 @@ module FsiTranscriptRunner =
 
         let scriptBlocks =
             [
-                buildLoadScript projectAssembly references projectNamespace scenarioOpens
+                buildLoadScript context.Project context.References scenarioOpens
             ]
             @ (scenarioCall |> Option.map (fun call -> "do " + call) |> Option.toList)
             @ transcript.Interactions

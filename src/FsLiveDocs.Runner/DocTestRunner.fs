@@ -21,9 +21,9 @@ module DocTestRunner =
 
     let private statusOf (expected: string option) (actual: string) =
         match expected with
-        | None -> "first-cut"
-        | Some expectedText when String.Equals(actual, expectedText.Trim(), StringComparison.Ordinal) -> "verified"
-        | Some _ -> "mismatch"
+        | None -> ExampleStatus.FirstCut
+        | Some expectedText when String.Equals(actual, expectedText.Trim(), StringComparison.Ordinal) -> ExampleStatus.Verified
+        | Some _ -> ExampleStatus.Mismatch
 
     /// <summary>Runs snapshot-selected examples and returns structured results for a generated Verify project.</summary>
     /// <param name="package">The package model containing examples and scenarios.</param>
@@ -31,26 +31,24 @@ module DocTestRunner =
     /// <param name="references">Additional references needed by generated examples.</param>
     /// <returns>A snapshot payload that can be verified by a generated test project.</returns>
     let collectSnapshots (package: PackageModel) (projectPath: string) (references: string list) = async {
-        let resolvedProjectPath = ProjectResolver.resolveProjectPath projectPath
-        let projectAssembly = ProjectResolver.resolveAssemblyPath resolvedProjectPath
+        let project = ProjectResolver.resolve projectPath
 
-        if String.IsNullOrWhiteSpace projectAssembly || not (File.Exists projectAssembly) then
+        if String.IsNullOrWhiteSpace project.AssemblyPath || not (File.Exists project.AssemblyPath) then
             return {
-                ProjectPath = resolvedProjectPath
-                ProjectNamespace = Path.GetFileNameWithoutExtension(resolvedProjectPath)
+                ProjectPath = project.ProjectPath
+                ProjectNamespace = project.ProjectNamespace
                 Examples = [
                     {
                         Name = "project"
                         Scenario = None
                         Source = ""
                         ExpectedOutput = None
-                        ActualOutput = $"Could not resolve built assembly for {resolvedProjectPath}"
-                        Status = "error"
+                        ActualOutput = $"Could not resolve built assembly for {project.ProjectPath}"
+                        Status = ExampleStatus.Error
                     }
                 ]
             }
         else
-            let projectNamespace = Path.GetFileNameWithoutExtension(resolvedProjectPath)
             let examples = getSnapshotExamples package.Entities
 
             let results =
@@ -60,7 +58,14 @@ module DocTestRunner =
                         ex.Scenario
                         |> Option.bind (fun sName -> package.Scenarios |> List.tryFind (fun s -> s.Name = sName))
 
-                    let output, expected, source = FsiTranscriptRunner.runExample projectAssembly projectNamespace references scenario ex
+                    let output, expected, source =
+                        FsiTranscriptRunner.runExample
+                            {
+                                Project = project
+                                References = references
+                                Scenario = scenario
+                                Example = ex
+                            }
                     let actual = output.Trim()
                     {
                         Name = ex.Name
@@ -72,8 +77,8 @@ module DocTestRunner =
                     })
 
             return {
-                ProjectPath = resolvedProjectPath
-                ProjectNamespace = projectNamespace
+                ProjectPath = project.ProjectPath
+                ProjectNamespace = project.ProjectNamespace
                 Examples = results
             }
     }
@@ -84,15 +89,13 @@ module DocTestRunner =
     /// <param name="references">Additional references needed by generated examples.</param>
     /// <returns>A list of example names paired with pass/fail results and diagnostic output.</returns>
     let verifyExamples (package: PackageModel) (projectPath: string) (references: string list) = async {
-        let resolvedProjectPath = ProjectResolver.resolveProjectPath projectPath
-        let projectAssembly = ProjectResolver.resolveAssemblyPath resolvedProjectPath
+        let project = ProjectResolver.resolve projectPath
 
-        if String.IsNullOrWhiteSpace projectAssembly || not (File.Exists projectAssembly) then
+        if String.IsNullOrWhiteSpace project.AssemblyPath || not (File.Exists project.AssemblyPath) then
             return [
-                "project", false, $"Could not resolve built assembly for {resolvedProjectPath}"
+                "project", false, $"Could not resolve built assembly for {project.ProjectPath}"
             ]
         else
-            let projectNamespace = Path.GetFileNameWithoutExtension(resolvedProjectPath)
             let allExamples = getSnapshotExamples package.Entities
 
             if List.isEmpty allExamples then
@@ -104,7 +107,14 @@ module DocTestRunner =
                         ex.Scenario
                         |> Option.bind (fun sName -> package.Scenarios |> List.tryFind (fun s -> s.Name = sName))
 
-                    let output, expected, _ = FsiTranscriptRunner.runExample projectAssembly projectNamespace references scenario ex
+                    let output, expected, _ =
+                        FsiTranscriptRunner.runExample
+                            {
+                                Project = project
+                                References = references
+                                Scenario = scenario
+                                Example = ex
+                            }
                     let actual = output.Trim()
 
                     match expected with

@@ -181,13 +181,13 @@ module View =
                             // If we have a single namespace root that matches the area name, and it has children,
                             // promote children to the top level of this group to avoid "Namespace > Namespace" redundancy.
                             match entities with
-                            | [ e ] when e.Kind = "Namespace" && e.Name.Equals(area, StringComparison.OrdinalIgnoreCase) && not e.Entities.IsEmpty ->
+                            | [ e ] when e.Kind = EntityKind.Namespace && e.Name.Equals(area, StringComparison.OrdinalIgnoreCase) && not e.Entities.IsEmpty ->
                                 e.Entities
                             | _ -> entities
 
                         let areaPageId =
                             entities
-                            |> List.tryFind (fun e -> e.Kind = "Namespace" && e.Name.Equals(area, StringComparison.OrdinalIgnoreCase))
+                            |> List.tryFind (fun e -> e.Kind = EntityKind.Namespace && e.Name.Equals(area, StringComparison.OrdinalIgnoreCase))
                             |> Option.map (fun e -> e.Id)
                             |> Option.defaultValue area
 
