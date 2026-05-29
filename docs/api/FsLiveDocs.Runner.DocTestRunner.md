@@ -6,7 +6,7 @@ Ensures your documentation never lies. The `DocTestRunner` extracts code example
 
 1.  **Extraction**: It finds all `<example>` tags in your source code.
 2.  **Preparation**: It loads the built project assembly and any setup scenarios.
-3.  **Execution**: It runs each example as a transcript-style FSI session and compares the printed output.
+3.  **Execution**: It runs each example as a transcript-style FSI session and compares the transcript output.
 
 ## Examples
 
@@ -16,12 +16,12 @@ If you have a function like this:
 /// <example>
 /// > let add x y = x + y;;
 /// > add 1 1;;
-/// 2
+/// val it: int = 2
 /// </example>
 let add x y = x + y
 ```
 
-The `DocTestRunner` will verify that the example still produces `2`.
+The `DocTestRunner` will verify that the example still produces `val it: int = 2`.
 
 ## Scenarios
 

@@ -11,9 +11,8 @@ open System.Reflection
 
 /// <summary>Provides capabilities to scan F# projects and extract symbols using FSharp.Formatting.</summary>
 /// <example name="ExtractExamplesExample">
-/// > let examples = SymbolLister.extractExamples "<summary>No examples here</summary>";;
-/// > printfn "COUNT: %d" examples.Length;;
-/// COUNT: 0
+/// > SymbolLister.extractExamples "<summary>No examples here</summary>";;
+/// val it: ExampleModel list = []
 /// </example>
 module SymbolLister =
 

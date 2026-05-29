@@ -20,3 +20,5 @@ The heart of the documentation engine. This project contains the fundamental dat
 The `ExampleModel` type includes a `CreateExample` sample in the source docs so the API page stays close to the data shape that powers verified examples.
 
 {{< example id="CreateExample" >}}
+
+That transcript shows a real multiline record literal, a binding, and a property access the way an FSI user would type it.

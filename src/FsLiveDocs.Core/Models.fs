@@ -33,8 +33,32 @@ module ExampleTranscript =
     type Parsed = {
         DisplayText: string
         Script: string
+        Interactions: string list
         ExpectedOutput: string option
     }
+
+    let private splitSessionInteractions (lines: string array) =
+        let interactions = ResizeArray<string>()
+        let current = ResizeArray<string>()
+
+        let flushCurrent () =
+            if current.Count > 0 then
+                interactions.Add(String.concat "\n" current)
+                current.Clear()
+
+        for line in lines do
+            if isFsiInputLine line then
+                let promptLine = stripFsiPrompt line
+                if line.TrimStart().StartsWith("> ") then
+                    flushCurrent()
+                    current.Add(promptLine)
+                else
+                    current.Add(promptLine)
+            else
+                flushCurrent()
+
+        flushCurrent()
+        interactions |> Seq.toList
 
     let parse (raw: string) =
         let normalized = normalizeIndent raw
@@ -42,12 +66,9 @@ module ExampleTranscript =
         let isSession = lines |> Array.exists isFsiInputLine
 
         if isSession then
+            let interactions = splitSessionInteractions lines
             let script =
-                lines
-                |> Array.choose (fun line ->
-                    if isFsiInputLine line then Some (stripFsiPrompt line)
-                    else None)
-                |> String.concat "\n"
+                interactions |> String.concat "\n\n"
 
             let output =
                 lines
@@ -61,6 +82,7 @@ module ExampleTranscript =
             {
                 DisplayText = normalized
                 Script = script
+                Interactions = interactions
                 ExpectedOutput = if String.IsNullOrWhiteSpace output then None else Some output
             }
         else
@@ -70,6 +92,7 @@ module ExampleTranscript =
             {
                 DisplayText = content
                 Script = content
+                Interactions = [ content ]
                 ExpectedOutput = expected
             }
 
@@ -86,9 +109,8 @@ type SourceLink = {
 // <snippet:ExampleModel>
 /// <summary>Represents an executable code example extracted from documentation.</summary>
 /// <example name="CreateExample">
-/// > let example = { Name = "Basic Usage"; Content = "printfn \"Hello\""; ExpectedOutput = Some "Hello"; Scenario = None };;
-/// > printfn "%s" example.Name;;
-/// Basic Usage
+/// > ExampleModel.Create("Basic Usage", "1+1", Some "2", None);;
+/// val it: ExampleModel = { Name = "Basic Usage"; Content = "1+1"; ExpectedOutput = Some "2"; Scenario = None }
 /// </example>
 type ExampleModel = {
     /// <summary>The unique name of the example, used for transclusion.</summary>
@@ -169,6 +191,16 @@ type PackageModel = {
     /// <summary>Global DocTest scenarios available for examples.</summary>
     Scenarios: ScenarioModel list
 }
+
+type ExampleModel with
+    /// <summary>Create an example record from its individual fields.</summary>
+    static member Create(name: string, content: string, expectedOutput: string option, scenario: string option) =
+        {
+            Name = name
+            Content = content
+            ExpectedOutput = expectedOutput
+            Scenario = scenario
+        }
 
 /// <summary>Build-time configuration for the generated documentation site.</summary>
 type SiteConfig = {

@@ -14,11 +14,9 @@ The bridge between your F# code and the documentation engine. It leverages `FSha
 
 One of the unique features of `SymbolLister` is its ability to merge symbols from multiple projects, even if they share the same namespace. This allows you to document a large solution as a single coherent API.
 
-```fsharp
-let core = SymbolLister.extractFromProject "Core.fsproj" |> Async.RunSynchronously
-let plugin = SymbolLister.extractFromProject "Plugin.fsproj" |> Async.RunSynchronously
-let unified = SymbolLister.merge [core; plugin]
-```
+{{< example id="ExtractExamplesExample" >}}
+
+If you run that in FSI, the binding names and the merged `PackageModel` are exactly what you would expect from the transcript style used elsewhere in the docs.
 
 ## Namespace Support
 

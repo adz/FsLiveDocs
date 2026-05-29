@@ -12,7 +12,7 @@ FsLiveDocs is a "verified documentation" engine.
 
 ## 🔗 Key Features
 
-- **✅ Verified Docstrings**: Code in `/// <example>` tags is extracted and run against your actual project.
+- **✅ Verified Docstrings**: Code in `/// <example>` tags is extracted and run against your actual project as an FSI-style transcript, so the docs show exactly what users can paste into F# Interactive.
 - **🔗 Snippet Transclusion**: Use `{{< snippet id="Name" >}}` to pull live code from `.fs` files.
 - **🧬 Semantic Cross-References**: Link to API members using `xref:M:Namespace.Type.Method`.
 - **📜 Version History**: Keep multiple versions of your API documentation using fast JSON snapshots.

@@ -31,9 +31,8 @@ Add examples directly to your function documentation:
 ```fsharp
 /// <summary>Adds two integers.</summary>
 /// <example name="AddTest">
-/// > let result = Math.add 1 2;;
-/// > printfn "%d" result;;
-/// 3
+/// > Math.add 1 2;;
+/// val it: int = 3
 /// </example>
 let add x y = x + y
 ```

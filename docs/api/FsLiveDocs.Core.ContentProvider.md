@@ -16,6 +16,8 @@ You can load a documentation page and have its shortcodes resolved automatically
 
 {{< example id="ResolveSnippetExample" >}}
 
+The example above shows the exact FSI shape: a binding and the resulting `val` output.
+
 ## How it fits in
 
 The `ContentProvider` works in tandem with the `PackageModel`. It uses the extracted symbols to resolve `xref:` links and `{{< example >}}` tags, ensuring that your documentation is always in sync with your code.

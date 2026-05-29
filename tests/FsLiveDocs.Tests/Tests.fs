@@ -66,6 +66,18 @@ module DocTestRunnerTests =
         Assert.Equal(Some "val x: int = 1\nval it: int = 1", parsed.ExpectedOutput)
 
     [<Fact>]
+    let ``ExampleTranscript preserves multiline FSI input`` () =
+        let parsed =
+            ExampleTranscript.parse
+                """
+                > ExampleModel.Create("Basic Usage", "1+1", Some "2", None);;
+                val it: ExampleModel = { Name = "Basic Usage"; Content = "1+1"; ExpectedOutput = Some "2"; Scenario = None }
+                """
+
+        Assert.Contains("ExampleModel.Create(\"Basic Usage\"", parsed.Script)
+        Assert.Equal(Some "val it: ExampleModel = { Name = \"Basic Usage\"; Content = \"1+1\"; ExpectedOutput = Some \"2\"; Scenario = None }", parsed.ExpectedOutput)
+
+    [<Fact>]
     let ``verifyExamples executes transcript style examples`` () =
         let package : PackageModel =
             {
@@ -85,10 +97,11 @@ module DocTestRunnerTests =
                                         Content =
                                             """
                                             > let x = 1;;
-                                            > printfn "%d" (x + 2);;
-                                            3
+                                            > x + 2;;
+                                            val x: int = 1
+                                            val it: int = 3
                                             """
-                                        ExpectedOutput = Some "3"
+                                        ExpectedOutput = Some "val x: int = 1\nval it: int = 3"
                                         Scenario = None
                                     }
                                 ]

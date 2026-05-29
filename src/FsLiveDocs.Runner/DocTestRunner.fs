@@ -2,8 +2,8 @@ namespace FsLiveDocs.Runner
 
 open System
 open System.IO
-open System.Diagnostics
 open FsLiveDocs.Core
+open FSharp.Compiler.Interactive.Shell
 
 /// <summary>The execution engine for verified docstrings (DocTests).</summary>
 module DocTestRunner =
@@ -53,16 +53,29 @@ module DocTestRunner =
         script.Replace("\r\n", "\n").Replace("\r", "\n").TrimEnd()
 
     let private normalizeFsiOutput (text: string) =
-        text.Replace("\r\n", "\n").Replace("\r", "\n")
-        |> fun value -> value.Split('\n')
-        |> Array.map (fun line -> line.TrimEnd())
-        |> Array.filter (fun line ->
-            let trimmed = line.TrimStart()
-            not (String.IsNullOrWhiteSpace trimmed)
-            && not (trimmed.StartsWith("val ", StringComparison.Ordinal))
-            && not (trimmed.StartsWith("module ", StringComparison.Ordinal)))
-        |> String.concat "\n"
-        |> fun value -> value.Trim()
+        text.Replace("\r\n", "\n").Replace("\r", "\n").Trim()
+
+    let private splitLines (text: string) =
+        text.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
+
+    let private formatTypeName (valueType: Type) =
+        match valueType.FullName with
+        | "System.Int32" -> "int"
+        | "System.Int64" -> "int64"
+        | "System.Int16" -> "int16"
+        | "System.Byte" -> "byte"
+        | "System.Double" -> "float"
+        | "System.Single" -> "float32"
+        | "System.Decimal" -> "decimal"
+        | "System.String" -> "string"
+        | "System.Boolean" -> "bool"
+        | "System.Char" -> "char"
+        | "System.Void" -> "unit"
+        | fullName when fullName = typeof<unit>.FullName -> "unit"
+        | fullName when fullName = typeof<int option>.FullName -> "int option"
+        | fullName when fullName = typeof<string option>.FullName -> "string option"
+        | fullName when fullName <> null && fullName.StartsWith("Microsoft.FSharp.Collections.FSharpList") -> "list"
+        | _ -> valueType.Name
 
     let private buildLoadScript (assemblyPath: string) (references: string list) (projectNamespace: string) =
         let refs =
@@ -79,36 +92,94 @@ module DocTestRunner =
 
         String.concat "\n" (refs @ opens)
 
-    let private runFsiScript (script: string) =
-        let tempDir = Path.Combine(Path.GetTempPath(), "FsLiveDocs", Guid.NewGuid().ToString())
-        Directory.CreateDirectory(tempDir) |> ignore
-        let scriptFile = Path.Combine(tempDir, "input.fsx")
-        File.WriteAllText(scriptFile, script)
+    let private createSession () =
+        let inStream = new StringReader("")
+        let outStream = new StringWriter()
+        let errStream = new StringWriter()
+        let argv = [| "fsi.exe"; "--noninteractive"; "--quiet" |]
+        let config = FsiEvaluationSession.GetDefaultConfiguration()
 
-        let psi = ProcessStartInfo("dotnet", $"fsi --nologo --exec \"{scriptFile}\"")
-        psi.WorkingDirectory <- tempDir
-        psi.RedirectStandardOutput <- true
-        psi.RedirectStandardError <- true
-        psi.UseShellExecute <- false
+        FsiEvaluationSession.Create(config, argv, inStream, errStream, outStream), outStream, errStream
 
-        use proc = Process.Start(psi)
-        let output = proc.StandardOutput.ReadToEnd()
-        let error = proc.StandardError.ReadToEnd()
-        proc.WaitForExit()
+    let private appendLines (target: ResizeArray<string>) (text: string) =
+        text
+        |> splitLines
+        |> Array.map (fun line -> line.TrimEnd())
+        |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line))
+        |> Array.iter target.Add
 
-        let output = normalizeFsiOutput output
-        let error = normalizeFsiOutput error
+    let private isDeclarationBlock (block: string) =
+        let trimmed = block.TrimStart()
+        trimmed.StartsWith("let ")
+        || trimmed.StartsWith("do ")
+        || trimmed.StartsWith("open ")
+        || trimmed.StartsWith("module ")
+        || trimmed.StartsWith("type ")
+        || trimmed.StartsWith("namespace ")
+        || trimmed.StartsWith("#")
 
-        if proc.ExitCode = 0 then
-            if String.IsNullOrWhiteSpace error then output else output + "\n" + error
+    let private evalBlock (session: FsiEvaluationSession) (outStream: StringWriter) (errStream: StringWriter) (block: string) =
+        let output = ResizeArray<string>()
+        let outBuilder = outStream.GetStringBuilder()
+        let errBuilder = errStream.GetStringBuilder()
+        let outStart = outBuilder.Length
+        let errStart = errBuilder.Length
+
+        let normalized = block.Replace("\r\n", "\n").Replace("\r", "\n").Trim()
+
+        if isDeclarationBlock normalized then
+            let boundOutputs = ResizeArray<string>()
+
+            use subscription =
+                session.ValueBound.Subscribe(fun (valueObj, valueType, name) ->
+                    let name = if String.IsNullOrWhiteSpace name then "it" else name
+                    let typeName = formatTypeName valueType
+                    let valueText = session.FormatValue(valueObj, valueType)
+                    boundOutputs.Add($"val {name}: {typeName} = {valueText}")
+                )
+
+            try
+                session.EvalInteraction(normalized) |> ignore
+            with ex ->
+                output.Add(ex.Message)
+
+            boundOutputs |> Seq.iter output.Add
         else
-            [
-                if not (String.IsNullOrWhiteSpace output) then Some output else None
-                if not (String.IsNullOrWhiteSpace error) then Some error else None
-                Some $"fsi exited with code {proc.ExitCode}"
-            ]
-            |> List.choose id
-            |> String.concat "\n"
+            let expr =
+                if normalized.EndsWith(";;", StringComparison.Ordinal) then
+                    normalized.Substring(0, normalized.Length - 2).TrimEnd()
+                else
+                    normalized
+
+            try
+                match session.EvalExpression(expr) with
+                | Some value ->
+                    let valueText = session.FormatValue(value.ReflectionValue, value.ReflectionType)
+                    let typeName = formatTypeName value.ReflectionType
+                    output.Add($"val it: {typeName} = {valueText}")
+                | None -> ()
+            with ex ->
+                output.Add(ex.Message)
+
+        let outText = outBuilder.ToString(outStart, outBuilder.Length - outStart)
+        let errText = errBuilder.ToString(errStart, errBuilder.Length - errStart)
+
+        if not (String.IsNullOrWhiteSpace outText) then
+            appendLines output outText
+
+        if not (String.IsNullOrWhiteSpace errText) then
+            appendLines output errText
+
+        output |> Seq.toList
+
+    let private runFsiTranscript (blocks: string list) =
+        let session, outStream, errStream = createSession ()
+        use session = session
+
+        blocks
+        |> List.filter (fun block -> not (String.IsNullOrWhiteSpace block))
+        |> List.collect (fun block -> evalBlock session outStream errStream block)
+        |> String.concat "\n"
 
     let private runExample (projectAssembly: string) (projectNamespace: string) (references: string list) (scenario: ScenarioModel option) (example: ExampleModel) =
         let transcript = ExampleTranscript.parse example.Content
@@ -116,16 +187,14 @@ module DocTestRunner =
             scenario
             |> Option.map (fun s -> $"{s.MethodId}()")
 
-        let lines =
+        let scriptBlocks =
             [
                 buildLoadScript projectAssembly references projectNamespace
-                if scenarioCall.IsSome then
-                    scenarioCall.Value + ";;"
-                transcript.Script
             ]
+            @ (scenarioCall |> Option.map (fun call -> "do " + call) |> Option.toList)
+            |> List.append transcript.Interactions
 
-        let script = lines |> List.filter (fun s -> not (String.IsNullOrWhiteSpace s)) |> String.concat "\n\n"
-        let output = runFsiScript script
+        let output = runFsiTranscript scriptBlocks
         output, transcript.ExpectedOutput
 
     let private getAllExamples (entities: EntityModel list) =

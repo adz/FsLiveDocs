@@ -40,9 +40,8 @@ namespace MyLibrary
 module Math =
     /// <summary>Adds two numbers and returns the result.</summary>
     /// <example name="BasicAdd">
-    /// > let value = Math.add 10 20;;
-    /// > printfn "%d" value;;
-    /// 30
+    /// > Math.add 10 20;;
+    /// val it: int = 30
     /// </example>
     let add x y = x + y
 ```

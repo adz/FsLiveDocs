@@ -14,4 +14,8 @@
     <ProjectReference Include="..\FsLiveDocs.Core\FsLiveDocs.Core.fsproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="FSharp.Compiler.Service" Version="43.12.201" />
+  </ItemGroup>
+
 </Project>

@@ -267,6 +267,12 @@ module SiteBuilder =
     /// <summary>Generates a text-based summary of the API for LLM consumption.</summary>
     /// <param name="package">The package model to summarize.</param>
     /// <returns>A plaintext `llms.txt` document.</returns>
+    /// <example name="GenerateLlmsTxtExample">
+    /// > let package = { Version = "1.0"; Entities = []; Scenarios = [] };;
+    /// > let summary = SiteBuilder.generateLlmsTxt package;;
+    /// > summary.Split('\n').[0];;
+    /// val it: string = "# API Reference for LLMs"
+    /// </example>
     let generateLlmsTxt (package: PackageModel) =
         let sb = System.Text.StringBuilder()
         sb.AppendLine("# API Reference for LLMs") |> ignore

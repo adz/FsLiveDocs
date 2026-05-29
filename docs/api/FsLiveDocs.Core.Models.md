@@ -13,6 +13,4 @@ The blueprint of the documentation engine. This module defines the domain models
 
 The models are designed to be serialized to JSON, allowing them to be stored in the `.livedocs/history` directory and used for versioned documentation.
 
-```fsharp
-let json = Newtonsoft.Json.JsonConvert.SerializeObject(package)
-```
+{{< example id="CreateExample" >}}

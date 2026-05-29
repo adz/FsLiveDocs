@@ -32,7 +32,7 @@ The examples above are not just text. When we run `./scripts/preview.sh`, the fo
 1. `livedocs test` is called.
 2. It extracts the `<example>` tags.
 3. It resolves the compiled project assembly and scenario setup functions.
-4. It executes the code as an FSI-style transcript and verifies the printed output.
+4. It executes the code as an FSI-style transcript and verifies the same `val` bindings and outputs FSI would show.
 
 ## 🔗 Live Transclusion
 

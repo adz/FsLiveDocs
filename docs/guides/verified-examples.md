@@ -38,7 +38,7 @@ open FsLiveDocs.Core
 let configureDatabase () =
     // This setup runs before the example below because both use "with-db".
     let connectionString = "Host=localhost;Database=docs"
-    printfn "Configured %s" connectionString
+    connectionString
 ```
 
 Then reference it from the example:
@@ -47,8 +47,8 @@ Then reference it from the example:
 /// <example name="RepositoryLookup" scenario="with-db">
 /// > let repo = Repository.create();;
 /// > let user = repo.findUser 42;;
-/// > printfn "%s" user.Name;;
-/// Ada
+/// > user.Name;;
+/// val it: string = "Ada"
 /// </example>
 ```
 
@@ -90,8 +90,8 @@ let buildServices () =
 ```fsharp
 /// <example name="ServiceBehavior" scenario="with-services">
 /// > let result = service.CreateUser "Jane";;
-/// > printfn "%s" result.Status;;
-/// Created
+/// > result.Status;;
+/// val it: string = "Created"
 /// </example>
 ```
 
