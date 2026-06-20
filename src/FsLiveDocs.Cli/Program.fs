@@ -65,7 +65,7 @@ module Program =
         let configPath = Path.Combine(".livedocs", "config.json")
         if File.Exists(configPath) then
             try
-                let config = Newtonsoft.Json.JsonConvert.DeserializeObject<SiteConfig>(File.ReadAllText(configPath))
+                let config = Newtonsoft.Json.JsonConvert.DeserializeObject<SiteConfig>(File.ReadAllText(configPath), FsLiveDocs.Core.Serialization.jsonSettings)
                 if isNull (box config) then { RepoUrl = None } else config
             with _ ->
                 { RepoUrl = None }
@@ -274,7 +274,7 @@ jobs:
                     let projectPaths = results.GetResult Extract
                     AnsiConsole.Status().Start("Extracting symbols...", fun ctx ->
                         let package = getUnifiedPackage projectPaths |> Async.RunSynchronously
-                        let json = Newtonsoft.Json.JsonConvert.SerializeObject(package, Newtonsoft.Json.Formatting.Indented)
+                        let json = Newtonsoft.Json.JsonConvert.SerializeObject(package, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings)
                         if not (Directory.Exists(".livedocs/history")) then Directory.CreateDirectory(".livedocs/history") |> ignore
                         let fileName = $".livedocs/history/{package.Version}.json"
                         File.WriteAllText(fileName, json)

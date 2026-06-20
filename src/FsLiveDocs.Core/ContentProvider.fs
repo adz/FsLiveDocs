@@ -157,10 +157,13 @@ module ContentProvider =
 
     /// <summary>Resolves shortcodes (snippets, examples) and semantic links (xrefs) in Markdown content.</summary>
     let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
-        // 1. Resolve {{< snippet id="X" >}}
         let snippetPattern = @"{{<\s*snippet\s+id=""(?<id>[^""]+)""\s*(?:showOutput=""(?<showOutput>[^""]+)"")?\s*>}}"
-        let body1 =
-            withProtectedCodeSegments body "FSLIVEDOCS_CODE" (fun protectedBody ->
+        let examplePattern = @"{{<\s*example\s+id=""(?<id>[^""]+)""\s*>}}"
+        let xrefPattern = @"xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
+
+        withProtectedCodeSegments body "FSLIVEDOCS_CODE" (fun protectedBody ->
+            // 1. Resolve {{< snippet id="X" >}}
+            let body1 =
                 System.Text.RegularExpressions.Regex.Replace(protectedBody, snippetPattern, fun (m: System.Text.RegularExpressions.Match) ->
                     let id = m.Groups.["id"].Value
                     let files = Directory.GetFiles(sourceDir, "*.fs", SearchOption.AllDirectories)
@@ -176,41 +179,41 @@ module ContentProvider =
                     match snippet with
                     | Some s -> $"```fsharp\n{s}\n```"
                     | None -> invalidOp $"Snippet '{id}' was not found."
-                ))
+                )
 
-        // 2. Resolve {{< example id="X" >}}
-        let examplePattern = @"{{<\s*example\s+id=""(?<id>[^""]+)""\s*>}}"
-        let body2 =
-            System.Text.RegularExpressions.Regex.Replace(body1, examplePattern, fun (m: System.Text.RegularExpressions.Match) ->
-                let id = m.Groups.["id"].Value
-                match findExample id package with
-                | Some ex -> $"```fsharp\n{ex.Content}\n```"
-                | None -> invalidOp $"Example '{id}' was not found."
-            )
+            // 2. Resolve {{< example id="X" >}}
+            let body2 =
+                System.Text.RegularExpressions.Regex.Replace(body1, examplePattern, fun (m: System.Text.RegularExpressions.Match) ->
+                    let id = m.Groups.["id"].Value
+                    match findExample id package with
+                    | Some ex -> $"```fsharp\n{ex.Content}\n```"
+                    | None -> invalidOp $"Example '{id}' was not found."
+                )
 
-        // <snippet:XrefResolution>
-        // 3. Resolve xref: with relative rootPath
-        let xrefPattern = @"xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
-        let body3 = System.Text.RegularExpressions.Regex.Replace(body2, xrefPattern, fun (m: System.Text.RegularExpressions.Match) ->
-            let id = m.Groups.["id"].Value
-            match findMember id package, findEntity id package with
-            | Some mem, _ ->
-                // We point to the module/type page, not individual member pages yet
-                // Need to find the parent entity ID
-                let rec findParentId (entities: EntityModel list) parentId =
-                    entities |> Seq.tryPick (fun e ->
-                        if e.Members |> List.exists (fun m -> m.Id = id || m.Name = id) then
-                            Some e.Id
-                        else
-                            findParentId e.Entities (Some e.Id)
-                    )
-                let targetPage = defaultArg (findParentId package.Entities None) "api"
-                $"[{mem.Name}]({rootPath}api/{targetPage}.html#{mem.Id})"
-            | None, Some ent -> $"[{ent.Name}]({rootPath}api/{ent.Id}.html)"
-            | None, None -> invalidOp $"Cross-reference '{id}' was not found."
+            // <snippet:XrefResolution>
+            // 3. Resolve xref: with relative rootPath
+            let body3 =
+                System.Text.RegularExpressions.Regex.Replace(body2, xrefPattern, fun (m: System.Text.RegularExpressions.Match) ->
+                    let id = m.Groups.["id"].Value
+                    match findMember id package, findEntity id package with
+                    | Some mem, _ ->
+                        // We point to the module/type page, not individual member pages yet
+                        // Need to find the parent entity ID
+                        let rec findParentId (entities: EntityModel list) parentId =
+                            entities |> Seq.tryPick (fun e ->
+                                if e.Members |> List.exists (fun m -> m.Id = id || m.Name = id) then
+                                    Some e.Id
+                                else
+                                    findParentId e.Entities (Some e.Id)
+                            )
+                        let targetPage = defaultArg (findParentId package.Entities None) "api"
+                        $"[{mem.Name}]({rootPath}api/{targetPage}.html#{mem.Id})"
+                    | None, Some ent -> $"[{ent.Name}]({rootPath}api/{ent.Id}.html)"
+                    | None, None -> invalidOp $"Cross-reference '{id}' was not found."
+                )
+            // </snippet:XrefResolution>
+            body3
         )
-        // </snippet:XrefResolution>
-        body3
 
     type private MarkdownContext = {
         SourceDir: string

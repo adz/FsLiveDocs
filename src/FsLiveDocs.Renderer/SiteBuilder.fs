@@ -413,7 +413,7 @@ module SiteBuilder =
             for vJson in Directory.GetFiles(historyDir, "*.json") do
                 let v = Path.GetFileNameWithoutExtension(vJson)
                 let json = File.ReadAllText(vJson)
-                let package = Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(json)
+                let package = Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(json, FsLiveDocs.Core.Serialization.jsonSettings)
                 let vDir = Path.Combine(outputDir, "history", v)
                 build {
                     Pages = pages
