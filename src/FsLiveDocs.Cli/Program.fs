@@ -37,6 +37,10 @@ type Arguments =
     | [<Inherit>] Version of string
     /// <summary>Sets the API model extraction output path.</summary>
     | [<Inherit>] Output of string
+    /// <summary>Sets the network interface used by the preview server.</summary>
+    | [<Inherit>] Host of string
+    /// <summary>Sets the TCP port used by the preview server.</summary>
+    | [<Inherit>] Port of int
     interface IArgParserTemplate with
         member s.Usage =
             match s with
@@ -51,6 +55,8 @@ type Arguments =
             | Theme _ -> "Set the visual theme (default: light)."
             | Version _ -> "Set the version stored by API model extraction."
             | Output _ -> "Set the API model extraction output path."
+            | Host _ -> "Set the preview bind host (default: 0.0.0.0)."
+            | Port _ -> "Set the preview port (default: 5000)."
 
 /// <summary>The main entry point module for the CLI application.</summary>
 module Program =
@@ -364,6 +370,11 @@ jobs:
                     printBanner()
                     let projectPaths = results.GetResult Watch
                     let version = results.TryGetResult Version
+                    let host = results.GetResult(Host, defaultValue = "0.0.0.0")
+                    let port = results.GetResult(Port, defaultValue = 5000)
+                    if String.IsNullOrWhiteSpace host then invalidArg "host" "Preview host must not be empty."
+                    if port < 1 || port > 65535 then invalidArg "port" "Preview port must be between 1 and 65535."
+                    let previewUrl = $"http://{host}:{port}"
                     buildAction projectPaths theme version
                     
                     try
@@ -401,10 +412,12 @@ jobs:
                         ) |> ignore
 
                         AnsiConsole.MarkupLine("[bold blue]🚀 Preview server is live![/]")
-                        AnsiConsole.MarkupLine("   [grey]URL:[/] http://localhost:5000")
+                        AnsiConsole.MarkupLine($"   [grey]Listening:[/] {Markup.Escape(previewUrl)}")
+                        if host = "0.0.0.0" then
+                            AnsiConsole.MarkupLine($"   [grey]Browse locally:[/] http://localhost:{port}")
                         AnsiConsole.MarkupLine("   [grey]Watching for changes...[/]\n")
                         
-                        app.Run("http://localhost:5000")
+                        app.Run(previewUrl)
                         0
                     with 
                     | :? IOException as e when e.Message.Contains("inotify") ->

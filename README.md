@@ -38,6 +38,11 @@ FsLiveDocs is a "verified documentation" engine for F#. It treats your documenta
    livedocs build path/to/your/project.fsproj
    ```
 
+   Preview on the default `0.0.0.0:5000` listener, or choose the interface and port:
+   ```bash
+   livedocs watch path/to/your/project.fsproj --host 0.0.0.0 --port 8080
+   ```
+
    Consumer branding can be configured in `.livedocs/config.json`:
    ```json
    {

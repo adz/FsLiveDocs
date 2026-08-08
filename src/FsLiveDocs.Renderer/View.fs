@@ -395,9 +395,12 @@ module View =
                         a [ _href (Url.resolve safeRoot "index.html"); _class "flex items-center gap-3 no-underline group" ] [ 
                             match logoPath with
                             | Some path ->
-                                yield img [ _src (navigationHref path); _alt siteName; _class "site-logo-light h-14 w-auto max-w-52 object-contain" ]
+                                let lightAttributes =
+                                    [ _src (navigationHref path); _alt siteName; _class "site-logo-light h-14 w-auto max-w-52 object-contain" ]
+                                    @ (if logoDarkPath.IsSome then [ attr "data-theme-variant" "light" ] else [])
+                                yield img lightAttributes
                                 match logoDarkPath with
-                                | Some darkPath -> yield img [ _src (navigationHref darkPath); _alt siteName; _class "site-logo-dark h-14 w-auto max-w-52 object-contain" ]
+                                | Some darkPath -> yield img [ _src (navigationHref darkPath); _alt siteName; attr "data-theme-variant" "dark"; _class "site-logo-dark h-14 w-auto max-w-52 object-contain" ]
                                 | None -> ()
                             | None ->
                                 yield div [ _class "bg-primary text-primary-content w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-xl shadow-primary/20 group-hover:rotate-12 transition-transform" ] [ str logoText ]
@@ -468,7 +471,7 @@ module View =
                 script [] [ rawText "window.addEventListener('DOMContentLoaded', (event) => { if(typeof PagefindUI !== 'undefined') new PagefindUI({ element: '#search-ui', showSubResults: true }); });" ]
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" ] []
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-fsharp.min.js" ] []
-                script [] [ rawText "document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => { const t = el.getAttribute('data-set-theme'); document.documentElement.setAttribute('data-theme', t); localStorage.setItem('theme', t); }))" ]
+                script [] [ rawText "const applySiteTheme = (theme) => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('theme', theme); document.querySelectorAll('[data-theme-variant]').forEach(el => { el.style.display = el.getAttribute('data-theme-variant') === theme ? '' : 'none'; }); }; window.addEventListener('DOMContentLoaded', () => applySiteTheme(document.documentElement.getAttribute('data-theme'))); document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => applySiteTheme(el.getAttribute('data-set-theme'))));" ]
                 script [] [ rawText $"""
                     window.addEventListener('DOMContentLoaded', () => {{
                         const codeBlocks = Array.from(document.querySelectorAll('pre code'));
