@@ -61,35 +61,23 @@ module View =
         li [] [ a [ _href url; _class "hover:text-primary transition-colors px-4 py-2 font-bold" ] [ str title ] ]
 
     let private docsSectionKey (page: ContentPage) =
-        let relative =
-            page.FilePath.Replace('\\', '/')
-            |> fun path -> if path.StartsWith("docs/") then path.Substring(5) else path
-        let directory = Path.GetDirectoryName(relative)
+        let directory = Path.GetDirectoryName(page.OutputPath)
         if String.IsNullOrWhiteSpace directory then
             "overview"
         else
-            directory.Replace('\\', '/').TrimStart('/')
-            |> fun path ->
-                let folder = path.Split('/').[0].ToLowerInvariant()
-                if folder = "guides" then "guides"
-                elif folder = "api" then "api-docs"
-                else folder
+            directory.Replace('\\', '/').TrimStart('/').Split('/').[0]
 
-    let private docsSectionLabel = function
-        | "overview" -> "Overview"
-        | "guides" -> "Guides"
-        | "api-docs" -> "API Docs"
-        | other -> other.Split('-') |> Array.map (fun part -> part.Substring(0, 1).ToUpperInvariant() + part.Substring(1)) |> String.concat " "
-
-    let private docsSectionOrder = function
-        | "overview" -> 0
-        | "guides" -> 1
-        | "api-docs" -> 2
-        | _ -> 3
+    let private docsSectionLabel (groupKey: string) (items: ContentPage list) =
+        items
+        |> List.tryFind (fun page -> Path.GetFileName(page.FilePath).Equals("_index.md", StringComparison.OrdinalIgnoreCase))
+        |> Option.map (fun page -> page.Metadata.Title)
+        |> Option.defaultWith (fun () ->
+            groupKey.Split('-')
+            |> Array.map (fun part -> part.Substring(0, 1).ToUpperInvariant() + part.Substring(1))
+            |> String.concat " ")
 
     let sidebarPageLink (rootPath: string) (p: ContentPage) =
-        let fileName = Path.GetFileNameWithoutExtension(p.FilePath).ToLower() + ".html"
-        li [ attr "data-sidebar-item" "true" ] [ a [ _href (Url.resolve rootPath fileName); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ] [ str p.Metadata.Title ] ]
+        li [ attr "data-sidebar-item" "true" ] [ a [ _href (Url.resolve rootPath p.OutputPath); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ] [ str p.Metadata.Title ] ]
 
     let rec sidebarEntityLink (rootPath: string) (e: EntityModel) =
         li [ attr "data-sidebar-item" "true" ] [
@@ -126,10 +114,10 @@ module View =
 
         let docsGroups =
             pages
-            |> List.filter (fun p -> not (Path.GetFileNameWithoutExtension(p.FilePath).Equals("index", StringComparison.OrdinalIgnoreCase)))
-            |> List.sortBy (fun p -> docsSectionOrder (docsSectionKey p), p.Metadata.Weight, p.Metadata.Title)
+            |> List.filter (fun p -> p.OutputPath <> "index.html")
+            |> List.sortBy (fun p -> p.SectionOrder, docsSectionKey p, p.Metadata.Weight, p.Metadata.Title)
             |> List.groupBy docsSectionKey
-            |> List.sortBy (fun (groupKey, _) -> docsSectionOrder groupKey)
+            |> List.sortBy (fun (groupKey, items) -> items |> List.map (fun page -> page.SectionOrder) |> List.min, groupKey)
 
         div [ _class "flex flex-col gap-10 pb-32"; _id "sidebar-root" ] [
             div [ _class "sticky top-0 z-10 bg-base-100/95 backdrop-blur border-b border-base-300 -mx-10 px-10 pb-6 pt-2" ] [
@@ -163,7 +151,7 @@ module View =
                             li [ attr "data-sidebar-item" "true" ] [
                                 details [ _class "group"; attr "open" "true" ] [
                                     summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none font-black text-[10px] uppercase tracking-[0.2em] opacity-70" ] [
-                                        span [] [ str (docsSectionLabel groupKey) ]
+                                        span [] [ str (docsSectionLabel groupKey items) ]
                                         i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
                                     ]
                                     ul [ _class "menu menu-sm p-0 mt-2 ml-2 border-l border-base-300" ] (items |> List.map (sidebarPageLink rootPath))

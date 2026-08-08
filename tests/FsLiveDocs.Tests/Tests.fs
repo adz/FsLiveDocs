@@ -44,6 +44,37 @@ module SymbolListerTests =
 
 module ContentProviderTests =
 
+    let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = [] }
+
+    [<Fact>]
+    let ``outputPathFor preserves folders and removes ordering prefixes`` () =
+        let path = ContentProvider.outputPathFor "docs" "docs/03-the-flow-type/02-creating-flows.md"
+        Assert.Equal("the-flow-type/creating-flows.html", path)
+
+    [<Fact>]
+    let ``scanDocs rejects output path collisions`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(Path.Combine(docsDir, "01-guides")) |> ignore
+        Directory.CreateDirectory(Path.Combine(docsDir, "guides")) |> ignore
+        File.WriteAllText(Path.Combine(docsDir, "01-guides", "start.md"), "Start")
+        File.WriteAllText(Path.Combine(docsDir, "guides", "start.md"), "Start again")
+
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> ignore)
+        Assert.Contains("Documentation output path collision", error.Message)
+
+    [<Fact>]
+    let ``scanDocs uses section index title and nested output path`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let sectionDir = Path.Combine(docsDir, "01-http")
+        Directory.CreateDirectory(sectionDir) |> ignore
+        File.WriteAllText(Path.Combine(sectionDir, "_index.md"), "---\ntitle: HTTP\nweight: 1\n---\nSection")
+        File.WriteAllText(Path.Combine(sectionDir, "02-client.md"), "Client")
+
+        let pages = ContentProvider.scanDocs docsDir docsDir emptyPackage ""
+        Assert.Contains(pages, fun page -> page.OutputPath = "http/index.html" && page.Metadata.Title = "HTTP")
+        Assert.Contains(pages, fun page -> page.OutputPath = "http/client.html" && page.Metadata.Title = "Client")
+        Assert.All(pages, fun page -> Assert.Equal(1, page.SectionOrder))
+
     [<Fact>]
     let ``parseFrontMatter extracts yaml and body`` () =
         let content = "---\ntitle: Hello\nweight: 10\n---\nBody here"
@@ -233,6 +264,33 @@ module SiteBuilderTests =
         let summary = SiteBuilder.generateLlmsTxt package
 
         Assert.StartsWith("# API Reference for LLMs", summary)
+
+    [<Fact>]
+    let ``build preserves an authored homepage and nested page paths`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let metadata title weight = { Title = title; Weight = weight; Type = None }
+        let pages =
+            [
+                { Metadata = metadata "Home" 0; ContentHtml = "<h1>Consumer home</h1>"; FilePath = "docs/index.md"; OutputPath = "index.html"; SectionOrder = Int32.MaxValue }
+                { Metadata = metadata "Client" 1; ContentHtml = "<h1>Client</h1>"; FilePath = "docs/01-http/client.md"; OutputPath = "http/client.html"; SectionOrder = 1 }
+            ]
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = [] }
+
+        SiteBuilder.build {
+            Pages = pages
+            Package = package
+            Config = { RepoUrl = None }
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+
+        let homepage = File.ReadAllText(Path.Combine(outputDir, "index.html"))
+        let nestedPage = File.ReadAllText(Path.Combine(outputDir, "http", "client.html"))
+        Assert.Contains("Consumer home", homepage)
+        Assert.DoesNotContain("Verified documentation for the F# ecosystem", homepage)
+        Assert.Contains("href=\"../index.html\"", nestedPage)
 
 module PresentationTests =
 

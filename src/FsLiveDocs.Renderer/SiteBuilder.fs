@@ -295,9 +295,13 @@ module SiteBuilder =
         
         // Render content pages
         for page in context.Pages do
-            let (html: string) = renderPage page renderContext
-            let fileName = Path.GetFileNameWithoutExtension(page.FilePath).ToLower() + ".html"
-            File.WriteAllText(Path.Combine(context.OutputDir, fileName), html)
+            let depth = page.OutputPath.Split('/').Length - 1
+            let pageContext = { renderContext with RootPath = context.RootPath + String.replicate depth "../" }
+            let (html: string) = renderPage page pageContext
+            let outputPath = Path.Combine(context.OutputDir, page.OutputPath)
+            let outputDirectory = Path.GetDirectoryName(outputPath)
+            if not (Directory.Exists(outputDirectory)) then Directory.CreateDirectory(outputDirectory) |> ignore
+            File.WriteAllText(outputPath, html)
 
         // Render API docs - Multi-page approach
         let apiDir = Path.Combine(context.OutputDir, "api")
@@ -331,9 +335,10 @@ module SiteBuilder =
         let (apiHtml: string) = View.layout "API Reference" context.Pages context.Package context.Versions context.Theme context.RootPath apiOverview |> RenderView.AsString.htmlNode
         File.WriteAllText(Path.Combine(context.OutputDir, "api.html"), apiHtml)
 
-        // Generate index.html
+        // Generate a fallback homepage only when the consumer has not authored docs/index.md.
         let indexPath = Path.Combine(context.OutputDir, "index.html")
-        let indexContent = [ 
+        if not (File.Exists(indexPath)) then
+          let indexContent = [
             h1 [
                 _id "home"
                 attr "data-toc-title" "FsLiveDocs"
@@ -378,9 +383,9 @@ module SiteBuilder =
                     p [ _class "opacity-60 text-sm leading-relaxed" ] [ str "Zero-recompile documentation snapshots." ]
                 ]
             ]
-        ]
-        let (html: string) = View.layout "Home" context.Pages context.Package context.Versions context.Theme context.RootPath indexContent |> RenderView.AsString.htmlNode
-        File.WriteAllText(indexPath, html)
+          ]
+          let (html: string) = View.layout "Home" context.Pages context.Package context.Versions context.Theme context.RootPath indexContent |> RenderView.AsString.htmlNode
+          File.WriteAllText(indexPath, html)
 
     /// <summary>Builds the current site and computes the version list from history snapshots.</summary>
     /// <param name="historyDir">The directory containing previous package snapshots.</param>

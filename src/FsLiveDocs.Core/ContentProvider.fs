@@ -1,6 +1,7 @@
 namespace FsLiveDocs.Core
 
 open System.IO
+open System.Text.RegularExpressions
 open Markdig
 open YamlDotNet.Serialization
 open YamlDotNet.Serialization.NamingConventions
@@ -18,6 +19,48 @@ open YamlDotNet.Serialization.NamingConventions
 module ContentProvider =
 
     let private siteOutputRoot = Path.GetFullPath("output")
+
+    let private stripOrderingPrefix (value: string) =
+        Regex.Replace(value, @"^\d+[\s._-]*", "")
+
+    let private slug (value: string) =
+        stripOrderingPrefix value |> fun part -> part.ToLowerInvariant()
+
+    let private sectionOrderFor (docsDir: string) (filePath: string) =
+        let relative = Path.GetRelativePath(docsDir, filePath).Replace('\\', '/')
+        let firstPart = relative.Split('/').[0]
+        let orderingPrefix = Regex.Match(firstPart, @"^(?<order>\d+)")
+        if orderingPrefix.Success then int orderingPrefix.Groups.["order"].Value
+        else System.Int32.MaxValue
+
+    /// <summary>Maps a Markdown file to its stable output path relative to the docs root.</summary>
+    let outputPathFor (docsDir: string) (filePath: string) =
+        let relative = Path.GetRelativePath(docsDir, filePath).Replace('\\', '/')
+        let parts = relative.Split('/') |> Array.toList
+        let directories = parts |> List.take (parts.Length - 1) |> List.map slug
+        let stem = Path.GetFileNameWithoutExtension(List.last parts)
+        let fileName =
+            if stem.Equals("index", System.StringComparison.OrdinalIgnoreCase)
+               || stem.Equals("_index", System.StringComparison.OrdinalIgnoreCase) then
+                "index.html"
+            else
+                slug stem + ".html"
+        String.concat "/" (directories @ [ fileName ])
+
+    let private defaultTitle (filePath: string) =
+        let stem = Path.GetFileNameWithoutExtension(filePath) |> stripOrderingPrefix
+        if stem.Equals("index", System.StringComparison.OrdinalIgnoreCase)
+           || stem.Equals("_index", System.StringComparison.OrdinalIgnoreCase) then
+            Path.GetDirectoryName(filePath)
+            |> Path.GetFileName
+            |> stripOrderingPrefix
+        else stem
+        |> fun value ->
+            value.Split([| '-'; '_'; ' ' |], System.StringSplitOptions.RemoveEmptyEntries)
+            |> Array.map (fun part ->
+                if part.Length = 0 then part
+                else part.Substring(0, 1).ToUpperInvariant() + part.Substring(1))
+            |> String.concat " "
 
     /// <summary>The shared Markdig pipeline with advanced extensions enabled.</summary>
     let pipeline = MarkdownPipelineBuilder().UseAdvancedExtensions().Build()
@@ -145,7 +188,7 @@ module ContentProvider =
         if Directory.Exists(docsDir) then
             Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
             |> Array.filter (fun f -> not (f.Contains($"{Path.DirectorySeparatorChar}api{Path.DirectorySeparatorChar}")))
-            |> Array.map (fun f -> Path.GetFileNameWithoutExtension(f).ToLowerInvariant() + ".html")
+            |> Array.map (outputPathFor docsDir)
             |> Array.toList
         else
             []
@@ -228,15 +271,15 @@ module ContentProvider =
         validateLinks context.CurrentOutputPath context.AllowedOutputs resolved
         Markdown.ToHtml(resolved, pipeline)
 
-    let private loadMarkdownPage (context: MarkdownContext) (filePath: string) =
+    let private loadMarkdownPage (context: MarkdownContext) (filePath: string) (outputPath: string) =
         let raw = File.ReadAllText(filePath)
         match parseFrontMatter raw with
         | Some (metadata, body) ->
             let contentHtml = resolveMarkdown context body
-            { Metadata = metadata; ContentHtml = contentHtml; FilePath = filePath }
+            { Metadata = metadata; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
         | None ->
             let contentHtml = resolveMarkdown context raw
-            { Metadata = { Title = Path.GetFileNameWithoutExtension(filePath); Weight = 0; Type = None }; ContentHtml = contentHtml; FilePath = filePath }
+            { Metadata = { Title = defaultTitle filePath; Weight = 0; Type = None }; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
 
     /// <summary>Loads and processes a single Markdown page.</summary>
     /// <param name="filePath">The markdown file to read.</param>
@@ -256,6 +299,7 @@ module ContentProvider =
                 AllowedOutputs = allowedOutputs
             }
             filePath
+            currentOutputPath
 
     /// <summary>Scans the docs directory and loads all guide pages.</summary>
     /// <param name="docsDir">The docs root containing markdown pages.</param>
@@ -269,8 +313,17 @@ module ContentProvider =
             Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
             |> Array.filter (fun f -> not (f.Contains("/api/")))
             |> Array.map (fun f ->
-                let outputPath = Path.GetFileNameWithoutExtension(f).ToLowerInvariant() + ".html"
-                loadPage f sourceDir package rootPath outputPath allowedOutputs)
+                let outputPath = outputPathFor docsDir f
+                let depth = outputPath.Split('/').Length - 1
+                let pageRootPath = rootPath + String.replicate depth "../"
+                let page = loadPage f sourceDir package pageRootPath outputPath allowedOutputs
+                { page with SectionOrder = sectionOrderFor docsDir f })
+            |> Array.groupBy (fun page -> page.OutputPath)
+            |> Array.map (fun (outputPath, pages) ->
+                if pages.Length > 1 then
+                    let sources = pages |> Array.map (fun page -> page.FilePath) |> String.concat ", "
+                    invalidOp $"Documentation output path collision at {outputPath}: {sources}"
+                pages.[0])
             |> Array.toList
         else
             []
@@ -306,6 +359,7 @@ module ContentProvider =
                                 AllowedOutputs = allowedOutputs
                             }
                             f
+                            $"api/{id}.html"
                     id, page.ContentHtml)
                 |> Map.ofArray
             

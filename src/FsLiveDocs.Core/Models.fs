@@ -205,6 +205,10 @@ type ContentPage = {
     ContentHtml: string
     /// <summary>Relative file path from the docs root.</summary>
     FilePath: string
+    /// <summary>Relative HTML output path, with documentation ordering prefixes removed.</summary>
+    OutputPath: string
+    /// <summary>Ordering prefix of the top-level documentation section.</summary>
+    SectionOrder: int
 }
 
 type FSharpListConverter() =
