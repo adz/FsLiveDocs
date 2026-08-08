@@ -335,19 +335,29 @@ module SiteBuilder =
         // Generate api.html (Overview / API Reference index)
         let apiOverview = [
             View.h1WithAnchor "api-reference" "API Reference" "text-5xl font-black mb-12 tracking-tighter"
-            div [ _class "grid grid-cols-1 md:grid-cols-2 gap-6 not-prose" ] (
-                let topLevel = 
-                    match context.Package.Entities with
-                    | [ e ] when e.Kind = EntityKind.Namespace && e.Members.IsEmpty -> e.Entities
-                    | _ -> context.Package.Entities
-                
-                topLevel |> List.map (fun e ->
-                    a [ _href (context.RootPath + "api/" + e.Id + ".html"); _class "card bg-base-100 border border-base-300 p-6 hover:shadow-xl hover:border-primary transition-all group" ] [
+            div [ _class "flex flex-col gap-12 not-prose" ] (
+                let card e =
+                    a [ _href (context.RootPath + "api/" + e.Id + ".html"); _class "card bg-base-100 border border-base-300 p-5 hover:shadow-xl hover:border-primary transition-all group" ] [
                         div [ _class "flex justify-between items-center" ] [
-                            h3 [ _class "text-xl font-bold group-hover:text-primary transition-colors" ] [ str e.Name ]
+                            h3 [ _class "text-lg font-bold group-hover:text-primary transition-colors" ] [ str e.Name ]
                             span [ _class "badge badge-sm opacity-40" ] [ str (string e.Kind) ]
                         ]
                         p [ _class "text-sm opacity-60 mt-2 line-clamp-2" ] [ str (Presentation.synopsisFromHtml e.SummaryHtml) ]
+                    ]
+
+                let topLevel =
+                    match context.Package.Entities with
+                    | [ e ] when e.Kind = EntityKind.Namespace && e.Members.IsEmpty -> e.Entities
+                    | _ -> context.Package.Entities
+
+                topLevel |> List.map (fun root ->
+                    let descendants = Presentation.flattenEntities root.Entities
+                    section [ _class "flex flex-col gap-5" ] [
+                        card root
+                        if not descendants.IsEmpty then
+                            div [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 ml-4 md:ml-8 border-l-4 border-primary/10 pl-4 md:pl-8" ] (
+                                descendants |> List.map card
+                            )
                     ]
                 )
             )

@@ -214,6 +214,16 @@ type SiteConfig = {
     SiteName: string option
     /// <summary>Optional short consumer mark used in the navbar.</summary>
     LogoText: string option
+    /// <summary>Optional root-relative or absolute image used as the navbar logo.</summary>
+    LogoPath: string option
+    /// <summary>Optional dark-theme variant of <c>LogoPath</c>.</summary>
+    LogoDarkPath: string option
+    /// <summary>Whether to display the site name beside the navbar mark. Defaults to true.</summary>
+    ShowSiteName: bool option
+    /// <summary>Optional root-relative or absolute consumer stylesheet loaded after FsLiveDocs styles.</summary>
+    Stylesheet: string option
+    /// <summary>Optional DaisyUI themes exposed by the theme picker. Defaults to the built-in theme set.</summary>
+    Themes: string list option
     /// <summary>Optional top-level navigation. Defaults to Home and API.</summary>
     Navigation: NavigationItem list option
 }

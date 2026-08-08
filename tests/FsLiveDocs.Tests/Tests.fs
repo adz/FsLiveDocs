@@ -253,7 +253,7 @@ module DocTestRunnerTests =
 
 module ViewTests =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; Navigation = None }
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None }
 
     [<Fact>]
     let ``sourceLinkHref builds github source links`` () =
@@ -305,7 +305,7 @@ module ViewTests =
 
 module SiteBuilderTests =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; Navigation = None }
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None }
 
     [<Fact>]
     let ``generateLlmsTxt includes the expected heading`` () =
@@ -349,6 +349,11 @@ module SiteBuilderTests =
             RepoUrl = Some "https://github.com/example/library"
             SiteName = Some "Example Library"
             LogoText = Some "EL"
+            LogoPath = Some "content/example-logo.svg"
+            LogoDarkPath = Some "content/example-logo-dark.svg"
+            ShowSiteName = None
+            Stylesheet = Some "content/example.css"
+            Themes = Some [ "light"; "dark" ]
             Navigation = Some [ { Label = "Guides"; Href = "index.html" }; { Label = "Source"; Href = "https://github.com/example/library" } ]
         }
 
@@ -364,9 +369,50 @@ module SiteBuilderTests =
 
         let homepage = File.ReadAllText(Path.Combine(outputDir, "index.html"))
         Assert.Contains("Home - Example Library", homepage)
-        Assert.Contains(">EL<", homepage)
+        Assert.Contains("src=\"content/example-logo.svg\"", homepage)
+        Assert.Contains("src=\"content/example-logo-dark.svg\"", homepage)
+        Assert.Contains("alt=\"Example Library\"", homepage)
         Assert.Contains(">Example Library<", homepage)
+        Assert.Contains("href=\"content/example.css\"", homepage)
+        Assert.DoesNotContain("data-set-theme=\"cupcake\"", homepage)
         Assert.Contains("href=\"https://github.com/example/library\"", homepage)
+
+    [<Fact>]
+    let ``api index includes nested entities`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let child = {
+            Id = "Example.Widget"
+            Name = "Widget"
+            Kind = EntityKind.Record
+            SummaryHtml = "<p>A useful widget.</p>"
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let root = {
+            Id = "Example"
+            Name = "Example"
+            Kind = EntityKind.Namespace
+            SummaryHtml = "<p>Example APIs.</p>"
+            Members = []
+            Examples = []
+            Entities = [ child ]
+        }
+        let package : PackageModel = { Version = "1.0"; Entities = [ root ]; Scenarios = []; Packages = [] }
+
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+
+        let apiIndex = File.ReadAllText(Path.Combine(outputDir, "api.html"))
+        Assert.Contains("href=\"api/Example.Widget.html\"", apiIndex)
+        Assert.Contains("A useful widget.", apiIndex)
 
 module PresentationTests =
 

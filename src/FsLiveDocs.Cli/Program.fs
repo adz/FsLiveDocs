@@ -55,7 +55,7 @@ type Arguments =
 /// <summary>The main entry point module for the CLI application.</summary>
 module Program =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; Navigation = None }
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None }
 
     let printBanner () =
         let figlet = FigletText("LiveDocs")

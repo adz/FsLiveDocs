@@ -291,6 +291,16 @@ module View =
             config.LogoText
             |> Option.filter (not << String.IsNullOrWhiteSpace)
             |> Option.defaultWith (fun () -> if siteName.Length <= 2 then siteName else siteName.Substring(0, 2))
+        let logoPath = config.LogoPath |> Option.filter (not << String.IsNullOrWhiteSpace)
+        let logoDarkPath = config.LogoDarkPath |> Option.filter (not << String.IsNullOrWhiteSpace)
+        let showSiteName = config.ShowSiteName |> Option.defaultValue true
+        let stylesheet = config.Stylesheet |> Option.filter (not << String.IsNullOrWhiteSpace)
+        let themes =
+            config.Themes
+            |> Option.map (List.filter (not << String.IsNullOrWhiteSpace))
+            |> Option.filter (not << List.isEmpty)
+            |> Option.defaultValue [ "light"; "dark"; "cupcake"; "dracula"; "emerald"; "corporate"; "retro"; "cyberpunk" ]
+        let themesJavaScript = themes |> List.map (fun value -> $"'{escapeJs value}'") |> String.concat ","
         let navigation =
             config.Navigation
             |> Option.filter (not << List.isEmpty)
@@ -307,7 +317,10 @@ module View =
                 link [ _rel "stylesheet"; _href "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" ]
                 link [ _rel "stylesheet"; _href "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" ]
                 link [ _rel "stylesheet"; _href (Url.resolve safeRoot "pagefind/pagefind-ui.css") ]
-                script [] [ rawText "const theme = localStorage.getItem('theme'); if(theme) document.documentElement.setAttribute('data-theme', theme);" ]
+                stylesheet
+                |> Option.map (fun href -> link [ _rel "stylesheet"; _href (navigationHref href) ])
+                |> Option.defaultValue emptyText
+                script [] [ rawText $"const allowedThemes = [{themesJavaScript}]; const storedTheme = localStorage.getItem('theme'); const theme = allowedThemes.includes(storedTheme) ? storedTheme : allowedThemes[0]; document.documentElement.setAttribute('data-theme', theme); if (storedTheme !== theme) localStorage.setItem('theme', theme);" ]
                 style [] [ str """
                     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Fira+Code:wght@400;700&display=swap');
                     body { font-family: 'Inter', sans-serif; }
@@ -357,6 +370,11 @@ module View =
                         pointer-events: none;
                         opacity: 0.72;
                     }
+                    .site-logo-dark { display: none; }
+                    [data-theme="dark"] .site-logo-light,
+                    [data-theme="dracula"] .site-logo-light { display: none; }
+                    [data-theme="dark"] .site-logo-dark,
+                    [data-theme="dracula"] .site-logo-dark { display: block; }
                     .not-prose pre {
                         background-color: hsl(var(--n)) !important;
                         padding: 1.5rem !important;
@@ -375,8 +393,16 @@ module View =
                     ]
                     div [ _class "flex-1" ] [
                         a [ _href (Url.resolve safeRoot "index.html"); _class "flex items-center gap-3 no-underline group" ] [ 
-                            div [ _class "bg-primary text-primary-content w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-xl shadow-primary/20 group-hover:rotate-12 transition-transform" ] [ str logoText ]
-                            span [ _class "text-2xl font-black tracking-tighter" ] [ str siteName ]
+                            match logoPath with
+                            | Some path ->
+                                yield img [ _src (navigationHref path); _alt siteName; _class "site-logo-light h-14 w-auto max-w-52 object-contain" ]
+                                match logoDarkPath with
+                                | Some darkPath -> yield img [ _src (navigationHref darkPath); _alt siteName; _class "site-logo-dark h-14 w-auto max-w-52 object-contain" ]
+                                | None -> ()
+                            | None ->
+                                yield div [ _class "bg-primary text-primary-content w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-xl shadow-primary/20 group-hover:rotate-12 transition-transform" ] [ str logoText ]
+                            if showSiteName then
+                                yield span [ _class "text-2xl font-black tracking-tighter" ] [ str siteName ]
                         ]
                     ]
                     div [ _class "flex-none hidden lg:flex" ] [
@@ -402,7 +428,7 @@ module View =
                                 i [ _class "bi bi-palette-fill text-lg" ] []
                             ]
                             ul [ attr "tabindex" "0"; _class "dropdown-content z-[110] menu p-4 shadow-2xl bg-base-100 rounded-2xl w-64 mt-4 border border-base-300 grid grid-cols-2 gap-2" ] [
-                                [ "light"; "dark"; "cupcake"; "dracula"; "emerald"; "corporate"; "retro"; "cyberpunk" ]
+                                themes
                                 |> List.map (fun t -> li [] [ a [ attr "data-set-theme" t; _class "text-[10px] font-black uppercase tracking-wider h-10 flex items-center justify-center rounded-xl hover:bg-base-200" ] [ str t ] ])
                                 |> div [ _class "contents" ]
                             ]

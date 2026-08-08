@@ -38,6 +38,22 @@ FsLiveDocs is a "verified documentation" engine for F#. It treats your documenta
    livedocs build path/to/your/project.fsproj
    ```
 
+   Consumer branding can be configured in `.livedocs/config.json`:
+   ```json
+   {
+     "siteName": "Example Library",
+     "logoText": "EL",
+     "logoPath": "content/logo-light.svg",
+     "logoDarkPath": "content/logo-dark.svg",
+     "showSiteName": true,
+     "stylesheet": "content/site.css",
+     "themes": ["light", "dark"]
+   }
+   ```
+   Image paths may be root-relative site paths or absolute URLs. `logoText` remains the fallback when `logoPath` is
+   absent. Files below the consumer's `docs/` tree are copied into the generated site, so a path such as
+   `content/logo-light.svg` can be sourced from `docs/content/logo-light.svg`.
+
 5. **Build release history**:
    ```bash
    livedocs extract path/to/your/project.fsproj --version 1.2.0 --output model.json
