@@ -46,6 +46,8 @@ type Arguments =
 /// <summary>The main entry point module for the CLI application.</summary>
 module Program =
 
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; Navigation = None }
+
     let printBanner () =
         let figlet = FigletText("LiveDocs")
         figlet.Color <- Color.Blue
@@ -66,11 +68,11 @@ module Program =
         if File.Exists(configPath) then
             try
                 let config = Newtonsoft.Json.JsonConvert.DeserializeObject<SiteConfig>(File.ReadAllText(configPath), FsLiveDocs.Core.Serialization.jsonSettings)
-                if isNull (box config) then { RepoUrl = None } else config
+                if isNull (box config) then defaultSiteConfig else config
             with _ ->
-                { RepoUrl = None }
+                defaultSiteConfig
         else
-            { RepoUrl = None }
+            defaultSiteConfig
 
     let private writeIfChanged (path: string) (content: string) =
         let normalized = content.Replace("\r\n", "\n").TrimEnd() + "\n"

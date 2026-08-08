@@ -37,7 +37,7 @@ module SiteBuilder =
         let content = [
             div [] [ rawText page.ContentHtml ]
         ]
-        View.layout page.Metadata.Title context.AllPages context.Package context.Versions context.Theme context.RootPath content
+        View.layout page.Metadata.Title context.AllPages context.Package context.Config context.Versions context.Theme context.RootPath content
         |> fun node -> RenderView.AsString.htmlNode node
 
     /// <summary>Renders a single API entity page (Module or Type).</summary>
@@ -250,7 +250,7 @@ module SiteBuilder =
                 | EntityKind.Record -> renderRecordEntity e
                 | _ -> renderGenericEntity e
             ]
-        View.layout e.Name context.AllPages context.Package context.Versions context.Theme context.RootPath content
+        View.layout e.Name context.AllPages context.Package context.Config context.Versions context.Theme context.RootPath content
         |> fun node -> RenderView.AsString.htmlNode node
 
     /// <summary>Generates a text-based summary of the API for LLM consumption.</summary>
@@ -332,7 +332,7 @@ module SiteBuilder =
                 )
             )
         ]
-        let (apiHtml: string) = View.layout "API Reference" context.Pages context.Package context.Versions context.Theme context.RootPath apiOverview |> RenderView.AsString.htmlNode
+        let (apiHtml: string) = View.layout "API Reference" context.Pages context.Package context.Config context.Versions context.Theme context.RootPath apiOverview |> RenderView.AsString.htmlNode
         File.WriteAllText(Path.Combine(context.OutputDir, "api.html"), apiHtml)
 
         // Generate a fallback homepage only when the consumer has not authored docs/index.md.
@@ -384,7 +384,7 @@ module SiteBuilder =
                 ]
             ]
           ]
-          let (html: string) = View.layout "Home" context.Pages context.Package context.Versions context.Theme context.RootPath indexContent |> RenderView.AsString.htmlNode
+          let (html: string) = View.layout "Home" context.Pages context.Package context.Config context.Versions context.Theme context.RootPath indexContent |> RenderView.AsString.htmlNode
           File.WriteAllText(indexPath, html)
 
     /// <summary>Builds the current site and computes the version list from history snapshots.</summary>

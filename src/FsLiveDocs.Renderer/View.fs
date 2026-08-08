@@ -282,10 +282,22 @@ module View =
             ]
         ]
 
-    let layout (pageTitle: string) (pages: ContentPage list) (package: PackageModel) (versions: string list) (theme: string) (rootPath: string) (content: XmlNode list) =
+    let layout (pageTitle: string) (pages: ContentPage list) (package: PackageModel) (config: SiteConfig) (versions: string list) (theme: string) (rootPath: string) (content: XmlNode list) =
         let safeRoot = Url.ensureTrailing rootPath
         let homeHref = Url.resolve safeRoot "index.html"
         let apiHref = Url.resolve safeRoot "api.html"
+        let siteName = config.SiteName |> Option.filter (not << String.IsNullOrWhiteSpace) |> Option.defaultValue "FsLiveDocs"
+        let logoText =
+            config.LogoText
+            |> Option.filter (not << String.IsNullOrWhiteSpace)
+            |> Option.defaultWith (fun () -> if siteName.Length <= 2 then siteName else siteName.Substring(0, 2))
+        let navigation =
+            config.Navigation
+            |> Option.filter (not << List.isEmpty)
+            |> Option.defaultValue [ { Label = "Home"; Href = "index.html" }; { Label = "API"; Href = "api.html" } ]
+        let navigationHref href =
+            if Uri.IsWellFormedUriString(href, UriKind.Absolute) || href.StartsWith("#") then href
+            else Url.resolve safeRoot href
         html [ _lang "en"; attr "data-theme" theme; _class "scroll-smooth" ] [
             head [] [
                 meta [ _charset "utf-8" ]
@@ -351,7 +363,7 @@ module View =
                         padding-top: 3.75rem !important;
                     }
                 """ ]
-                title [] [ str $"{pageTitle} - FsLiveDocs" ]
+                title [] [ str $"{pageTitle} - {siteName}" ]
             ]
             body [ _class "min-h-screen bg-base-200/30 flex flex-col" ] [
                 // Navbar
@@ -363,14 +375,13 @@ module View =
                     ]
                     div [ _class "flex-1" ] [
                         a [ _href (Url.resolve safeRoot "index.html"); _class "flex items-center gap-3 no-underline group" ] [ 
-                            div [ _class "bg-primary text-primary-content w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-xl shadow-primary/20 group-hover:rotate-12 transition-transform" ] [ str "Fs" ]
-                            span [ _class "text-2xl font-black tracking-tighter" ] [ str "LiveDocs" ] 
+                            div [ _class "bg-primary text-primary-content w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-xl shadow-primary/20 group-hover:rotate-12 transition-transform" ] [ str logoText ]
+                            span [ _class "text-2xl font-black tracking-tighter" ] [ str siteName ]
                         ]
                     ]
                     div [ _class "flex-none hidden lg:flex" ] [
                         ul [ _class "menu menu-horizontal px-1 gap-6" ] [
-                            navItem "Home" (Url.resolve safeRoot "index.html")
-                            navItem "API" (Url.resolve safeRoot "api.html")
+                            yield! navigation |> List.map (fun item -> navItem item.Label (navigationHref item.Href))
                             li [] [
                                 details [ _class "dropdown dropdown-end" ] [
                                     summary [ _class "px-8 py-3 bg-base-200 hover:bg-base-300 rounded-2xl cursor-pointer transition-all font-black text-xs uppercase tracking-widest" ] [ 

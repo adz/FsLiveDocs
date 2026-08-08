@@ -209,6 +209,8 @@ module DocTestRunnerTests =
 
 module ViewTests =
 
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; Navigation = None }
+
     [<Fact>]
     let ``sourceLinkHref builds github source links`` () =
         let link = View.sourceLinkHref (Some "https://github.com/user/repo") { File = "src/Example.fs"; Line = 42 }
@@ -245,7 +247,7 @@ module ViewTests =
             {
                 AllPages = []
                 Package = package
-                Config = { RepoUrl = None }
+                Config = defaultSiteConfig
                 Versions = []
                 Theme = "light"
                 RootPath = "../"
@@ -257,6 +259,8 @@ module ViewTests =
         Assert.DoesNotContain("Specification", html)
 
 module SiteBuilderTests =
+
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; Navigation = None }
 
     [<Fact>]
     let ``generateLlmsTxt includes the expected heading`` () =
@@ -279,7 +283,7 @@ module SiteBuilderTests =
         SiteBuilder.build {
             Pages = pages
             Package = package
-            Config = { RepoUrl = None }
+            Config = defaultSiteConfig
             Versions = []
             Theme = "light"
             RootPath = ""
@@ -291,6 +295,33 @@ module SiteBuilderTests =
         Assert.Contains("Consumer home", homepage)
         Assert.DoesNotContain("Verified documentation for the F# ecosystem", homepage)
         Assert.Contains("href=\"../index.html\"", nestedPage)
+
+    [<Fact>]
+    let ``build renders consumer identity and navigation`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = [] }
+        let config = {
+            RepoUrl = Some "https://github.com/example/library"
+            SiteName = Some "Example Library"
+            LogoText = Some "EL"
+            Navigation = Some [ { Label = "Guides"; Href = "index.html" }; { Label = "Source"; Href = "https://github.com/example/library" } ]
+        }
+
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = config
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+
+        let homepage = File.ReadAllText(Path.Combine(outputDir, "index.html"))
+        Assert.Contains("Home - Example Library", homepage)
+        Assert.Contains(">EL<", homepage)
+        Assert.Contains(">Example Library<", homepage)
+        Assert.Contains("href=\"https://github.com/example/library\"", homepage)
 
 module PresentationTests =
 

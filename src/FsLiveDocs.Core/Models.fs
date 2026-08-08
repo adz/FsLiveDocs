@@ -171,9 +171,23 @@ type ProjectSnapshotModel = {
 }
 
 /// <summary>Build-time configuration for the generated documentation site.</summary>
+type NavigationItem = {
+    /// <summary>Text displayed in the top navigation.</summary>
+    Label: string
+    /// <summary>Root-relative site path or absolute URL.</summary>
+    Href: string
+}
+
+/// <summary>Build-time configuration for the generated documentation site.</summary>
 type SiteConfig = {
     /// <summary>Optional repository URL used to build source links for members.</summary>
     RepoUrl: string option
+    /// <summary>Optional consumer name used in the navbar and page titles.</summary>
+    SiteName: string option
+    /// <summary>Optional short consumer mark used in the navbar.</summary>
+    LogoText: string option
+    /// <summary>Optional top-level navigation. Defaults to Home and API.</summary>
+    Navigation: NavigationItem list option
 }
 
 /// <summary>Resolved project paths and namespace information used by the doc-test runner.</summary>
