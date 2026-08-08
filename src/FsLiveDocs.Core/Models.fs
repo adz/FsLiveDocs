@@ -124,6 +124,14 @@ type ScenarioModel = {
 }
 
 /// <summary>The root model representing a documented package or solution.</summary>
+type PackageInfo = {
+    /// <summary>Assembly or package name supplied by the extracted project.</summary>
+    Name: string
+    /// <summary>Entity ids contributed by the package before hierarchy reconstruction.</summary>
+    EntityIds: string list
+}
+
+/// <summary>The root model representing a documented package or solution.</summary>
 type PackageModel = { 
     /// <summary>The semantic version of the documentation snapshot.</summary>
     Version: string 
@@ -131,6 +139,26 @@ type PackageModel = {
     Entities: EntityModel list
     /// <summary>Global DocTest scenarios available for examples.</summary>
     Scenarios: ScenarioModel list
+    /// <summary>Package provenance retained across multi-project extraction and merge.</summary>
+    Packages: PackageInfo list
+}
+
+/// <summary>Versioned, schema-tagged API model stored as a release artifact.</summary>
+type ApiModelArtifact = { SchemaVersion: int; Package: PackageModel }
+
+/// <summary>One immutable API model and tagged documentation source in a history build.</summary>
+type HistoryEntry = {
+    Version: string
+    ModelPath: string
+    ModelSha256: string
+    DocsPath: string
+}
+
+/// <summary>Local build manifest materialized from a repository's durable release history.</summary>
+type HistoryManifest = {
+    SchemaVersion: int
+    CurrentVersion: string
+    Entries: HistoryEntry list
 }
 
 type ExampleModel with
@@ -231,7 +259,7 @@ type FSharpListConverter() =
         objectType.IsGenericType && objectType.GetGenericTypeDefinition() = typedefof<list<_>>
     override _.WriteJson(writer, value, serializer) =
         let list = value :?> System.Collections.IEnumerable
-        serializer.Serialize(writer, list)
+        list |> Seq.cast<obj> |> Seq.toArray |> fun items -> serializer.Serialize(writer, items)
     override _.ReadJson(reader, objectType, existingValue, serializer) =
         let elementType = objectType.GetGenericArguments().[0]
         let listType = typedefof<ResizeArray<_>>.MakeGenericType(elementType)

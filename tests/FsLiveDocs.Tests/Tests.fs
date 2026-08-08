@@ -6,6 +6,35 @@ open Xunit
 open FsLiveDocs.Core
 open FsLiveDocs.Runner
 open FsLiveDocs.Renderer
+open Newtonsoft.Json
+
+module HistoryTests =
+
+    [<Fact>]
+    let ``loadArtifact verifies checksum schema and version`` () =
+        let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
+        let package : PackageModel = { Version = "1.2.3"; Entities = []; Scenarios = []; Packages = [] }
+        let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
+        File.WriteAllText(path, JsonConvert.SerializeObject(artifact, Serialization.jsonSettings))
+
+        let loaded = History.loadArtifact "1.2.3" (History.sha256 path) path
+        Assert.Equal("1.2.3", loaded.Version)
+
+        let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadArtifact "1.2.3" (String.replicate 64 "0") path |> ignore)
+        Assert.Contains("checksum mismatch", error.Message)
+
+    [<Fact>]
+    let ``loadManifest requires an entry for the current version`` () =
+        let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
+        let manifest : HistoryManifest = {
+            SchemaVersion = History.ManifestSchemaVersion
+            CurrentVersion = "2.0.0"
+            Entries = [ { Version = "1.0.0"; ModelPath = "model.json"; ModelSha256 = "checksum"; DocsPath = "docs" } ]
+        }
+        File.WriteAllText(path, JsonConvert.SerializeObject(manifest, Serialization.jsonSettings))
+
+        let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadManifest path |> ignore)
+        Assert.Contains("has no manifest entry", error.Message)
 
 module SymbolListerTests =
 
@@ -36,15 +65,16 @@ module SymbolListerTests =
     let ``merge removes empty synthetic Default namespace`` () =
         let child = { Id = "Default.Sample"; Name = "Sample"; Kind = EntityKind.Module; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
         let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = EntityKind.Namespace; SummaryHtml = ""; Members = []; Examples = []; Entities = [ child ] }
-        let package = SymbolLister.merge [ { Version = "1.0"; Entities = [ defaultNamespace; child ]; Scenarios = [] } ]
+        let package = SymbolLister.merge [ { Version = "1.0"; Entities = [ defaultNamespace; child ]; Scenarios = []; Packages = [ { Name = "Example.Package"; EntityIds = [ child.Id ] } ] } ]
 
         let onlyEntity = Assert.Single(package.Entities)
         Assert.Equal("Default.Sample", onlyEntity.Id)
         Assert.Equal("Sample", onlyEntity.Name)
+        Assert.Equal("Example.Package", Assert.Single(package.Packages).Name)
 
 module ContentProviderTests =
 
-    let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = [] }
+    let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
 
     [<Fact>]
     let ``outputPathFor preserves folders and removes ordering prefixes`` () =
@@ -104,7 +134,7 @@ module ContentProviderTests =
         let package : PackageModel = { 
             Version = "1.0"
             Entities = [ { Id = "M1"; Name = "add"; Kind = EntityKind.Module; SummaryHtml = ""; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; SummaryHtml = ""; RemarksHtml = ""; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None; IsSnapshotTest = false } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
-            Scenarios = []
+            Scenarios = []; Packages = []
         }
         let body = "Look at {{< example id=\"E1\" >}} and xref:M:M1.add"
         let resolved = ContentProvider.resolveSnippets body "." package "/"
@@ -172,7 +202,7 @@ module DocTestRunnerTests =
                             Entities = []
                         }
                     ]
-                Scenarios = []
+                Scenarios = []; Packages = []
             }
 
         let projectPath = Path.GetFullPath("src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj")
@@ -212,7 +242,7 @@ module DocTestRunnerTests =
                             Entities = []
                         }
                     ]
-                Scenarios = []
+                Scenarios = []; Packages = []
             }
 
         let projectPath = Path.GetFullPath("src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj")
@@ -256,7 +286,7 @@ module ViewTests =
                 Entities = []
             }
 
-        let package : PackageModel = { Version = "1.0"; Entities = [ recordEntity ]; Scenarios = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = [ recordEntity ]; Scenarios = []; Packages = [ { Name = "FsLiveDocs.Core"; EntityIds = [ recordEntity.Id ] } ] }
         let context : SiteBuilder.SiteRenderContext =
             {
                 AllPages = []
@@ -270,6 +300,7 @@ module ViewTests =
 
         Assert.Contains("Fields", html)
         Assert.Contains("Represents a parameter of a function or method.", html)
+        Assert.Contains("FsLiveDocs.Core", html)
         Assert.DoesNotContain("Specification", html)
 
 module SiteBuilderTests =
@@ -278,7 +309,7 @@ module SiteBuilderTests =
 
     [<Fact>]
     let ``generateLlmsTxt includes the expected heading`` () =
-        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
         let summary = SiteBuilder.generateLlmsTxt package
 
         Assert.StartsWith("# API Reference for LLMs", summary)
@@ -292,7 +323,7 @@ module SiteBuilderTests =
                 { Metadata = metadata "Home" 0; ContentHtml = "<h1>Consumer home</h1>"; FilePath = "docs/index.md"; OutputPath = "index.html"; SectionOrder = Int32.MaxValue }
                 { Metadata = metadata "Client" 1; ContentHtml = "<h1>Client</h1>"; FilePath = "docs/01-http/client.md"; OutputPath = "http/client.html"; SectionOrder = 1 }
             ]
-        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
 
         SiteBuilder.build {
             Pages = pages
@@ -313,7 +344,7 @@ module SiteBuilderTests =
     [<Fact>]
     let ``build renders consumer identity and navigation`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
-        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
         let config = {
             RepoUrl = Some "https://github.com/example/library"
             SiteName = Some "Example Library"

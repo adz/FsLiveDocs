@@ -44,6 +44,22 @@ module SiteBuilder =
     /// <param name="e">The entity to render.</param>
     /// <returns>The rendered HTML document as a string.</returns>
     let renderEntityPage (e: EntityModel) (context: SiteRenderContext) =
+        let renderPackageBadges (ent: EntityModel) =
+            let packageNames =
+                (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
+                |> List.filter (fun package ->
+                    package.EntityIds
+                    |> List.exists (fun entityId -> entityId = ent.Id || entityId.StartsWith(ent.Id + ".", StringComparison.Ordinal)))
+                |> List.map (fun package -> package.Name)
+                |> List.distinct
+                |> List.sort
+            if packageNames.IsEmpty then emptyText
+            else
+                div [ _class "not-prose flex flex-wrap items-center gap-2 -mt-4 mb-8" ] [
+                    span [ _class "text-[10px] font-black uppercase tracking-widest opacity-40" ] [ str "Package" ]
+                    yield! packageNames |> List.map (fun name -> span [ _class "badge badge-outline font-mono" ] [ str name ])
+                ]
+
         let renderSummaryBlock (summaryHtml: string) =
             if String.IsNullOrWhiteSpace summaryHtml then
                 emptyText
@@ -101,6 +117,8 @@ module SiteBuilder =
                         attr "title" $"Copy link to {ent.Name}"
                     ] [ i [ _class "bi bi-link-45deg text-base" ] [] ]
                 ]
+
+                renderPackageBadges ent
 
                 renderSummaryBlock ent.SummaryHtml
 
@@ -221,6 +239,8 @@ module SiteBuilder =
                     ] [ i [ _class "bi bi-link-45deg text-base" ] [] ]
                 ]
 
+                renderPackageBadges ent
+
                 renderSummaryBlock ent.SummaryHtml
                 renderFieldTable "Fields" ent.Members
 
@@ -257,7 +277,7 @@ module SiteBuilder =
     /// <param name="package">The package model to summarize.</param>
     /// <returns>A plaintext `llms.txt` document.</returns>
     /// <example name="GenerateLlmsTxtExample" data-livedocs="snapshot">
-    /// > let package = { Version = "1.0"; Entities = []; Scenarios = [] };;
+    /// > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
     /// > let summary = SiteBuilder.generateLlmsTxt package;;
     /// > summary.Split('\n').[0];;
     /// val it: string = "# API Reference for LLMs"
@@ -429,3 +449,30 @@ module SiteBuilder =
                     RootPath = "../../"
                     OutputDir = vDir
                 }
+
+    /// <summary>Builds current and historical sites from verified API models and tagged documentation trees.</summary>
+    let buildHistory (currentVersion: string) (sites: (string * PackageModel * ContentPage list * string) list) (config: SiteConfig) (theme: string) (outputDir: string) =
+        let versions =
+            currentVersion :: (sites |> List.map (fun (version, _, _, _) -> version) |> List.filter ((<>) currentVersion))
+        let current =
+            sites
+            |> List.tryFind (fun (version, _, _, _) -> version = currentVersion)
+            |> Option.defaultWith (fun () -> invalidOp $"Current history version {currentVersion} was not loaded.")
+
+        let renderSite rootPath destination (version, package, pages, docsDir) =
+            build {
+                Pages = pages
+                Package = package
+                Config = config
+                Versions = versions
+                Theme = theme
+                RootPath = rootPath
+                OutputDir = destination
+            }
+            ContentProvider.copyStaticFiles docsDir destination
+
+        renderSite "" outputDir current
+
+        for site in sites |> List.filter (fun (version, _, _, _) -> version <> currentVersion) do
+            let version, _, _, _ = site
+            renderSite "../../" (Path.Combine(outputDir, "history", version)) site

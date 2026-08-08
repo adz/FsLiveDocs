@@ -19,10 +19,38 @@ We use `FSharp.Compiler.Service` just like `fsdocs`, but we treat the resulting 
 FsLiveDocs makes it easy to access the underlying API metadata via the `PackageModel`. You can use the `extract` command to get a full JSON dump of your project's documented symbols:
 
 ```bash
-livedocs extract MyProject.fsproj
+livedocs extract MyProject.fsproj --version 1.2.0 --output model.json
 ```
 
-This generates a `.livedocs/history/{version}.json` file. You can use this blob to:
+This generates a schema-versioned API model. Use it as an immutable release asset rather than committing generated
+HTML or treating a Pages branch as history.
+
+A local history build consumes a materialized manifest:
+
+```json
+{
+  "schemaVersion": 1,
+  "currentVersion": "1.2.0",
+  "entries": [
+    {
+      "version": "1.2.0",
+      "modelPath": "models/1.2.0.json",
+      "modelSha256": "<lowercase sha256>",
+      "docsPath": "sources/1.2.0/docs"
+    }
+  ]
+}
+```
+
+```bash
+livedocs build-history .livedocs/build-history/manifest.json
+```
+
+FsLiveDocs fails when an artifact is absent, its checksum differs, its schema is unsupported, or its embedded version
+does not match the manifest. It then renders current docs at the site root and older versions under
+`history/{version}/`.
+
+You can use the API model to:
 1.  **Generate custom UIs**: Build your own documentation frontend using the verified metadata.
 2.  **AI Training**: Feed the JSON into an LLM to help it understand your API signatures.
 3.  **Diffing**: Compare two versions of your API to find breaking changes.

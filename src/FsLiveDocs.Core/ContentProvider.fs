@@ -8,10 +8,11 @@ open YamlDotNet.Serialization.NamingConventions
 
 /// <summary>Provides capabilities to load, parse, and resolve Markdown documentation pages.</summary>
 /// <example name="ResolveSnippetExample" data-livedocs="snapshot">
-/// > let package = { Version = "1.0"; Entities = []; Scenarios = [] };;
+/// > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
 /// val package: PackageModel = { Version = "1.0"
 ///   Entities = []
-///   Scenarios = [] }
+///   Scenarios = []
+///   Packages = [] }
 ///
 /// > ContentProvider.resolveSnippets "Hello" "." package "";;
 /// val it: string = "Hello"
@@ -78,7 +79,11 @@ module ContentProvider =
     let pipeline = MarkdownPipelineBuilder().UseAdvancedExtensions().Build()
     
     /// <summary>The YAML deserializer for frontmatter processing.</summary>
-    let deserializer = DeserializerBuilder().WithNamingConvention(CamelCaseNamingConvention.Instance).Build()
+    let deserializer =
+        DeserializerBuilder()
+            .WithNamingConvention(CamelCaseNamingConvention.Instance)
+            .IgnoreUnmatchedProperties()
+            .Build()
 
     /// <summary>Helper to find the index of an element starting from a given position.</summary>
     let findIndexIteration start f (arr: 'T[]) =

@@ -388,8 +388,9 @@ module View =
                                         str (if versions.IsEmpty then "v0.1.0" else versions |> List.head) 
                                     ]
                                     ul [ _class "p-3 bg-base-100 rounded-2xl shadow-2xl border border-base-300 w-56 mt-4" ] (
-                                        versions |> List.map (fun v -> 
-                                            li [] [ a [ _href (Url.resolve safeRoot ("history/" + v + "/index.html")); _class "py-4 rounded-xl font-bold" ] [ str v ] ]
+                                        versions |> List.map (fun v ->
+                                            let target = if not versions.IsEmpty && v = versions.Head then "index.html" else "history/" + v + "/index.html"
+                                            li [] [ a [ _href (Url.resolve safeRoot target); _class "py-4 rounded-xl font-bold" ] [ str v ] ]
                                         )
                                     )
                                 ]

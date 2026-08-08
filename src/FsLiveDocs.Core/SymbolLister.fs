@@ -166,27 +166,37 @@ module SymbolLister =
 
         types
         |> List.collect (fun t ->
-            t.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static ||| BindingFlags.Instance ||| BindingFlags.DeclaredOnly)
-            |> Array.toList
-            |> List.choose (fun m ->
-                m.GetCustomAttributesData()
-                |> Seq.tryFind (fun cad -> cad.AttributeType.FullName = scenarioAttributeName)
-                |> Option.bind (fun cad ->
-                    let scenarioName =
-                        cad.ConstructorArguments
-                        |> Seq.tryHead
-                        |> Option.map (fun arg -> string arg.Value)
-                        |> Option.defaultValue ""
+            try
+                t.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static ||| BindingFlags.Instance ||| BindingFlags.DeclaredOnly)
+                |> Array.toList
+                |> List.choose (fun m ->
+                    try
+                        m.GetCustomAttributesData()
+                        |> Seq.tryFind (fun cad -> cad.AttributeType.FullName = scenarioAttributeName)
+                        |> Option.bind (fun cad ->
+                            let scenarioName =
+                                cad.ConstructorArguments
+                                |> Seq.tryHead
+                                |> Option.map (fun arg -> string arg.Value)
+                                |> Option.defaultValue ""
 
-                    if String.IsNullOrWhiteSpace scenarioName then None
-                    else
-                        let typeName =
-                            if String.IsNullOrWhiteSpace t.FullName then t.Name else t.FullName
+                            if String.IsNullOrWhiteSpace scenarioName then None
+                            else
+                                let typeName =
+                                    if String.IsNullOrWhiteSpace t.FullName then t.Name else t.FullName
 
-                        Some {
-                            Name = scenarioName
-                            MethodId = $"{typeName.Replace('+', '.')}.{m.Name}"
-                        })))
+                                Some {
+                                    Name = scenarioName
+                                    MethodId = $"{typeName.Replace('+', '.')}.{m.Name}"
+                                })
+                    with
+                    | :? FileNotFoundException
+                    | :? FileLoadException
+                    | :? TypeLoadException -> None)
+            with
+            | :? FileNotFoundException
+            | :? FileLoadException
+            | :? TypeLoadException -> [])
         |> List.distinctBy (fun s -> s.Name)
 
     /// <summary>Groups flattened entities into a hierarchical tree based on their IDs.</summary>
@@ -266,13 +276,13 @@ module SymbolLister =
             |> Option.defaultValue ""
 
         if String.IsNullOrEmpty dllPath || not (File.Exists dllPath) then
-            return { Version = "0.1.0"; Entities = []; Scenarios = [] }
+            return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }
         else
             // FSharp.Formatting REQUIRES the .xml file to be next to the .dll
             let xmlPath = Path.ChangeExtension(dllPath, ".xml")
             if not (File.Exists xmlPath) then
                 printfn "Warning: Skipping project %s because associated XML file was not found at %s" projName xmlPath
-                return { Version = "0.1.0"; Entities = []; Scenarios = [] }
+                return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }
             else
                 let input = ApiDocInput.FromFile(dllPath)
                 let libDirs = 
@@ -307,17 +317,27 @@ module SymbolLister =
                     |> Seq.collect (fun ei -> flatten ei.Entity)
                     |> Seq.toList
 
-                return { Version = "0.1.0"; Entities = entities; Scenarios = extractScenariosFromAssembly dllPath }
+                return {
+                    Version = "0.1.0"
+                    Entities = entities
+                    Scenarios = extractScenariosFromAssembly dllPath
+                    Packages = [ { Name = assemblyName; EntityIds = entities |> List.map (fun entity -> entity.Id) |> List.distinct } ]
+                }
     }
 
     /// <summary>Merges multiple PackageModels into a single unified documentation model and reconstructs hierarchy.</summary>
     let merge (packages: PackageModel list) =
         if packages.IsEmpty then 
-            { Version = "0.1.0"; Entities = []; Scenarios = [] }
+            { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }
         else
             let allFlatEntities = packages |> List.collect (fun p -> p.Entities) |> List.distinctBy (fun e -> e.Id)
             let allScenarios = packages |> List.collect (fun p -> p.Scenarios) |> List.distinctBy (fun s -> s.Name)
+            let packageInfo =
+                packages
+                |> List.collect (fun p -> if isNull (box p.Packages) then [] else p.Packages)
+                |> List.distinctBy (fun p -> p.Name)
             let hierarchical = reconstructHierarchy allFlatEntities |> pruneSyntheticDefaults
             { Version = (packages |> List.head).Version
               Entities = hierarchical
-              Scenarios = allScenarios }
+              Scenarios = allScenarios
+              Packages = packageInfo }

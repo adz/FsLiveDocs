@@ -27,10 +27,16 @@ type Arguments =
     | [<CliPrefix(CliPrefix.None)>] Test of projectPaths:string list
     /// <summary>Builds the full static documentation site.</summary>
     | [<CliPrefix(CliPrefix.None)>] Build of projectPaths:string list
+    /// <summary>Builds every version in a verified local history manifest.</summary>
+    | [<CliPrefix(CliPrefix.None); AltCommandLine("build-history")>] BuildHistory of manifestPath:string
     /// <summary>Starts a development server with live-rebuild capabilities.</summary>
     | [<CliPrefix(CliPrefix.None)>] Watch of projectPaths:string list
     /// <summary>Sets the DaisyUI visual theme.</summary>
     | [<Inherit; AltCommandLine("-t")>] Theme of string
+    /// <summary>Sets the version stored by API model extraction.</summary>
+    | [<Inherit>] Version of string
+    /// <summary>Sets the API model extraction output path.</summary>
+    | [<Inherit>] Output of string
     interface IArgParserTemplate with
         member s.Usage =
             match s with
@@ -40,8 +46,11 @@ type Arguments =
             | Extract _ -> "Extract symbols from one or more projects into a JSON blob."
             | Test _ -> "Run the legacy direct docstring verifier for the given projects."
             | Build _ -> "Render the final static site for the given projects."
+            | BuildHistory _ -> "Render all versions from a verified local history manifest."
             | Watch _ -> "Start a dev server with file watching."
             | Theme _ -> "Set the visual theme (default: light)."
+            | Version _ -> "Set the version stored by API model extraction."
+            | Output _ -> "Set the API model extraction output path."
 
 /// <summary>The main entry point module for the CLI application.</summary>
 module Program =
@@ -183,11 +192,12 @@ module Program =
             0
 
     /// <summary>Orchestrates the build process for one or more projects.</summary>
-    let buildAction (projectPaths: string list) (theme: string) =
+    let buildAction (projectPaths: string list) (theme: string) (version: string option) =
         AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
             .Start("[blue]Building documentation site...[/]", fun ctx ->
-                let packageRaw = getUnifiedPackage projectPaths |> Async.RunSynchronously
+                let extracted = getUnifiedPackage projectPaths |> Async.RunSynchronously
+                let packageRaw = { extracted with Version = version |> Option.defaultValue extracted.Version }
                 let sourceDir = Directory.GetCurrentDirectory() 
                 let package = ContentProvider.applyApiDocs "docs" sourceDir packageRaw
                 let pages = ContentProvider.scanDocs "docs" sourceDir package ""
@@ -207,6 +217,30 @@ module Program =
                 proc.WaitForExit()
             )
         AnsiConsole.MarkupLine("[green]✔ Build complete:[/] output/")
+
+    let buildHistoryAction manifestPath theme =
+        let manifest, entries = History.loadManifest manifestPath
+        let config = loadSiteConfig()
+        let sites =
+            entries
+            |> List.map (fun (entry, modelPath, docsDir) ->
+                if not (Directory.Exists(docsDir)) then
+                    invalidOp $"History docs tree is missing for {entry.Version}: {docsDir}"
+                let packageRaw = History.loadArtifact entry.Version entry.ModelSha256 modelPath
+                let sourceDir = Path.GetDirectoryName(docsDir)
+                let package = ContentProvider.applyApiDocs docsDir sourceDir packageRaw
+                let rootPath = if entry.Version = manifest.CurrentVersion then "" else "../../"
+                let pages = ContentProvider.scanDocs docsDir sourceDir package rootPath
+                entry.Version, package, pages, docsDir)
+
+        SiteBuilder.buildHistory manifest.CurrentVersion sites config theme "output"
+
+        let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
+        psi.UseShellExecute <- false
+        use proc = System.Diagnostics.Process.Start(psi)
+        proc.WaitForExit()
+        if proc.ExitCode <> 0 then invalidOp $"Pagefind failed with exit code {proc.ExitCode}."
+        AnsiConsole.MarkupLine("[green]✔ History build complete:[/] output/")
 
     /// <summary>CLI entry point.</summary>
     [<EntryPoint>]
@@ -276,13 +310,18 @@ jobs:
                     printBanner()
                     let projectPaths = results.GetResult Extract
                     AnsiConsole.Status().Start("Extracting symbols...", fun ctx ->
-                        let package = getUnifiedPackage projectPaths |> Async.RunSynchronously
-                        let json = Newtonsoft.Json.JsonConvert.SerializeObject(package, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings)
-                        if not (Directory.Exists(".livedocs/history")) then Directory.CreateDirectory(".livedocs/history") |> ignore
-                        let fileName = $".livedocs/history/{package.Version}.json"
+                        let packageRaw = getUnifiedPackage projectPaths |> Async.RunSynchronously
+                        let version = results.GetResult(Version, defaultValue = packageRaw.Version)
+                        let package = { packageRaw with Version = version }
+                        let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
+                        let json = Newtonsoft.Json.JsonConvert.SerializeObject(artifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings)
+                        let fileName = results.GetResult(Output, defaultValue = $".livedocs/models/{version}.json")
+                        let outputDirectory = Path.GetDirectoryName(fileName)
+                        if not (String.IsNullOrWhiteSpace outputDirectory) && not (Directory.Exists(outputDirectory)) then
+                            Directory.CreateDirectory(outputDirectory) |> ignore
                         File.WriteAllText(fileName, json)
                     )
-                    AnsiConsole.MarkupLine("[green]✔ Extraction complete:[/] .livedocs/history/")
+                    AnsiConsole.MarkupLine("[green]✔ API model extraction complete.[/]")
                     0
 
                 elif results.Contains Test then
@@ -313,13 +352,19 @@ jobs:
                 elif results.Contains Build then
                     printBanner()
                     let projectPaths = results.GetResult Build
-                    buildAction projectPaths theme
+                    buildAction projectPaths theme (results.TryGetResult Version)
+                    0
+
+                elif results.Contains BuildHistory then
+                    printBanner()
+                    buildHistoryAction (results.GetResult BuildHistory) theme
                     0
 
                 elif results.Contains Watch then
                     printBanner()
                     let projectPaths = results.GetResult Watch
-                    buildAction projectPaths theme
+                    let version = results.TryGetResult Version
+                    buildAction projectPaths theme version
                     
                     try
                         let watcher = new FileSystemWatcher(Directory.GetCurrentDirectory())
@@ -329,7 +374,7 @@ jobs:
                             if e.Name.EndsWith(".fs") || e.Name.EndsWith(".fsproj") || e.Name.EndsWith(".md") || e.Name.EndsWith(".css") then
                                 if not (e.Name.Contains("bin") || e.Name.Contains("obj") || e.Name.Contains("output")) then
                                     AnsiConsole.MarkupLine($"[yellow]⚡ Change detected in {e.Name}, rebuilding...[/]")
-                                    try buildAction projectPaths theme with e -> AnsiConsole.WriteException(e)
+                                    try buildAction projectPaths theme version with e -> AnsiConsole.WriteException(e)
                         )
 
                         let builder = WebApplication.CreateBuilder()
