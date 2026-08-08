@@ -8,6 +8,7 @@ open FSharp.Compiler.Symbols
 open System.Text.RegularExpressions
 open System.Xml.Linq
 open System.Reflection
+open System.Text.Json
 
 /// <summary>Provides capabilities to scan F# projects and extract symbols using FSharp.Formatting.</summary>
 /// <example name="ExtractExamplesExample" data-livedocs="snapshot">
@@ -110,9 +111,14 @@ module SymbolLister =
     let rec mapEntity (e: ApiDocEntity) : EntityModel =
         let members = e.AllMembers |> Seq.map mapMember |> Seq.toList
         let nested = e.NestedEntities |> List.map mapEntity
+        let entityId =
+            e.Symbol.TryFullName
+            |> Option.defaultWith (fun () ->
+                if String.IsNullOrWhiteSpace e.Symbol.AccessPath then e.Symbol.CompiledName
+                else e.Symbol.AccessPath + "." + e.Symbol.CompiledName)
 
         {
-            Id = e.Symbol.FullName
+            Id = entityId
             Name = e.Name
             Kind =
                 if e.Symbol.IsFSharpModule then EntityKind.Module
@@ -154,6 +160,41 @@ module SymbolLister =
             assemblyName |> Option.defaultValue (Path.GetFileNameWithoutExtension(projectPath))
         with _ ->
             Path.GetFileNameWithoutExtension(projectPath)
+
+    let private getPackageReferenceDirectories (projectPath: string) =
+        let projectDir = Path.GetDirectoryName(projectPath)
+        let projectName = Path.GetFileNameWithoutExtension(projectPath)
+        let sharedAssets = Path.GetFullPath(Path.Combine(projectDir, "../../artifacts/obj", projectName, "project.assets.json"))
+        let localAssets = Path.Combine(projectDir, "obj", "project.assets.json")
+
+        [ sharedAssets; localAssets ]
+        |> List.tryFind File.Exists
+        |> Option.map (fun assetsPath ->
+            use document = JsonDocument.Parse(File.ReadAllText(assetsPath))
+            let root = document.RootElement
+            let packageRoots =
+                root.GetProperty("packageFolders").EnumerateObject()
+                |> Seq.map (fun property -> property.Name)
+                |> Seq.toList
+
+            root.GetProperty("targets").EnumerateObject()
+            |> Seq.collect (fun target -> target.Value.EnumerateObject())
+            |> Seq.collect (fun library ->
+                let parts = library.Name.Split('/')
+                let mutable compile = Unchecked.defaultof<JsonElement>
+                if parts.Length = 2 && library.Value.TryGetProperty("compile", &compile) then
+                    compile.EnumerateObject()
+                    |> Seq.collect (fun asset ->
+                        if asset.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) then
+                            packageRoots
+                            |> Seq.map (fun packageRoot ->
+                                Path.Combine(packageRoot, parts.[0].ToLowerInvariant(), parts.[1], Path.GetDirectoryName(asset.Name)))
+                        else Seq.empty)
+                else Seq.empty)
+            |> Seq.filter Directory.Exists
+            |> Seq.distinct
+            |> Seq.toList)
+        |> Option.defaultValue []
 
     let private extractScenariosFromAssembly (dllPath: string) =
         let scenarioAttributeName = "FsLiveDocs.Core.DocScenarioAttribute"
@@ -260,18 +301,21 @@ module SymbolLister =
         let assemblyName = getAssemblyName projectPath
         let projDir = Path.GetDirectoryName(projectPath)
         
+        let sharedArtifacts = Path.GetFullPath(Path.Combine(projDir, "../../artifacts/bin"))
         let searchPaths = [
-            Path.Combine(projDir, "../../artifacts/bin")
-            Path.Combine(projDir, "bin/Debug/net10.0")
-            Path.Combine(projDir, "bin/Release/net10.0")
+            Path.Combine(sharedArtifacts, projName)
+            Path.Combine(projDir, "bin")
+            sharedArtifacts
         ]
 
         let dllPath = 
             searchPaths 
             |> List.filter Directory.Exists
             |> List.tryPick (fun path ->
-                let files = Directory.GetFiles(path, $"{assemblyName}.dll", SearchOption.AllDirectories)
-                if files.Length > 0 then Some files.[0] else None
+                Directory.GetFiles(path, $"{assemblyName}.dll", SearchOption.AllDirectories)
+                |> Array.filter (fun dll -> File.Exists(Path.ChangeExtension(dll, ".xml")))
+                |> Array.sortByDescending File.GetLastWriteTimeUtc
+                |> Array.tryHead
             )
             |> Option.defaultValue ""
 
@@ -289,7 +333,9 @@ module SymbolLister =
                     [ 
                         Path.GetDirectoryName(dllPath)
                         System.AppContext.BaseDirectory
-                    ] |> List.distinct
+                    ]
+                    @ getPackageReferenceDirectories projectPath
+                    |> List.distinct
                 
                 let model = 
                     let oldOut = Console.Out

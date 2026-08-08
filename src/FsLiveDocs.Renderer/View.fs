@@ -84,7 +84,7 @@ module View =
             if e.Entities.IsEmpty then
                 a [ _href (Url.resolve rootPath ("api/" + e.Id + ".html")); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm" ] [ str e.Name ]
             else
-                details [ _class "group"; attr "open" "false" ] [
+                details [ _class "group" ] [
                     summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none" ] [
                         a [
                             _href (Url.resolve rootPath ("api/" + e.Id + ".html"))
@@ -149,7 +149,7 @@ module View =
                             ]
                         else
                             li [ attr "data-sidebar-item" "true" ] [
-                                details [ _class "group"; attr "open" "true" ] [
+                                details [ _class "group" ] [
                                     summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none font-black text-[10px] uppercase tracking-[0.2em] opacity-70" ] [
                                         span [] [ str (docsSectionLabel groupKey items) ]
                                         i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
@@ -180,7 +180,7 @@ module View =
                             |> Option.defaultValue area
 
                         li [ attr "data-sidebar-item" "true" ] [
-                            details [ _class "group"; attr "open" "true" ] [
+                            details [ _class "group" ] [
                                 summary [ _class "flex items-center justify-between py-2 px-4 text-primary font-black hover:bg-base-300 rounded-lg cursor-pointer list-none uppercase tracking-widest text-[10px]" ] [
                                     a [
                                         _href (Url.resolve rootPath ("api/" + areaPageId + ".html"))

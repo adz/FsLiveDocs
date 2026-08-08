@@ -72,6 +72,20 @@ module SymbolListerTests =
         Assert.Equal("Sample", onlyEntity.Name)
         Assert.Equal("Example.Package", Assert.Single(package.Packages).Name)
 
+    [<Fact>]
+    let ``merge combines entities contributed to the same namespace by multiple packages`` () =
+        let coreChild = { Id = "Example.CoreFlow"; Name = "CoreFlow"; Kind = EntityKind.Module; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
+        let satelliteChild = { Id = "Example.Http"; Name = "Http"; Kind = EntityKind.Module; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
+        let coreRoot = { Id = "Example"; Name = "Example"; Kind = EntityKind.Namespace; SummaryHtml = ""; Members = []; Examples = []; Entities = [ coreChild ] }
+        let satelliteRoot = { Id = "Example"; Name = "Example"; Kind = EntityKind.Namespace; SummaryHtml = ""; Members = []; Examples = []; Entities = [ satelliteChild ] }
+        let model name root child =
+            { Version = "1.0"; Entities = [ root; child ]; Scenarios = []; Packages = [ { Name = name; EntityIds = [ root.Id; child.Id ] } ] }
+
+        let merged = SymbolLister.merge [ model "Example.Core" coreRoot coreChild; model "Example.Http" satelliteRoot satelliteChild ]
+        let root = Assert.Single(merged.Entities)
+
+        Assert.Equal<string list>([ "Example.CoreFlow"; "Example.Http" ], root.Entities |> List.map _.Id |> List.sort)
+
 module ContentProviderTests =
 
     let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
@@ -340,6 +354,7 @@ module SiteBuilderTests =
         Assert.Contains("Consumer home", homepage)
         Assert.DoesNotContain("Verified documentation for the F# ecosystem", homepage)
         Assert.Contains("href=\"../index.html\"", nestedPage)
+        Assert.DoesNotContain("class=\"group\" open=", nestedPage)
 
     [<Fact>]
     let ``build renders consumer identity and navigation`` () =
