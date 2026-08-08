@@ -197,6 +197,7 @@ module Program =
                 if not (Directory.Exists(historyDir)) then Directory.CreateDirectory(historyDir) |> ignore
                 
                 SiteBuilder.buildAll historyDir package pages config theme "output"
+                ContentProvider.copyStaticFiles "docs" "output"
                 
                 let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
                 psi.RedirectStandardOutput <- true

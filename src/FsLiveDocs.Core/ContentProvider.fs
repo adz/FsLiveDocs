@@ -47,6 +47,18 @@ module ContentProvider =
                 slug stem + ".html"
         String.concat "/" (directories @ [ fileName ])
 
+    /// <summary>Copies consumer-owned non-Markdown files from the docs tree into the generated site.</summary>
+    let copyStaticFiles (docsDir: string) (outputDir: string) =
+        if Directory.Exists(docsDir) then
+            Directory.GetFiles(docsDir, "*", SearchOption.AllDirectories)
+            |> Array.filter (fun file -> not (Path.GetExtension(file).Equals(".md", System.StringComparison.OrdinalIgnoreCase)))
+            |> Array.iter (fun source ->
+                let relative = Path.GetRelativePath(docsDir, source)
+                let destination = Path.Combine(outputDir, relative)
+                let destinationDirectory = Path.GetDirectoryName(destination)
+                if not (Directory.Exists(destinationDirectory)) then Directory.CreateDirectory(destinationDirectory) |> ignore
+                File.Copy(source, destination, true))
+
     let private defaultTitle (filePath: string) =
         let stem = Path.GetFileNameWithoutExtension(filePath) |> stripOrderingPrefix
         if stem.Equals("index", System.StringComparison.OrdinalIgnoreCase)

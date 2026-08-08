@@ -76,6 +76,20 @@ module ContentProviderTests =
         Assert.All(pages, fun page -> Assert.Equal(1, page.SectionOrder))
 
     [<Fact>]
+    let ``copyStaticFiles preserves paths and ignores Markdown`` () =
+        let testRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let docsDir = Path.Combine(testRoot, "docs")
+        let outputDir = Path.Combine(testRoot, "output")
+        Directory.CreateDirectory(Path.Combine(docsDir, "content", "img")) |> ignore
+        File.WriteAllText(Path.Combine(docsDir, "content", "img", "logo.svg"), "<svg />")
+        File.WriteAllText(Path.Combine(docsDir, "content", "guide.md"), "# Guide")
+
+        ContentProvider.copyStaticFiles docsDir outputDir
+
+        Assert.True(File.Exists(Path.Combine(outputDir, "content", "img", "logo.svg")))
+        Assert.False(File.Exists(Path.Combine(outputDir, "content", "guide.md")))
+
+    [<Fact>]
     let ``parseFrontMatter extracts yaml and body`` () =
         let content = "---\ntitle: Hello\nweight: 10\n---\nBody here"
         match ContentProvider.parseFrontMatter content with
