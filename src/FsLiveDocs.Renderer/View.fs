@@ -457,6 +457,59 @@ module View =
                         pointer-events: none;
                         opacity: 0.72;
                     }
+                    table.pre {
+                        display: block;
+                        width: 100%;
+                        overflow-x: auto;
+                        border: 0 !important;
+                        border-radius: 1rem;
+                        background: hsl(var(--n));
+                        color: hsl(var(--nc));
+                    }
+                    table.pre tbody, table.pre tr { display: table; width: 100%; }
+                    table.pre td { border: 0 !important; padding: 1.5rem 0 !important; }
+                    table.pre td.lines { width: 1%; padding-left: 1rem !important; opacity: 0.4; user-select: none; }
+                    table.pre td.snippet { width: 99%; padding-right: 1.5rem !important; }
+                    table.pre pre.fssnip { margin: 0; padding: 0; overflow: visible; background: transparent; font-family: 'Fira Code', monospace; }
+                    table.pre .k { color: #c792ea; }
+                    table.pre .s { color: #c3e88d; }
+                    table.pre .n { color: #f78c6c; }
+                    table.pre .c { color: #7f8c98; font-style: italic; }
+                    table.pre .m, table.pre .rt, table.pre .fn { color: #82aaff; }
+                    table.pre [data-fsdocs-tip] {
+                        cursor: help;
+                        text-decoration: underline dotted color-mix(in srgb, currentColor 45%, transparent);
+                        text-underline-offset: 0.2em;
+                    }
+                    .livedocs-tooltips { display: contents; }
+                    .fsdocs-tip {
+                        position: fixed;
+                        inset: auto;
+                        z-index: 200;
+                        max-width: min(42rem, calc(100vw - 2rem));
+                        max-height: min(28rem, calc(100vh - 2rem));
+                        overflow: auto;
+                        margin: 0;
+                        padding: 0.8rem 1rem;
+                        border: 1px solid rgb(148 163 184 / 0.55);
+                        border-radius: 0.75rem;
+                        background: #0f172a !important;
+                        background-image: linear-gradient(#0f172a, #0f172a) !important;
+                        color: #f8fafc !important;
+                        opacity: 1 !important;
+                        box-shadow: 0 0 0 1px rgb(15 23 42), 0 18px 48px rgb(0 0 0 / 0.65);
+                        font: 0.8rem/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                        white-space: pre-wrap;
+                    }
+                    .fsdocs-tip-docs {
+                        margin-top: 0.65rem;
+                        padding-top: 0.65rem;
+                        border-top: 1px solid rgb(148 163 184 / 0.35);
+                        white-space: normal;
+                    }
+                    .fsdocs-tip-summary { line-height: 1.5; }
+                    .fsdocs-tip-detail { margin-top: 0.4rem; line-height: 1.45; color: #dbeafe; }
+                    .fsdocs-tip-detail strong { color: #f8fafc; }
                     .not-prose pre {
                         background-color: hsl(var(--n)) !important;
                         padding: 1.5rem !important;
@@ -554,6 +607,38 @@ module View =
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" ] []
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-fsharp.min.js" ] []
                 script [] [ rawText "const applySiteTheme = (theme) => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('theme', theme); document.querySelectorAll('[data-theme-variant]').forEach(el => { el.style.display = el.getAttribute('data-theme-variant') === theme ? 'block' : 'none'; }); }; window.addEventListener('DOMContentLoaded', () => applySiteTheme(document.documentElement.getAttribute('data-theme'))); document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => applySiteTheme(el.getAttribute('data-set-theme'))));" ]
+                script [] [ rawText """
+                    window.addEventListener('DOMContentLoaded', () => {
+                        document.querySelectorAll('[data-fsdocs-tip]').forEach(trigger => {
+                            const tooltip = document.getElementById(trigger.dataset.fsdocsTip);
+                            if (!tooltip || typeof tooltip.showPopover !== 'function') return;
+
+                            tooltip.setAttribute('role', 'tooltip');
+                            trigger.setAttribute('tabindex', '0');
+                            trigger.setAttribute('aria-describedby', tooltip.id);
+
+                            const show = () => {
+                                tooltip.showPopover();
+                                const triggerRect = trigger.getBoundingClientRect();
+                                const tooltipRect = tooltip.getBoundingClientRect();
+                                const gap = 8;
+                                const left = Math.max(gap, Math.min(triggerRect.left, window.innerWidth - tooltipRect.width - gap));
+                                const below = triggerRect.bottom + gap;
+                                const top = below + tooltipRect.height <= window.innerHeight - gap
+                                    ? below
+                                    : Math.max(gap, triggerRect.top - tooltipRect.height - gap);
+                                tooltip.style.left = `${left}px`;
+                                tooltip.style.top = `${top}px`;
+                            };
+                            const hide = () => { if (tooltip.matches(':popover-open')) tooltip.hidePopover(); };
+
+                            trigger.addEventListener('mouseenter', show);
+                            trigger.addEventListener('mouseleave', hide);
+                            trigger.addEventListener('focus', show);
+                            trigger.addEventListener('blur', hide);
+                        });
+                    });
+                """ ]
                 script [] [ rawText $"""
                     window.addEventListener('DOMContentLoaded', () => {{
                         const codeBlocks = Array.from(document.querySelectorAll('pre code'));

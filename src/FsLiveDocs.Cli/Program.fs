@@ -41,6 +41,8 @@ type Arguments =
     | [<Inherit>] Host of string
     /// <summary>Sets the TCP port used by the preview server.</summary>
     | [<Inherit>] Port of int
+    /// <summary>Adds directory names the preview watcher must not watch or rebuild for.</summary>
+    | [<Inherit>] Ignore of string
     interface IArgParserTemplate with
         member s.Usage =
             match s with
@@ -57,6 +59,102 @@ type Arguments =
             | Output _ -> "Set the API model extraction output path."
             | Host _ -> "Set the preview bind host (default: 0.0.0.0)."
             | Port _ -> "Set the preview port (default: 5000)."
+            | Ignore _ -> "Add a comma-separated list of directory names the watcher ignores. Repeatable."
+
+/// <summary>Watches source and documentation files so the preview server rebuilds after an edit.</summary>
+module internal PreviewWatcher =
+
+    /// <summary>Directory names never watched, because they are generated, vendored, or private to a tool.</summary>
+    let defaultIgnoredDirectories =
+        set [ ".git"; ".vs"; ".idea"; ".livedocs"; "artifacts"; "bin"; "node_modules"; "obj"; "output"; "packages"; "TestResults" ]
+
+    /// <summary>File extensions whose contents affect the generated site.</summary>
+    let watchedExtensions = set [ ".css"; ".fs"; ".fsproj"; ".fsx"; ".md" ]
+
+    /// <summary>Splits comma-separated <c>--ignore</c> values into directory names.</summary>
+    let parseIgnored (values: string list) =
+        values
+        |> List.collect (fun value -> value.Split(',') |> Array.toList)
+        |> List.map _.Trim()
+        |> List.filter (String.IsNullOrWhiteSpace >> not)
+        |> Set.ofList
+
+    let private isIgnored (ignored: Set<string>) (root: string) (fullPath: string) =
+        let relative = Path.GetRelativePath(root, fullPath)
+        relative.Split([| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |])
+        |> Array.exists (fun segment -> ignored.Contains segment)
+
+    let private isRelevant (ignored: Set<string>) (root: string) (fullPath: string) =
+        watchedExtensions.Contains(Path.GetExtension(fullPath).ToLowerInvariant())
+        && not (isIgnored ignored root fullPath)
+
+    /// <summary>Coalesces a burst of file events into a single rebuild.</summary>
+    let private startRebuildPump (debounceMs: int) (rebuild: unit -> unit) =
+        MailboxProcessor.Start(fun inbox ->
+            let rec idle () =
+                async {
+                    let! (path: string) = inbox.Receive()
+                    return! settle path
+                }
+            and settle path =
+                async {
+                    match! inbox.TryReceive(debounceMs) with
+                    | Some next -> return! settle next
+                    | None ->
+                        AnsiConsole.MarkupLine($"[yellow]⚡ Change detected in {Markup.Escape(path)}, rebuilding...[/]")
+                        try rebuild () with e -> AnsiConsole.WriteException(e)
+                        return! idle ()
+                }
+
+            idle ())
+
+    let private createWatcher (root: string) (path: string) (recurse: bool) (ignored: Set<string>) (notify: string -> unit) =
+        let watcher = new FileSystemWatcher(path)
+        watcher.IncludeSubdirectories <- recurse
+        watcher.NotifyFilter <- NotifyFilters.FileName ||| NotifyFilters.DirectoryName ||| NotifyFilters.LastWrite
+        let handle (fullPath: string) =
+            if isRelevant ignored root fullPath then
+                notify (Path.GetRelativePath(root, fullPath))
+        watcher.Changed.Add(fun e -> handle e.FullPath)
+        watcher.Created.Add(fun e -> handle e.FullPath)
+        watcher.Deleted.Add(fun e -> handle e.FullPath)
+        watcher.Renamed.Add(fun e -> handle e.FullPath)
+        watcher.Error.Add(fun e ->
+            let error = e.GetException()
+            AnsiConsole.MarkupLine($"[red]Watcher stopped for {Markup.Escape(path)}: {Markup.Escape(error.Message)}[/]")
+            if error.Message.Contains("inotify") then
+                AnsiConsole.MarkupLine("[yellow]Raise the limit with:[/] [blue]echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf && sudo sysctl -p[/]")
+                AnsiConsole.MarkupLine("[yellow]Or exclude more directories with[/] --ignore <names>")
+            try
+                watcher.EnableRaisingEvents <- false
+                watcher.EnableRaisingEvents <- true
+                AnsiConsole.MarkupLine($"[grey]Watching {Markup.Escape(path)} again.[/]")
+            with _ ->
+                AnsiConsole.MarkupLine($"[red]Could not restart the watcher for {Markup.Escape(path)}. Restart the preview.[/]"))
+        watcher.EnableRaisingEvents <- true
+        watcher
+
+    /// <summary>
+    /// Starts one watcher per top-level source directory. Ignored directories are never watched, so they cost no
+    /// operating-system watch handles. The returned watchers must stay referenced for as long as the preview runs;
+    /// a collected watcher stops raising events.
+    /// </summary>
+    let start (root: string) (extraIgnored: Set<string>) (rebuild: unit -> unit) =
+        let ignored = Set.union defaultIgnoredDirectories extraIgnored
+        let pump = startRebuildPump 400 rebuild
+        let watched =
+            Directory.GetDirectories(root)
+            |> Array.map Path.GetFileName
+            |> Array.filter (fun name -> not (ignored.Contains name))
+            |> Array.sort
+        let watchers =
+            [ yield createWatcher root root false ignored pump.Post
+              for name in watched -> createWatcher root (Path.Combine(root, name)) true ignored pump.Post ]
+        let watchedNames = String.Join(", ", watched)
+        let ignoredNames = String.Join(", ", Set.toList ignored)
+        AnsiConsole.MarkupLine($"   [grey]Watching:[/] {Markup.Escape(watchedNames)}")
+        AnsiConsole.MarkupLine($"   [grey]Ignoring:[/] {Markup.Escape(ignoredNames)}")
+        watchers
 
 /// <summary>The main entry point module for the CLI application.</summary>
 module Program =
@@ -205,8 +303,35 @@ module Program =
                 let extracted = getUnifiedPackage projectPaths |> Async.RunSynchronously
                 let packageRaw = { extracted with Version = version |> Option.defaultValue extracted.Version }
                 let sourceDir = Directory.GetCurrentDirectory() 
-                let package = ContentProvider.applyApiDocs "docs" sourceDir packageRaw
-                let pages = ContentProvider.scanDocs "docs" sourceDir package ""
+                let projectAssemblies =
+                    projectPaths
+                    |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+                    |> List.filter (String.IsNullOrWhiteSpace >> not)
+                let semanticReferences =
+                    let dependencies =
+                        projectAssemblies
+                        |> List.collect (fun assemblyPath ->
+                            Directory.GetFiles(Path.GetDirectoryName(assemblyPath), "*.dll")
+                            |> Array.toList)
+                    projectAssemblies @ dependencies
+                    |> List.filter (fun path ->
+                        let name = Path.GetFileNameWithoutExtension(path)
+                        not (name.Equals("FSharp.Core", StringComparison.OrdinalIgnoreCase))
+                        && not (name.Equals("FSharp.Compiler.Service", StringComparison.OrdinalIgnoreCase)))
+                    |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
+                let semanticCode =
+                    {
+                        SemanticCode.defaults with
+                            References = semanticReferences
+                            Opens =
+                                Presentation.flattenEntities packageRaw.Entities
+                                |> List.filter (fun entity -> entity.Kind = EntityKind.Namespace)
+                                |> List.map _.Id
+                                |> List.distinct
+                            OnDiagnostic = fun message -> AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(message)}[/]")
+                    }
+                let package = ContentProvider.applyApiDocsWithOptions "docs" sourceDir packageRaw semanticCode
+                let pages = ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
                 let config = loadSiteConfig()
                 
                 let historyDir = ".livedocs/history"
@@ -234,9 +359,9 @@ module Program =
                     invalidOp $"History docs tree is missing for {entry.Version}: {docsDir}"
                 let packageRaw = History.loadArtifact entry.Version entry.ModelSha256 modelPath
                 let sourceDir = Path.GetDirectoryName(docsDir)
-                let package = ContentProvider.applyApiDocs docsDir sourceDir packageRaw
+                let package = ContentProvider.applyApiDocsWithOptions docsDir sourceDir packageRaw SemanticCode.disabled
                 let rootPath = if entry.Version = manifest.CurrentVersion then "" else "../../"
-                let pages = ContentProvider.scanDocs docsDir sourceDir package rootPath
+                let pages = ContentProvider.scanDocsWithOptions docsDir sourceDir package rootPath SemanticCode.disabled
                 entry.Version, package, pages, docsDir)
 
         SiteBuilder.buildHistory manifest.CurrentVersion sites config theme "output"
@@ -378,16 +503,6 @@ jobs:
                     buildAction projectPaths theme version
                     
                     try
-                        let watcher = new FileSystemWatcher(Directory.GetCurrentDirectory())
-                        watcher.IncludeSubdirectories <- true
-                        watcher.EnableRaisingEvents <- true
-                        watcher.Changed.Add(fun e -> 
-                            if e.Name.EndsWith(".fs") || e.Name.EndsWith(".fsproj") || e.Name.EndsWith(".md") || e.Name.EndsWith(".css") then
-                                if not (e.Name.Contains("bin") || e.Name.Contains("obj") || e.Name.Contains("output")) then
-                                    AnsiConsole.MarkupLine($"[yellow]⚡ Change detected in {e.Name}, rebuilding...[/]")
-                                    try buildAction projectPaths theme version with e -> AnsiConsole.WriteException(e)
-                        )
-
                         let builder = WebApplication.CreateBuilder()
                         builder.Logging.ClearProviders() |> ignore
                         builder.Logging.AddConsole() |> ignore
@@ -415,9 +530,16 @@ jobs:
                         AnsiConsole.MarkupLine($"   [grey]Listening:[/] {Markup.Escape(previewUrl)}")
                         if host = "0.0.0.0" then
                             AnsiConsole.MarkupLine($"   [grey]Browse locally:[/] http://localhost:{port}")
-                        AnsiConsole.MarkupLine("   [grey]Watching for changes...[/]\n")
-                        
+                        let watchers =
+                            PreviewWatcher.start
+                                (Directory.GetCurrentDirectory())
+                                (PreviewWatcher.parseIgnored (results.GetResults Ignore))
+                                (fun () -> buildAction projectPaths theme version)
+                        AnsiConsole.MarkupLine("")
+
                         app.Run(previewUrl)
+                        // The watchers stop raising events once they are collected, so they must outlive the server.
+                        for watcher in watchers do watcher.Dispose()
                         0
                     with 
                     | :? IOException as e when e.Message.Contains("inotify") ->

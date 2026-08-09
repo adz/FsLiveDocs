@@ -320,22 +320,37 @@ module ContentProvider =
         RootPath: string
         CurrentOutputPath: string
         AllowedOutputs: Set<string>
+        SemanticCode: SemanticCode.Options
     }
 
-    let private resolveMarkdown (context: MarkdownContext) (body: string) =
+    let private resolveMarkdown (context: MarkdownContext) (sourcePath: string) (body: string) =
         let resolved = resolveSnippets body context.SourceDir context.Package context.RootPath
         let rewritten = rewriteLocalLinks context.CurrentOutputPath context.AllowedOutputs resolved
         validateLinks context.CurrentOutputPath context.AllowedOutputs rewritten
-        Markdown.ToHtml(rewritten, pipeline)
+        let formatted = SemanticCode.formatFences context.SemanticCode sourcePath rewritten
+        let semanticSegments = ResizeArray<string>()
+        let semanticPattern =
+            Regex(
+                Regex.Escape(SemanticCode.htmlStartMarker) + "(?<html>.*?)" + Regex.Escape(SemanticCode.htmlEndMarker),
+                RegexOptions.Singleline)
+        let protectedMarkdown =
+            semanticPattern.Replace(formatted, fun matched ->
+                let index = semanticSegments.Count
+                semanticSegments.Add(matched.Groups.["html"].Value)
+                $"<div data-fslivedocs-semantic-placeholder=\"{index}\"></div>")
+        let rendered = Markdown.ToHtml(protectedMarkdown, pipeline)
+        semanticSegments
+        |> Seq.mapi (fun index html -> $"<div data-fslivedocs-semantic-placeholder=\"{index}\"></div>", html)
+        |> Seq.fold (fun (current: string) (placeholder, html) -> current.Replace(placeholder, html)) rendered
 
     let private loadMarkdownPage (context: MarkdownContext) (filePath: string) (outputPath: string) =
         let raw = File.ReadAllText(filePath)
         match parseFrontMatter raw with
         | Some (metadata, body) ->
-            let contentHtml = resolveMarkdown context body
+            let contentHtml = resolveMarkdown context filePath body
             { Metadata = metadata; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
         | None ->
-            let contentHtml = resolveMarkdown context raw
+            let contentHtml = resolveMarkdown context filePath raw
             { Metadata = { Title = defaultTitle filePath; Type = None }; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
 
     /// <summary>Loads and processes a single Markdown page.</summary>
@@ -354,17 +369,13 @@ module ContentProvider =
                 RootPath = rootPath
                 CurrentOutputPath = currentOutputPath
                 AllowedOutputs = allowedOutputs
+                SemanticCode = SemanticCode.defaults
             }
             filePath
             currentOutputPath
 
-    /// <summary>Scans the docs directory and loads all guide pages.</summary>
-    /// <param name="docsDir">The docs root containing markdown pages.</param>
-    /// <param name="sourceDir">The source root used for snippet resolution.</param>
-    /// <param name="package">The extracted package model used for xrefs and examples.</param>
-    /// <param name="rootPath">The relative root path used when rendering links.</param>
-    /// <returns>All guide pages found under the docs directory.</returns>
-    let scanDocs (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
+    /// <summary>Scans guides and semantically formats F# fences using the supplied assembly references.</summary>
+    let scanDocsWithOptions (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (semanticCode: SemanticCode.Options) =
         if Directory.Exists(docsDir) then
             let allowedOutputs = collectAllowedOutputs docsDir package
             Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
@@ -373,7 +384,18 @@ module ContentProvider =
                 let outputPath = outputPathFor docsDir f
                 let depth = outputPath.Split('/').Length - 1
                 let pageRootPath = rootPath + String.replicate depth "../"
-                let page = loadPage f sourceDir package pageRootPath outputPath allowedOutputs
+                let page =
+                    loadMarkdownPage
+                        {
+                            SourceDir = sourceDir
+                            Package = package
+                            RootPath = pageRootPath
+                            CurrentOutputPath = outputPath
+                            AllowedOutputs = allowedOutputs
+                            SemanticCode = semanticCode
+                        }
+                        f
+                        outputPath
                 { page with SectionOrder = sectionOrderFor docsDir f })
             |> Array.groupBy (fun page -> page.OutputPath)
             |> Array.map (fun (outputPath, pages) ->
@@ -385,12 +407,17 @@ module ContentProvider =
         else
             []
 
-    /// <summary>Applies long-form documentation from docs/api/*.md to the package model.</summary>
-    /// <param name="docsDir">The docs root that contains the api subdirectory.</param>
+    /// <summary>Scans the docs directory and loads all guide pages.</summary>
+    /// <param name="docsDir">The docs root containing markdown pages.</param>
     /// <param name="sourceDir">The source root used for snippet resolution.</param>
-    /// <param name="package">The current package model to enrich.</param>
-    /// <returns>A package model with API summaries replaced by markdown content where present.</returns>
-    let applyApiDocs (docsDir: string) (sourceDir: string) (package: PackageModel) =
+    /// <param name="package">The extracted package model used for xrefs and examples.</param>
+    /// <param name="rootPath">The relative root path used when rendering links.</param>
+    /// <returns>All guide pages found under the docs directory.</returns>
+    let scanDocs (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
+        scanDocsWithOptions docsDir sourceDir package rootPath SemanticCode.defaults
+
+    /// <summary>Applies long-form API documentation with semantic F# formatting.</summary>
+    let applyApiDocsWithOptions (docsDir: string) (sourceDir: string) (package: PackageModel) (semanticCode: SemanticCode.Options) =
         let apiDocsDir = Path.Combine(docsDir, "api")
         if not (Directory.Exists(apiDocsDir)) then package
         else
@@ -414,6 +441,7 @@ module ContentProvider =
                                 RootPath = ""
                                 CurrentOutputPath = $"api/{id}.html"
                                 AllowedOutputs = allowedOutputs
+                                SemanticCode = semanticCode
                             }
                             f
                             $"api/{id}.html"
@@ -421,3 +449,11 @@ module ContentProvider =
                 |> Map.ofArray
             
             { package with Entities = package.Entities |> List.map (fun e -> updateEntity e docsMap) }
+
+    /// <summary>Applies long-form documentation from docs/api/*.md to the package model.</summary>
+    /// <param name="docsDir">The docs root that contains the api subdirectory.</param>
+    /// <param name="sourceDir">The source root used for snippet resolution.</param>
+    /// <param name="package">The current package model to enrich.</param>
+    /// <returns>A package model with API summaries replaced by markdown content where present.</returns>
+    let applyApiDocs (docsDir: string) (sourceDir: string) (package: PackageModel) =
+        applyApiDocsWithOptions docsDir sourceDir package SemanticCode.defaults

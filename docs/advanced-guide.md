@@ -14,6 +14,34 @@ If you are coming from `fsdocs`, you'll find FsLiveDocs familiar but more opinio
 
 We use `FSharp.Compiler.Service` just like `fsdocs`, but we treat the resulting symbol tree as a **verified knowledge graph**.
 
+## Semantic F# code hovers
+
+During a normal `livedocs build`, every `fsharp` fence in a guide or API enrichment page is checked against the
+assemblies passed to the build command. The generated page shows compiler-derived types and XML documentation when a
+reader hovers over, or focuses, an identifier. The browser displays metadata generated at build time; it does not run
+the F# compiler.
+
+Mark an intentionally incomplete fragment with `no-check` to keep ordinary syntax highlighting without semantic
+tooltips:
+
+````markdown
+```fsharp no-check
+let unfinished =
+```
+````
+
+Use `transcript` for code that includes FSI prompts or output:
+
+````markdown
+```fsharp transcript
+> 40 + 2;;
+val it: int = 42
+```
+````
+
+Historical builds use their stored API model and documentation source without requiring old assemblies, so their code
+blocks retain syntax highlighting but are not semantically rechecked.
+
 ## 🔍 Accessing Symbols & Modules
 
 FsLiveDocs makes it easy to access the underlying API metadata via the `PackageModel`. You can use the `extract` command to get a full JSON dump of your project's documented symbols:

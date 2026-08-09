@@ -1,6 +1,7 @@
 namespace FsLiveDocs.Runner
 
 open System.IO
+open System.Xml.Linq
 open FsLiveDocs.Core
 
 /// <summary>Resolves source projects and built assemblies for doc-test execution.</summary>
@@ -32,18 +33,26 @@ module ProjectResolver =
     let resolveAssemblyPath (projectPath: string) =
         let projectName = Path.GetFileNameWithoutExtension(projectPath)
         let projDir = Path.GetDirectoryName(projectPath)
+        let assemblyName =
+            let document = XDocument.Load(projectPath)
+            document.Descendants(XName.Get "AssemblyName")
+            |> Seq.tryHead
+            |> Option.map _.Value
+            |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+            |> Option.defaultValue projectName
 
         let searchPaths = [
-            Path.Combine(projDir, "../../artifacts/bin")
-            Path.Combine(projDir, "bin/Debug/net10.0")
-            Path.Combine(projDir, "bin/Release/net10.0")
+            Path.GetFullPath(Path.Combine(projDir, "../../artifacts/bin", projectName))
+            Path.Combine(projDir, "bin")
         ]
 
         searchPaths
         |> List.filter Directory.Exists
         |> List.tryPick (fun path ->
-            let files = Directory.GetFiles(path, $"{projectName}.dll", SearchOption.AllDirectories)
-            if files.Length > 0 then Some files.[0] else None)
+            Directory.GetFiles(path, $"{assemblyName}.dll", SearchOption.AllDirectories)
+            |> Array.filter (fun assembly -> File.Exists(Path.ChangeExtension(assembly, ".xml")))
+            |> Array.sortByDescending File.GetLastWriteTimeUtc
+            |> Array.tryHead)
         |> Option.defaultValue ""
 
     let resolve (projectPath: string) =

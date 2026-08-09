@@ -2,6 +2,7 @@ namespace FsLiveDocs.Tests
 
 open System
 open System.IO
+open System.Text.RegularExpressions
 open Xunit
 open FsLiveDocs.Core
 open FsLiveDocs.Runner
@@ -91,6 +92,66 @@ module ContentProviderTests =
     let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
 
     [<Fact>]
+    let ``semantic F sharp fences contain compiler tooltips`` () =
+        let markdown = "```fsharp\nlet answer = List.sum [ 40; 2 ]\n```"
+        let html = SemanticCode.formatFences SemanticCode.defaults "guide.fsx" markdown
+
+        Assert.DoesNotContain("```fsharp", html)
+        Assert.Contains("answer", html)
+        Assert.Contains("fsdocs-tip", html)
+        Assert.Contains("livedocs-tooltips not-prose", html)
+
+    [<Fact>]
+    let ``semantic F sharp fences resolve referenced project types`` () =
+        let markdown = "```fsharp\nlet package : PackageModel = Unchecked.defaultof<_>\n```"
+        let options =
+            {
+                SemanticCode.defaults with
+                    References = [ typeof<PackageModel>.Assembly.Location ]
+                    Opens = [ "FsLiveDocs.Core" ]
+            }
+        let html = SemanticCode.formatFences options "guide.fsx" markdown
+
+        Assert.Contains("val package: PackageModel", html)
+        Assert.DoesNotContain("val package: obj", html)
+        Assert.Contains("The root model representing a documented package or solution.", html)
+        Assert.Contains("fsdocs-tip-docs", html)
+        Assert.DoesNotContain("&lt;summary&gt;", html)
+
+    [<Fact>]
+    let ``no-check F sharp fences remain Markdown`` () =
+        let markdown = "```fsharp no-check\nlet incomplete =\n```"
+        let formatted = SemanticCode.formatFences SemanticCode.defaults "guide.fsx" markdown
+
+        Assert.Equal(markdown, formatted)
+
+    [<Fact>]
+    let ``invalid F sharp fences do not publish compiler recovery types`` () =
+        let markdown = "```fsharp\nlet value : MissingType = ...\n```"
+        let html = SemanticCode.formatFences SemanticCode.defaults "guide.fsx" markdown
+
+        Assert.Contains("table class=\"pre\"", html)
+        Assert.Contains("pre class=\"fssnip\"", html)
+        Assert.DoesNotContain("fsdocs-tip", html)
+        Assert.DoesNotContain("val value: obj", html)
+
+    [<Fact>]
+    let ``inferred obj recovery tooltips are omitted`` () =
+        let markdown = "```fsharp\nlet placeholder = Unchecked.defaultof<_>\n```"
+        let html = SemanticCode.formatFences SemanticCode.defaults "guide.fsx" markdown
+
+        Assert.Contains("placeholder", html)
+        Assert.DoesNotContain("val placeholder: obj", html)
+        Assert.DoesNotContain("data-fsdocs-tip", html)
+
+    [<Fact>]
+    let ``identical F sharp fences receive distinct semantic output`` () =
+        let fence = "```fsharp\nlet value = 42\n```"
+        let html = SemanticCode.formatFences SemanticCode.defaults "guide.fsx" (fence + "\n\n" + fence)
+
+        Assert.Equal(2, Regex.Matches(html, "val value: int").Count)
+
+    [<Fact>]
     let ``outputPathFor preserves folders and removes ordering prefixes`` () =
         let path = ContentProvider.outputPathFor "docs" "docs/03-the-flow-type/02-creating-flows.md"
         Assert.Equal("the-flow-type/creating-flows.html", path)
@@ -133,6 +194,33 @@ module ContentProviderTests =
         Assert.Contains("href=\"details.html\"", indexPage.ContentHtml)
 
     [<Fact>]
+    let ``scanDocs preserves semantic spans across indented code`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(docsDir) |> ignore
+        File.WriteAllText(
+            Path.Combine(docsDir, "guide.md"),
+            "```fsharp\nlet choose value =\n\n    match value with\n    | Some item -> item\n    | None -> 0\n```")
+
+        let page = ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> List.exactlyOne
+
+        Assert.Contains("<span class=\"k\">match</span>", page.ContentHtml)
+        Assert.DoesNotContain("&lt;span", page.ContentHtml)
+        Assert.DoesNotContain("data-fslivedocs-semantic-placeholder", page.ContentHtml)
+
+    [<Fact>]
+    let ``valid and invalid F sharp fences use the same code frame`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(docsDir) |> ignore
+        File.WriteAllText(
+            Path.Combine(docsDir, "guide.md"),
+            "```fsharp\nlet valid = 42\n```\n\n```fsharp\nlet invalid : MissingType = ...\n```")
+
+        let page = ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> List.exactlyOne
+
+        Assert.Equal(2, Regex.Matches(page.ContentHtml, "<table class=\"pre\">").Count)
+        Assert.Equal(2, Regex.Matches(page.ContentHtml, "<pre class=\"fssnip\">").Count / 2)
+
+    [<Fact>]
     let ``copyStaticFiles preserves paths and ignores Markdown`` () =
         let testRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         let docsDir = Path.Combine(testRoot, "docs")
@@ -168,6 +256,25 @@ module ContentProviderTests =
         Assert.Contains("[add](/api/M1.html#M1.add)", resolved)
 
 module DocTestRunnerTests =
+
+    [<Fact>]
+    let ``project resolver selects the project artifact rather than a copied dependency`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let projectDir = Path.Combine(root, "src", "Example.Project")
+        let ownOutput = Path.Combine(root, "artifacts", "bin", "Example.Project", "debug")
+        let copiedOutput = Path.Combine(root, "artifacts", "bin", "Unrelated.Tests", "debug")
+        Directory.CreateDirectory(projectDir) |> ignore
+        Directory.CreateDirectory(ownOutput) |> ignore
+        Directory.CreateDirectory(copiedOutput) |> ignore
+        let projectPath = Path.Combine(projectDir, "Example.Project.fsproj")
+        File.WriteAllText(projectPath, "<Project><PropertyGroup><AssemblyName>Actual.Name</AssemblyName></PropertyGroup></Project>")
+        for directory in [ ownOutput; copiedOutput ] do
+            File.WriteAllText(Path.Combine(directory, "Actual.Name.dll"), "fixture")
+            File.WriteAllText(Path.Combine(directory, "Actual.Name.xml"), "<doc />")
+
+        let resolved = ProjectResolver.resolveAssemblyPath projectPath
+
+        Assert.Equal(Path.Combine(ownOutput, "Actual.Name.dll"), resolved)
 
     [<Fact>]
     let ``ExampleTranscript parses FSI sessions`` () =
@@ -280,6 +387,18 @@ module DocTestRunnerTests =
 module ViewTests =
 
     let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None }
+
+    [<Fact>]
+    let ``tooltip surface is explicitly opaque`` () =
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+        let page = { Metadata = { Title = "Guide"; Type = None }; ContentHtml = ""; FilePath = "guide.md"; OutputPath = "guide.html"; SectionOrder = 0 }
+        let context : SiteBuilder.SiteRenderContext =
+            { AllPages = [ page ]; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "dark"; RootPath = "" }
+
+        let html = SiteBuilder.renderPage page context
+
+        Assert.Contains("background: #0f172a !important", html)
+        Assert.Contains("background-image: linear-gradient(#0f172a, #0f172a) !important", html)
 
     [<Fact>]
     let ``sourceLinkHref builds github source links`` () =

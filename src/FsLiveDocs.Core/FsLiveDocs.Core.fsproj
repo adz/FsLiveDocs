@@ -10,6 +10,7 @@
     <Compile Include="Models.fs" />
     <Compile Include="History.fs" />
     <Compile Include="SymbolLister.fs" />
+    <Compile Include="SemanticCode.fs" />
     <Compile Include="ContentProvider.fs" />
     <Compile Include="Library.fs" />
   </ItemGroup>
