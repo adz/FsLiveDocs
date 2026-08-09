@@ -243,8 +243,6 @@ type ResolvedProject = {
 type ContentMetadata = {
     /// <summary>Title of the page.</summary>
     Title: string
-    /// <summary>Ordering weight in the sidebar.</summary>
-    Weight: int
     /// <summary>Optional category or type identifier.</summary>
     Type: string option
 }

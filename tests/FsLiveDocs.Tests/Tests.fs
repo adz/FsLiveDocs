@@ -120,6 +120,19 @@ module ContentProviderTests =
         Assert.All(pages, fun page -> Assert.Equal(1, page.SectionOrder))
 
     [<Fact>]
+    let ``scanDocs rewrites trailing slash links to generated html pages`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let sectionDir = Path.Combine(docsDir, "01-guides", "01-nested")
+        Directory.CreateDirectory(sectionDir) |> ignore
+        File.WriteAllText(Path.Combine(sectionDir, "_index.md"), "[Details](details/)")
+        File.WriteAllText(Path.Combine(sectionDir, "01-details.md"), "Details")
+
+        let pages = ContentProvider.scanDocs docsDir docsDir emptyPackage ""
+        let indexPage = pages |> List.find (fun page -> page.OutputPath = "guides/nested/index.html")
+
+        Assert.Contains("href=\"details.html\"", indexPage.ContentHtml)
+
+    [<Fact>]
     let ``copyStaticFiles preserves paths and ignores Markdown`` () =
         let testRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         let docsDir = Path.Combine(testRoot, "docs")
@@ -139,7 +152,6 @@ module ContentProviderTests =
         match ContentProvider.parseFrontMatter content with
         | Some (meta, body) ->
             Assert.Equal("Hello", meta.Title)
-            Assert.Equal(10, meta.Weight)
             Assert.Equal("Body here", body.Trim())
         | None -> Assert.Fail("Should have parsed frontmatter")
 
@@ -331,13 +343,13 @@ module SiteBuilderTests =
     [<Fact>]
     let ``build preserves an authored homepage and nested page paths`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
-        let metadata title weight = { Title = title; Weight = weight; Type = None }
+        let metadata title = { Title = title; Type = None }
         let pages =
             [
-                { Metadata = metadata "Home" 0; ContentHtml = "<h1>Consumer home</h1>"; FilePath = "docs/index.md"; OutputPath = "index.html"; SectionOrder = Int32.MaxValue }
-                { Metadata = metadata "Client" 1; ContentHtml = "<h1>Client</h1>"; FilePath = "docs/01-http/client.md"; OutputPath = "http/client.html"; SectionOrder = 1 }
-                { Metadata = metadata "Advanced" 2; ContentHtml = "<h1>Advanced</h1>"; FilePath = "docs/01-http/advanced/_index.md"; OutputPath = "http/advanced/index.html"; SectionOrder = 1 }
-                { Metadata = metadata "Retries" 3; ContentHtml = "<h1>Retries</h1>"; FilePath = "docs/01-http/advanced/retries.md"; OutputPath = "http/advanced/retries.html"; SectionOrder = 1 }
+                { Metadata = metadata "Home"; ContentHtml = "<h1>Consumer home</h1>"; FilePath = "docs/index.md"; OutputPath = "index.html"; SectionOrder = Int32.MaxValue }
+                { Metadata = metadata "Client"; ContentHtml = "<h1>Client</h1>"; FilePath = "docs/01-http/02-client.md"; OutputPath = "http/client.html"; SectionOrder = 1 }
+                { Metadata = metadata "Advanced"; ContentHtml = "<h1>Advanced</h1>"; FilePath = "docs/01-http/01-advanced/_index.md"; OutputPath = "http/advanced/index.html"; SectionOrder = 1 }
+                { Metadata = metadata "Retries"; ContentHtml = "<h1>Retries</h1>"; FilePath = "docs/01-http/01-advanced/01-retries.md"; OutputPath = "http/advanced/retries.html"; SectionOrder = 1 }
             ]
         let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
 
@@ -358,6 +370,8 @@ module SiteBuilderTests =
         Assert.Contains("href=\"../index.html\"", nestedPage)
         Assert.DoesNotContain("class=\"group\" open=", nestedPage)
         Assert.Contains("data-docs-group=\"http/advanced\"", nestedPage)
+        Assert.True(nestedPage.IndexOf("data-docs-group=\"http/advanced\"", StringComparison.Ordinal) < nestedPage.IndexOf(">Client</a>", StringComparison.Ordinal))
+        Assert.Contains("currentSidebarLink.setAttribute('aria-current', 'page')", nestedPage)
 
     [<Fact>]
     let ``build renders consumer identity and navigation`` () =

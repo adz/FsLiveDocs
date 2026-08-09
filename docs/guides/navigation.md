@@ -1,6 +1,5 @@
 ---
 title: Navigation and Ordering
-weight: 0
 type: explanation
 ---
 
@@ -16,8 +15,12 @@ FsLiveDocs groups the left sidebar automatically from the `docs/` folder structu
 4. Generated API reference pages appear in the API Reference section.
 
 Subfolders become nested, collapsible groups at any depth. A subfolder's `_index.md` supplies its displayed title;
-otherwise FsLiveDocs derives the title from the folder name. Each group starts closed. Within each folder, direct
-pages are sorted by `weight` and then by title, followed by its child folders.
+otherwise FsLiveDocs derives the title from the folder name. Each group starts closed unless it contains the current
+page. Files and child folders participate in one ordering, using their numeric filename prefixes. FsLiveDocs removes
+those prefixes from generated URLs and fallback titles.
+
+For example, `01-overview.md`, `02-tutorials/`, and `03-reference.md` appear in that order. Inside `02-tutorials/`,
+use the same convention (`01-first-steps.md`, `02-next-steps.md`, and so on).
 
 ## Why this matters
 
@@ -30,6 +33,7 @@ We use the Diátaxis structure to decide what kind of content belongs in the doc
 
 That structure informs the content. The sidebar still follows the `docs/` folder layout so it remains automatic and easy to predict.
 
-If you add a new page, place it in the right folder and set its `weight` if you want a specific order. The `type` frontmatter is advisory metadata for the page itself, not the sidebar.
+If you add a page or folder, place it in the right directory and give it a numeric prefix for its position. The `type`
+frontmatter is advisory metadata for the page itself, not the sidebar.
 
 For a field-by-field reference, see [Frontmatter Reference](frontmatter.html).

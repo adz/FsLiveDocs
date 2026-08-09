@@ -193,6 +193,45 @@ module ContentProvider =
             protectedBody)
         |> ignore
 
+    let private rewriteLocalLinks (currentOutputPath: string) (allowedOutputs: Set<string>) (body: string) =
+        let linkPattern = @"(?<!\!)(?<prefix>\[[^\]]+\]\()(?<href>[^\s\)]+)(?<suffix>[^\)]*\))"
+        withProtectedCodeSegments body "FSLIVEDOCS_REWRITE_LINKS" (fun protectedBody ->
+            Regex.Replace(protectedBody, linkPattern, fun (m: Match) ->
+                let href = m.Groups.["href"].Value.Trim().Trim('"')
+                match normalizeOutputPath currentOutputPath href with
+                | None -> m.Value
+                | Some target ->
+                    let hrefPath = href.Split([| '#'; '?' |], 2).[0]
+                    let hrefSuffix = href.Substring(hrefPath.Length)
+                    let candidates =
+                        [
+                            yield target
+                            if target.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
+                                yield Path.ChangeExtension(target, ".html").Replace('\\', '/')
+                            if hrefPath.EndsWith("/", System.StringComparison.Ordinal) || System.String.IsNullOrEmpty(Path.GetExtension(target)) then
+                                let trimmed = target.TrimEnd('/')
+                                yield trimmed + ".html"
+                                yield trimmed + "/index.html"
+                        ]
+                        |> List.distinct
+                    match candidates |> List.tryFind allowedOutputs.Contains with
+                    | Some resolved ->
+                        let currentDirectory = Path.GetDirectoryName(currentOutputPath)
+                        let relative =
+                            if System.String.IsNullOrWhiteSpace currentDirectory then resolved
+                            else Path.GetRelativePath(currentDirectory, resolved).Replace('\\', '/')
+                        m.Groups.["prefix"].Value + relative + hrefSuffix + m.Groups.["suffix"].Value
+                    | None ->
+                        let extension = Path.GetExtension(hrefPath)
+                        let looksLikePage =
+                            hrefPath.EndsWith("/", System.StringComparison.Ordinal)
+                            || System.String.IsNullOrEmpty(extension)
+                            || extension.Equals(".md", System.StringComparison.OrdinalIgnoreCase)
+                            || extension.Equals(".html", System.StringComparison.OrdinalIgnoreCase)
+                        if looksLikePage then
+                            invalidOp $"Broken documentation link in {currentOutputPath}: [{href}] does not resolve to a generated page."
+                        m.Value))
+
     let private collectEntityIds (entities: EntityModel list) =
         let rec walk acc (items: EntityModel list) =
             match items with
@@ -285,8 +324,9 @@ module ContentProvider =
 
     let private resolveMarkdown (context: MarkdownContext) (body: string) =
         let resolved = resolveSnippets body context.SourceDir context.Package context.RootPath
-        validateLinks context.CurrentOutputPath context.AllowedOutputs resolved
-        Markdown.ToHtml(resolved, pipeline)
+        let rewritten = rewriteLocalLinks context.CurrentOutputPath context.AllowedOutputs resolved
+        validateLinks context.CurrentOutputPath context.AllowedOutputs rewritten
+        Markdown.ToHtml(rewritten, pipeline)
 
     let private loadMarkdownPage (context: MarkdownContext) (filePath: string) (outputPath: string) =
         let raw = File.ReadAllText(filePath)
@@ -296,7 +336,7 @@ module ContentProvider =
             { Metadata = metadata; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
         | None ->
             let contentHtml = resolveMarkdown context raw
-            { Metadata = { Title = defaultTitle filePath; Weight = 0; Type = None }; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
+            { Metadata = { Title = defaultTitle filePath; Type = None }; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
 
     /// <summary>Loads and processes a single Markdown page.</summary>
     /// <param name="filePath">The markdown file to read.</param>

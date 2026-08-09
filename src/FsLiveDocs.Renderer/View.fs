@@ -93,11 +93,47 @@ module View =
     let sidebarPageLink (rootPath: string) (p: ContentPage) =
         li [ attr "data-sidebar-item" "true" ] [ a [ _href (Url.resolve rootPath p.OutputPath); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ] [ str p.Metadata.Title ] ]
 
+    type private DocsNavigationItem =
+        | DocsPage of ContentPage
+        | DocsFolder of string
+
+    let private orderingPrefix (value: string) =
+        let name = Path.GetFileNameWithoutExtension(value)
+        let result = System.Text.RegularExpressions.Regex.Match(name, @"^(?<order>\d+)")
+        if result.Success then int result.Groups.["order"].Value else Int32.MaxValue
+
+    let private sourceFolderOrder (folderPath: string) (items: ContentPage list) =
+        let depth = folderPath.Split('/').Length
+        items
+        |> List.tryPick (fun page ->
+            let outputDirectory = docsPageDirectory page
+            if outputDirectory = folderPath || outputDirectory.StartsWith(folderPath + "/", StringComparison.Ordinal) then
+                let outputDepth = outputDirectory.Split('/').Length
+                let sourceDirectory = Path.GetDirectoryName(page.FilePath).Replace('\\', '/')
+                let sourceParts = sourceDirectory.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                let sourceIndex = sourceParts.Length - outputDepth + depth - 1
+                if sourceIndex >= 0 && sourceIndex < sourceParts.Length then Some(orderingPrefix sourceParts.[sourceIndex]) else None
+            else None)
+        |> Option.defaultValue Int32.MaxValue
+
+    let private docsNavigationOrder item items =
+        match item with
+        | DocsPage page ->
+            let name = Path.GetFileNameWithoutExtension(page.FilePath)
+            if name.Equals("_index", StringComparison.OrdinalIgnoreCase)
+               || name.Equals("index", StringComparison.OrdinalIgnoreCase) then Int32.MinValue
+            else orderingPrefix name
+        | DocsFolder path -> sourceFolderOrder path items
+
+    let private docsNavigationTitle item items =
+        match item with
+        | DocsPage page -> page.Metadata.Title
+        | DocsFolder path -> docsFolderLabel path items
+
     let rec private sidebarDocsItems (rootPath: string) (folderPath: string) (items: ContentPage list) =
         let directPages =
             items
             |> List.filter (fun page -> docsPageDirectory page = folderPath)
-            |> List.sortBy (fun page -> page.Metadata.Weight, page.Metadata.Title)
 
         let childFolders =
             items
@@ -109,19 +145,17 @@ module View =
                     Some(folderPath + "/" + relative.Split('/').[0])
                 else None)
             |> List.distinct
-            |> List.sortBy (fun childPath ->
-                let childItems = items |> List.filter (fun page -> docsPageDirectory page = childPath)
-                let weight =
-                    match childItems with
-                    | [] -> Int32.MaxValue
-                    | pages -> pages |> List.map (fun page -> page.Metadata.Weight) |> List.min
-                weight, childPath)
+
+        let navigationItems =
+            (directPages |> List.map DocsPage) @ (childFolders |> List.map DocsFolder)
+            |> List.sortBy (fun item -> docsNavigationOrder item items, docsNavigationTitle item items)
 
         [
-            yield! directPages |> List.map (sidebarPageLink rootPath)
-            for childPath in childFolders do
-                yield
-                    li [ attr "data-sidebar-item" "true" ] [
+            for item in navigationItems do
+                match item with
+                | DocsPage page -> yield sidebarPageLink rootPath page
+                | DocsFolder childPath ->
+                    yield li [ attr "data-sidebar-item" "true" ] [
                         details [ _class "group"; attr "data-docs-group" childPath ] [
                             summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none font-semibold text-sm" ] [
                                 span [] [ str (docsFolderLabel childPath items) ]
@@ -168,7 +202,7 @@ module View =
         let docsGroups =
             pages
             |> List.filter (fun p -> p.OutputPath <> "index.html")
-            |> List.sortBy (fun p -> p.SectionOrder, docsSectionKey p, p.Metadata.Weight, p.Metadata.Title)
+            |> List.sortBy (fun p -> p.SectionOrder, docsSectionKey p, p.OutputPath)
             |> List.groupBy docsSectionKey
             |> List.sortBy (fun (groupKey, items) -> items |> List.map (fun page -> page.SectionOrder) |> List.min, groupKey)
 
@@ -586,6 +620,34 @@ module View =
                 """ ]
                 script [] [ rawText $"""
                     window.addEventListener('DOMContentLoaded', () => {{
+                        const normalizePagePath = (value) => {{
+                            const decoded = decodeURIComponent(value).replace(/\\/g, '/');
+                            return decoded.replace(/\/index\.html$/, '/').replace(/\/$/, '') || '/';
+                        }};
+                        const currentPagePath = normalizePagePath(window.location.pathname);
+                        const currentSidebarLink = Array.from(document.querySelectorAll('#sidebar-root a[href]'))
+                            .find(link => normalizePagePath(new URL(link.href, window.location.href).pathname) === currentPagePath);
+
+                        if (currentSidebarLink) {{
+                            currentSidebarLink.setAttribute('aria-current', 'page');
+                            currentSidebarLink.classList.add('bg-primary/10', 'text-primary', 'font-semibold');
+                            let ancestor = currentSidebarLink.closest('details');
+                            while (ancestor) {{
+                                ancestor.open = true;
+                                ancestor = ancestor.parentElement?.closest('details');
+                            }}
+
+                            requestAnimationFrame(() => {{
+                                const scroller = currentSidebarLink.closest('.overflow-y-auto');
+                                if (!scroller) return;
+                                const linkRect = currentSidebarLink.getBoundingClientRect();
+                                const scrollerRect = scroller.getBoundingClientRect();
+                                if (linkRect.top < scrollerRect.top || linkRect.bottom > scrollerRect.bottom) {{
+                                    scroller.scrollTop += linkRect.top - scrollerRect.top - (scrollerRect.height / 2) + (linkRect.height / 2);
+                                }}
+                            }});
+                        }}
+
                         const filter = document.getElementById('sidebar-filter');
                         if (filter) {{
                             const apply = () => {{
