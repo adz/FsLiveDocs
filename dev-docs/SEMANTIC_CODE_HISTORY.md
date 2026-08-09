@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed implementation plan.
+Accepted implementation plan. The current per-fence semantic formatter is a prototype to replace through the phases
+below; it is not the target extraction architecture.
 
 This document describes how FsLiveDocs can provide FsDocs-style type and documentation hovers without recompiling every historical release during each site build.
 
@@ -11,6 +12,152 @@ This document describes how FsLiveDocs can provide FsDocs-style type and documen
 Type-check F# documentation once during release extraction, persist renderer-neutral semantic data, and render that data with the latest FsLiveDocs UI whenever the current or historical documentation site is rebuilt.
 
 The browser must receive precomputed semantic tokens and tooltip content. It must not run the F# compiler. Historical site builds must not rebuild historical projects.
+
+Every rendered F# example must also be accounted for by generated documentation tests. Semantic rendering is an output
+of successful verification, not a separate best-effort pass over Markdown.
+
+## One discovery and verification pipeline
+
+FsLiveDocs currently has two disconnected paths:
+
+- `SymbolLister` discovers selected XML docstring examples and `DocTestRunner` executes them;
+- `ContentProvider` discovers Markdown fences for rendering, but generated tests never see them.
+
+Replace that split with one canonical discovery result used by tests, semantic extraction, current rendering, and
+historical artifacts:
+
+```text
+Markdown, snippets, API enrichment, and XML examples
+                         |
+                         v
+             expand and discover blocks
+                         |
+                         v
+              assign compilation units
+                         |
+                         v
+        generated tests compile or execute units
+                         |
+                         v
+       successful compiler results become semantic data
+                         |
+                         v
+             current and historical rendering
+```
+
+The implementation must never parse or expand documentation independently in the test and rendering paths. A block's
+expanded source, identity, mode, and selected project must be identical everywhere.
+
+## Separate the four relevant units
+
+Do not use “example” to mean all stages of the pipeline. Model these units explicitly:
+
+| Unit | Responsibility |
+| --- | --- |
+| `DocumentationBlock` | One authored or transcluded F# block with stable identity and display source. |
+| `CompilationUnit` | One synthetic script checked with one evaluated project configuration. |
+| `VerificationCase` | One generated test action: compile a unit or execute an explicitly runnable block. |
+| `SemanticCodeBlock` | Renderer-neutral tokens, tooltips, and diagnostics mapped back to one displayed block. |
+
+A page-scoped `CompilationUnit` normally contains several displayed blocks. An isolated block has its own compilation
+unit. Generated tests discover compilation units and executable blocks, while coverage validation confirms that every
+discovered F# block belongs to a verification case or carries an explicit exclusion.
+
+An initial discovery model should include:
+
+```fsharp
+type DocumentationBlockOrigin =
+    | MarkdownFence
+    | SourceSnippet
+    | XmlExample
+    | ApiEnrichment
+
+type DocumentationBlockMode =
+    | Page
+    | Prepare
+    | Isolated
+    | Run
+    | Transcript
+    | NoCheck of reason: string
+
+type DocumentationBlock = {
+    Id: string
+    Origin: DocumentationBlockOrigin
+    SourcePath: string
+    Ordinal: int
+    ExpandedSource: string
+    SourceHash: string
+    Mode: DocumentationBlockMode
+    Project: string option
+}
+
+type CompilationUnit = {
+    Id: string
+    ProjectPath: string
+    Prelude: string
+    Blocks: DocumentationBlock list
+}
+
+type VerificationCase =
+    | Compile of CompilationUnit
+    | Execute of DocumentationBlock
+    | ExecuteTranscript of DocumentationBlock
+```
+
+Keep runtime results and semantic compiler output outside the discovery records. Discovery must remain deterministic
+and cheap enough for generated test enumeration.
+
+## Compilation scope and execution policy
+
+Compilation scope and execution policy are independent decisions.
+
+- The default `fsharp` block participates in its page compilation unit and is compile-verified.
+- `prepare` participates in the page compilation unit but is not displayed.
+- `isolated` creates a separate compilation unit and promises that the example stands alone.
+- `run` participates in compilation and is then explicitly executed.
+- `transcript` is parsed and executed through the transcript runner.
+- `no-check` is not an example; it is intentionally displayed pseudocode and must provide a reason.
+
+Do not execute ordinary Markdown blocks automatically. Documentation may demonstrate HTTP, filesystem, process,
+hosting, timing, or concurrency operations. Compile verification is the generated test for an ordinary block. Only
+`run`, `transcript`, and the existing explicitly selected XML examples execute.
+
+Require a reason for exclusions so coverage reports can distinguish deliberate pseudocode from unfinished examples:
+
+````markdown
+```fsharp no-check reason="Abbreviated match branches"
+match error with
+| Failure _ -> ...
+```
+````
+
+Reject contradictory modes such as `prepare isolated`, `run no-check`, or `transcript prepare`.
+
+## Generated test contract
+
+`livedocs generate-tests` must generate tests over the canonical discovery result, not one broad test per project that
+only scans XML comments. The generated project should expose deterministic case names such as:
+
+```text
+docs/the-flow-type/task-async-interop.md#page
+docs/the-flow-type/task-async-interop.md#fsharp-3
+src/Axial/Flow.fs#example-FromOption
+```
+
+The generated tests may use xUnit theory data or generated facts, but test discovery must report the failing page or
+block directly. A page compile case can verify several blocks in one compiler invocation. Diagnostics must still map
+to the documentation-relative block ID and line/column.
+
+Verification coverage is a separate required assertion:
+
+- every default, preparation, isolated, and run block belongs to exactly one compilation unit;
+- every run or transcript block belongs to exactly one execution case;
+- every no-check block has a non-empty reason;
+- every XML example selected for execution belongs to exactly one execution case;
+- duplicate stable IDs fail discovery.
+
+The current Verify snapshots may remain as the approval mechanism for execution output. Compilation-only cases need no
+snapshot when they succeed; compiler diagnostics are their failure output.
 
 ## Rejected approaches
 
@@ -228,53 +375,67 @@ Support these fenced-code modes:
 
 ### Default
 
-```text
+````markdown
 ```fsharp
 let value = 42
 ```
-```
+````
 
 The block participates in the shared page checking context and is rendered with semantic tokens.
 
 ### Preparation
 
-```text
+````markdown
 ```fsharp prepare
 open Example
 let hiddenDependency = createDependency ()
 ```
-```
+````
 
 The source participates in checking but is not rendered. Preparation source affects the page checking-context hash.
 
 ### Isolated
 
-```text
+````markdown
 ```fsharp isolated
 let value = 42
 ```
-```
+````
 
 The block is checked in a separate synthetic script with the normal project references and standard page prelude. Use this when examples redeclare common names or should stand alone.
 
+### Run
+
+````markdown
+```fsharp run
+let result = calculate 42
+printfn "%d" result
+```
+````
+
+The block participates in its normal page or isolated compilation unit and is executed after compilation succeeds.
+Use `run` only when runtime behavior is part of the example's contract. Ordinary blocks are compile-verified without
+being executed.
+
 ### No-check
 
-```text
-```fsharp no-check
+````markdown
+```fsharp no-check reason="Intentionally incomplete syntax"
 let intentionallyIncomplete =
 ```
-```
+````
 
-The block does not enter semantic extraction and uses the normal syntax highlighter.
+The block does not enter semantic extraction and uses the syntax-only renderer. The reason is required and appears in
+audit output.
 
 ### Transcript
 
-```text
+````markdown
 ```fsharp transcript
 > let value = 42;;
 val value: int = 42
 ```
-```
+````
 
 The block is rendered as an FSI transcript. Prompt handling and transcript verification remain separate from semantic source formatting.
 
@@ -302,6 +463,18 @@ For multiple documented projects, establish which project context checks each pa
 - a generated aggregate script context containing all documented assembly references.
 
 Start with the aggregate reference context if it is unambiguous. Add explicit page selection before supporting projects with conflicting dependency versions.
+
+Use one documented frontmatter field for explicit selection, expressed as a documentation-root-relative or
+repository-root-relative project path:
+
+```yaml
+---
+project: src/Axial.Http/Axial.Http.fsproj
+---
+```
+
+Discovery must resolve and validate this path once, then carry the canonical project path into every compilation,
+test-generation, and semantic-extraction stage.
 
 ## FSharp.Formatting boundary
 
@@ -334,6 +507,14 @@ Rules:
 - diagnostics identify the Markdown path and block ID;
 - duplicate block IDs fail extraction;
 - an unresolved documented assembly or missing compiler configuration fails extraction.
+
+Current documentation must not silently switch to a different visual renderer when compilation fails:
+
+- `livedocs test` and production `livedocs build` fail;
+- `livedocs watch` may retain the last successful site and report mapped diagnostics in the terminal;
+- a future watch UI may render an inline diagnostic, but it must not publish recovery types as trustworthy hovers;
+- syntax-only fallback is reserved for explicit no-check/transcript modes and old history entries without a semantic
+  artifact.
 
 ## Rendering and lookup policy
 
@@ -405,6 +586,17 @@ Old history entries without semantic artifacts remain supported through syntax-o
 - compiler diagnostics map back to Markdown coordinates;
 - Unicode and multiline source mappings remain correct.
 
+### Discovery and generated verification
+
+- Markdown fences, expanded snippets, API enrichment, and XML examples enter one discovery result;
+- every discovered F# block is covered once or excluded with a reason;
+- page blocks produce one compile case and isolated blocks produce separate cases;
+- generated test names contain stable documentation-relative IDs;
+- compile-only cases never execute operational code;
+- run and transcript cases execute once and preserve existing expected-output behavior;
+- diagnostics from a page compilation unit map to the owning displayed block;
+- contradictory modes and duplicate IDs fail before compiler invocation.
+
 ### Artifact matching
 
 - matching source hashes render semantic code;
@@ -430,39 +622,57 @@ Create a small fixture release containing semantic documentation, store its API 
 
 Keep commits independently testable where possible.
 
-1. Add semantic artifact records, JSON serialization, and schema validation.
-2. Extend `HistoryEntry` with optional semantic path and checksum fields.
-3. Add stable expanded-block discovery and hashing.
-4. Add authoring-mode parsing and validation.
-5. Build page-level synthetic scripts and source maps.
-6. Convert FSharp.Formatting/FCS results into FsLiveDocs semantic records.
-7. Add release extraction output and checksum generation.
-8. Add artifact loading and block/hash validation to history builds.
-9. Render semantic tokens and structured tooltips without stored HTML.
-10. Add hover, focus, placement, copy, and accessibility behavior.
-11. Add migration, extraction, rendering, and end-to-end history tests.
-12. Document the author-facing fence modes after their behavior is stable.
+1. Add canonical block discovery after shortcode expansion, with stable IDs and source hashes.
+2. Add authoring-mode parsing, required no-check reasons, and coverage validation.
+3. Evaluate real compiler options through MSBuild and add page project selection.
+4. Build page and isolated compilation units with reliable block source maps.
+5. Expose compilation units and executable blocks as deterministic generated xUnit cases.
+6. Fold XML examples and the existing transcript/scenario runner into the same verification-case model.
+7. Make current test/build fail on uncovered blocks or unexpected compiler errors; keep watch on the last successful site.
+8. Add FsLiveDocs-owned semantic artifact records, JSON serialization, and schema validation.
+9. Convert successful FSharp.Formatting/FCS results into semantic records instead of generated HTML.
+10. Extend `HistoryEntry` with optional semantic path and checksum fields.
+11. Add release extraction, artifact loading, source/context hash checks, and historical rendering.
+12. Replace the per-fence semantic prototype with rendering from verified semantic records.
+13. Migrate FsLiveDocs' own docs, then run an Axial audit and migrate its 231 F# fences.
+14. Add end-to-end current, generated-test, watch, release, and history fixtures.
+15. Document the stable author-facing modes and remove transitional APIs.
 
-## Autonomous implementation estimate
+Do not combine discovery, MSBuild evaluation, source mapping, generated tests, artifact persistence, and migration into
+one change.
 
-For GPT-5.6-sol working without human interaction in the current repository:
+## Axial migration plan
 
-- functional end-to-end implementation: 2–4 hours;
-- production-quality implementation with migration and broad tests: 4–7 hours;
-- safe ceiling if direct FCS range mapping is required: 8–10 hours.
+Add `livedocs audit` before turning verification failures into hard build failures. Its output must classify every block
+as page, isolated, executable, transcript, excluded, or failing, for example:
 
-Allocate six uninterrupted hours as the expected autonomous execution budget and ten hours as the safe ceiling.
+```text
+PASS     docs/the-flow-type/task-async-interop.md#page
+PASS     docs/http/requests.md#fsharp-2 (isolated)
+EXCLUDED docs/http/responses-and-errors.md#fsharp-3: Abbreviated match branches
+FAIL     docs/dependencies/layers.md#fsharp-4: IOrders is not defined
+```
 
-The primary uncertainty is whether FSharp.Formatting exposes reliable snippet boundaries and structured tooltip data without losing the source ranges needed for documentation-block mapping. If it does, the work should remain near the expected budget. If not, direct FCS classification and tooltip queries will be required.
+Migrate Axial with these rules:
 
-## Autonomous decision defaults
+1. Keep progressive guide blocks page-scoped. This covers later blocks that intentionally use earlier declarations.
+2. Mark genuinely standalone examples `isolated`, especially when pages redeclare common names.
+3. Add hidden `prepare` blocks for concise domain fixtures that are part of the page's teaching context.
+4. Prefer transcluding real compiled source over duplicating large setup blocks.
+5. Replace placeholder implementations with small compiling fixtures when that improves the example.
+6. Mark irreducible pseudocode no-check with a concrete reason. Axial currently has a small minority of obvious
+   placeholder fences compared with its full guide corpus.
+7. Select platform-specific documentation projects in frontmatter before verifying browser, Node, or hosting pages.
+8. Enable hard verification only after the audit has no unexplained failures or uncovered blocks.
+
+## Implementation defaults
 
 If implemented without human interaction, use these defaults:
 
 - store semantic data in a separate versioned JSON artifact;
 - persist only FsLiveDocs-owned renderer-neutral models;
 - check page blocks together by default;
-- support `prepare`, `isolated`, `no-check`, and `transcript` modes;
+- support `prepare`, `isolated`, `run`, `no-check reason="..."`, and `transcript` modes;
 - fail release extraction on unexpected semantic errors;
 - allow syntax-only fallback only when an older manifest has no semantic artifact;
 - fail on missing blocks or hash mismatches when a semantic artifact is declared;
@@ -474,6 +684,10 @@ If implemented without human interaction, use these defaults:
 
 The feature is complete when:
 
+- generated tests discover every rendered F# block from Markdown, transclusion, API enrichment, and XML comments;
+- every block is compiled in a page or isolated unit, executed explicitly, or excluded with a reason;
+- ordinary compile verification never executes operational examples;
+- compiler diagnostics identify the authored page and block rather than only a synthetic script;
 - a release extraction produces a checksum-protected semantic artifact;
 - the artifact contains inferred local types and library XML documentation;
 - a history site can render those hovers without loading or compiling the historical project;
