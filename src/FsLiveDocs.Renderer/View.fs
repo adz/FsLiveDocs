@@ -457,11 +457,6 @@ module View =
                         pointer-events: none;
                         opacity: 0.72;
                     }
-                    .site-logo-dark { display: none; }
-                    [data-theme="dark"] .site-logo-light,
-                    [data-theme="dracula"] .site-logo-light { display: none; }
-                    [data-theme="dark"] .site-logo-dark,
-                    [data-theme="dracula"] .site-logo-dark { display: block; }
                     .not-prose pre {
                         background-color: hsl(var(--n)) !important;
                         padding: 1.5rem !important;
@@ -487,7 +482,7 @@ module View =
                                     @ (if logoDarkPath.IsSome then [ attr "data-theme-variant" "light" ] else [])
                                 yield img lightAttributes
                                 match logoDarkPath with
-                                | Some darkPath -> yield img [ _src (navigationHref darkPath); _alt siteName; attr "data-theme-variant" "dark"; _class "site-logo-dark h-14 w-auto max-w-52 object-contain" ]
+                                | Some darkPath -> yield img [ _src (navigationHref darkPath); _alt siteName; attr "data-theme-variant" "dark"; _style "display: none;"; _class "site-logo-dark h-14 w-auto max-w-52 object-contain" ]
                                 | None -> ()
                             | None ->
                                 yield div [ _class "bg-primary text-primary-content w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-xl shadow-primary/20 group-hover:rotate-12 transition-transform" ] [ str logoText ]
@@ -558,7 +553,7 @@ module View =
                 script [] [ rawText "window.addEventListener('DOMContentLoaded', (event) => { if(typeof PagefindUI !== 'undefined') new PagefindUI({ element: '#search-ui', showSubResults: true }); });" ]
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" ] []
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-fsharp.min.js" ] []
-                script [] [ rawText "const applySiteTheme = (theme) => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('theme', theme); document.querySelectorAll('[data-theme-variant]').forEach(el => { el.style.display = el.getAttribute('data-theme-variant') === theme ? '' : 'none'; }); }; window.addEventListener('DOMContentLoaded', () => applySiteTheme(document.documentElement.getAttribute('data-theme'))); document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => applySiteTheme(el.getAttribute('data-set-theme'))));" ]
+                script [] [ rawText "const applySiteTheme = (theme) => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('theme', theme); document.querySelectorAll('[data-theme-variant]').forEach(el => { el.style.display = el.getAttribute('data-theme-variant') === theme ? 'block' : 'none'; }); }; window.addEventListener('DOMContentLoaded', () => applySiteTheme(document.documentElement.getAttribute('data-theme'))); document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => applySiteTheme(el.getAttribute('data-set-theme'))));" ]
                 script [] [ rawText $"""
                     window.addEventListener('DOMContentLoaded', () => {{
                         const codeBlocks = Array.from(document.querySelectorAll('pre code'));
@@ -625,7 +620,7 @@ module View =
                             return decoded.replace(/\/index\.html$/, '/').replace(/\/$/, '') || '/';
                         }};
                         const currentPagePath = normalizePagePath(window.location.pathname);
-                        const currentSidebarLink = Array.from(document.querySelectorAll('#sidebar-root a[href]'))
+                        const currentSidebarLink = Array.from(document.querySelectorAll('#sidebar-root [data-sidebar-item="true"] a[href]'))
                             .find(link => normalizePagePath(new URL(link.href, window.location.href).pathname) === currentPagePath);
 
                         if (currentSidebarLink) {{

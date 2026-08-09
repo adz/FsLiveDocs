@@ -372,6 +372,8 @@ module SiteBuilderTests =
         Assert.Contains("data-docs-group=\"http/advanced\"", nestedPage)
         Assert.True(nestedPage.IndexOf("data-docs-group=\"http/advanced\"", StringComparison.Ordinal) < nestedPage.IndexOf(">Client</a>", StringComparison.Ordinal))
         Assert.Contains("currentSidebarLink.setAttribute('aria-current', 'page')", nestedPage)
+        Assert.Contains("#sidebar-root [data-sidebar-item=\"true\"] a[href]", nestedPage)
+        Assert.Contains("el.style.display = el.getAttribute('data-theme-variant') === theme ? 'block' : 'none'", nestedPage)
 
     [<Fact>]
     let ``build renders consumer identity and navigation`` () =
