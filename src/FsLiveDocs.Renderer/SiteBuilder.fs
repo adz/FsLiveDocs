@@ -9,6 +9,24 @@ open FsLiveDocs.Core
 /// <summary>The high-level site assembly engine.</summary>
 module SiteBuilder =
 
+    let private validateGeneratedApiLinks (apiDir: string) =
+        let hrefPattern = Regex("href=\"(?<href>[^\"]+)\"", RegexOptions.IgnoreCase)
+        let apiRoot = Path.GetFullPath(apiDir) + string Path.DirectorySeparatorChar
+
+        for pagePath in Directory.GetFiles(apiDir, "*.html", SearchOption.TopDirectoryOnly) do
+            let html = File.ReadAllText(pagePath)
+            for link in hrefPattern.Matches(html) do
+                let href = link.Groups.["href"].Value
+                if not (href.StartsWith("#", StringComparison.Ordinal))
+                   && not (href.StartsWith("../", StringComparison.Ordinal))
+                   && not (href.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                   && not (href.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                   && not (href.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) then
+                    let targetName = href.Split([| '#'; '?' |], 2).[0] |> Uri.UnescapeDataString
+                    let targetPath = Path.GetFullPath(Path.Combine(apiDir, targetName))
+                    if not (targetPath.StartsWith(apiRoot, StringComparison.Ordinal)) || not (File.Exists targetPath) then
+                        invalidOp $"Broken generated API link in {Path.GetFileName(pagePath)}: {href}"
+
     /// <summary>Shared inputs for rendering a documentation page.</summary>
     type SiteRenderContext = {
         AllPages: ContentPage list
@@ -44,6 +62,8 @@ module SiteBuilder =
     /// <param name="e">The entity to render.</param>
     /// <returns>The rendered HTML document as a string.</returns>
     let renderEntityPage (e: EntityModel) (context: SiteRenderContext) =
+        let e = Presentation.normalizeEntityReferenceLinks context.Package e
+
         let renderPackageBadges (ent: EntityModel) =
             let packageNames =
                 (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
@@ -331,6 +351,8 @@ module SiteBuilder =
         for e in Presentation.flattenEntities context.Package.Entities do
             let html = renderEntityPage e apiRenderContext
             File.WriteAllText(Path.Combine(apiDir, e.Id + ".html"), html)
+
+        validateGeneratedApiLinks apiDir
 
         // Generate api.html (Overview / API Reference index)
         let apiOverview = [

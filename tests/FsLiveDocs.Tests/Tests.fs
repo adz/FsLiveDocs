@@ -334,6 +334,69 @@ module SiteBuilderTests =
     let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None }
 
     [<Fact>]
+    let ``API summaries link compiler references to generated entity pages`` () =
+        let exitEntity = {
+            Id = "Example.Exit`2"
+            Name = "Exit<'value, 'error>"
+            Kind = EntityKind.Union
+            SummaryHtml = ""
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let deferredEntity = {
+            Id = "Example.Deferred`2"
+            Name = "Deferred<'error, 'value>"
+            Kind = EntityKind.Union
+            SummaryHtml = "A handoff containing <a href=\"/reference/example-exit-2.html\">Exit</a>."
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let package : PackageModel = { Version = "1.0"; Entities = [ exitEntity; deferredEntity ]; Scenarios = []; Packages = [] }
+        let context : SiteBuilder.SiteRenderContext = {
+            AllPages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = "../"
+        }
+
+        let html = SiteBuilder.renderEntityPage deferredEntity context
+
+        Assert.Contains("href=\"Example.Exit`2.html\"", html)
+        Assert.DoesNotContain("/reference/", html)
+
+    [<Fact>]
+    let ``build rejects missing generated API page links`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let entity = {
+            Id = "Example.Broken"
+            Name = "Broken"
+            Kind = EntityKind.Type
+            SummaryHtml = "See <a href=\"Example.Missing.html\">Missing</a>."
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let package : PackageModel = { Version = "1.0"; Entities = [ entity ]; Scenarios = []; Packages = [] }
+
+        let error =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                SiteBuilder.build {
+                    Pages = []
+                    Package = package
+                    Config = defaultSiteConfig
+                    Versions = []
+                    Theme = "light"
+                    RootPath = ""
+                    OutputDir = outputDir
+                })
+
+        Assert.Contains("Broken generated API link", error.Message)
+
+    [<Fact>]
     let ``generateLlmsTxt includes the expected heading`` () =
         let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
         let summary = SiteBuilder.generateLlmsTxt package
