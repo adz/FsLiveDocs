@@ -336,6 +336,8 @@ module SiteBuilderTests =
             [
                 { Metadata = metadata "Home" 0; ContentHtml = "<h1>Consumer home</h1>"; FilePath = "docs/index.md"; OutputPath = "index.html"; SectionOrder = Int32.MaxValue }
                 { Metadata = metadata "Client" 1; ContentHtml = "<h1>Client</h1>"; FilePath = "docs/01-http/client.md"; OutputPath = "http/client.html"; SectionOrder = 1 }
+                { Metadata = metadata "Advanced" 2; ContentHtml = "<h1>Advanced</h1>"; FilePath = "docs/01-http/advanced/_index.md"; OutputPath = "http/advanced/index.html"; SectionOrder = 1 }
+                { Metadata = metadata "Retries" 3; ContentHtml = "<h1>Retries</h1>"; FilePath = "docs/01-http/advanced/retries.md"; OutputPath = "http/advanced/retries.html"; SectionOrder = 1 }
             ]
         let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
 
@@ -355,6 +357,7 @@ module SiteBuilderTests =
         Assert.DoesNotContain("Verified documentation for the F# ecosystem", homepage)
         Assert.Contains("href=\"../index.html\"", nestedPage)
         Assert.DoesNotContain("class=\"group\" open=", nestedPage)
+        Assert.Contains("data-docs-group=\"http/advanced\"", nestedPage)
 
     [<Fact>]
     let ``build renders consumer identity and navigation`` () =

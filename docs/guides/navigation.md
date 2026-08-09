@@ -15,7 +15,9 @@ FsLiveDocs groups the left sidebar automatically from the `docs/` folder structu
 3. Pages in `docs/api/` appear in the API Docs section.
 4. Generated API reference pages appear in the API Reference section.
 
-Within each folder-based group, pages are sorted by `weight` and then by title.
+Subfolders become nested, collapsible groups at any depth. A subfolder's `_index.md` supplies its displayed title;
+otherwise FsLiveDocs derives the title from the folder name. Each group starts closed. Within each folder, direct
+pages are sorted by `weight` and then by title, followed by its child folders.
 
 ## Why this matters
 

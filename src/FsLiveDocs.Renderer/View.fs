@@ -67,17 +67,70 @@ module View =
         else
             directory.Replace('\\', '/').TrimStart('/').Split('/').[0]
 
-    let private docsSectionLabel (groupKey: string) (items: ContentPage list) =
+    let private docsPageDirectory (page: ContentPage) =
+        let directory = Path.GetDirectoryName(page.OutputPath)
+        if String.IsNullOrWhiteSpace directory then ""
+        else directory.Replace('\\', '/').Trim('/')
+
+    let private titleFromPathSegment (path: string) =
+        path.Split('/')
+        |> Array.last
+        |> fun segment -> segment.Split('-')
+        |> Array.map (fun part -> part.Substring(0, 1).ToUpperInvariant() + part.Substring(1))
+        |> String.concat " "
+
+    let private docsFolderLabel (folderPath: string) (items: ContentPage list) =
         items
-        |> List.tryFind (fun page -> Path.GetFileName(page.FilePath).Equals("_index.md", StringComparison.OrdinalIgnoreCase))
+        |> List.tryFind (fun page ->
+            docsPageDirectory page = folderPath
+            && Path.GetFileName(page.FilePath).Equals("_index.md", StringComparison.OrdinalIgnoreCase))
         |> Option.map (fun page -> page.Metadata.Title)
-        |> Option.defaultWith (fun () ->
-            groupKey.Split('-')
-            |> Array.map (fun part -> part.Substring(0, 1).ToUpperInvariant() + part.Substring(1))
-            |> String.concat " ")
+        |> Option.defaultWith (fun () -> titleFromPathSegment folderPath)
+
+    let private docsSectionLabel (groupKey: string) (items: ContentPage list) =
+        docsFolderLabel groupKey items
 
     let sidebarPageLink (rootPath: string) (p: ContentPage) =
         li [ attr "data-sidebar-item" "true" ] [ a [ _href (Url.resolve rootPath p.OutputPath); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ] [ str p.Metadata.Title ] ]
+
+    let rec private sidebarDocsItems (rootPath: string) (folderPath: string) (items: ContentPage list) =
+        let directPages =
+            items
+            |> List.filter (fun page -> docsPageDirectory page = folderPath)
+            |> List.sortBy (fun page -> page.Metadata.Weight, page.Metadata.Title)
+
+        let childFolders =
+            items
+            |> List.choose (fun page ->
+                let directory = docsPageDirectory page
+                let prefix = folderPath + "/"
+                if directory.StartsWith(prefix, StringComparison.Ordinal) then
+                    let relative = directory.Substring(prefix.Length)
+                    Some(folderPath + "/" + relative.Split('/').[0])
+                else None)
+            |> List.distinct
+            |> List.sortBy (fun childPath ->
+                let childItems = items |> List.filter (fun page -> docsPageDirectory page = childPath)
+                let weight =
+                    match childItems with
+                    | [] -> Int32.MaxValue
+                    | pages -> pages |> List.map (fun page -> page.Metadata.Weight) |> List.min
+                weight, childPath)
+
+        [
+            yield! directPages |> List.map (sidebarPageLink rootPath)
+            for childPath in childFolders do
+                yield
+                    li [ attr "data-sidebar-item" "true" ] [
+                        details [ _class "group"; attr "data-docs-group" childPath ] [
+                            summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none font-semibold text-sm" ] [
+                                span [] [ str (docsFolderLabel childPath items) ]
+                                i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
+                            ]
+                            ul [ _class "menu menu-sm p-0 mt-1 ml-2 border-l border-base-300" ] (sidebarDocsItems rootPath childPath items)
+                        ]
+                    ]
+        ]
 
     let rec sidebarEntityLink (rootPath: string) (e: EntityModel) =
         li [ attr "data-sidebar-item" "true" ] [
@@ -154,7 +207,7 @@ module View =
                                         span [] [ str (docsSectionLabel groupKey items) ]
                                         i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
                                     ]
-                                    ul [ _class "menu menu-sm p-0 mt-2 ml-2 border-l border-base-300" ] (items |> List.map (sidebarPageLink rootPath))
+                                    ul [ _class "menu menu-sm p-0 mt-2 ml-2 border-l border-base-300" ] (sidebarDocsItems rootPath groupKey items)
                                 ]
                             ]
                     )
