@@ -358,7 +358,7 @@ module SiteBuilder =
         let apiOverview = [
             View.h1WithAnchor "api-reference" "API Reference" "text-5xl font-black mb-12 tracking-tighter"
             div [ _class "flex flex-col gap-12 not-prose" ] (
-                let card e =
+                let card (e: EntityModel) =
                     a [ _href (context.RootPath + "api/" + e.Id + ".html"); _class "card bg-base-100 border border-base-300 p-5 hover:shadow-xl hover:border-primary transition-all group" ] [
                         div [ _class "flex justify-between items-center" ] [
                             h3 [ _class "text-lg font-bold group-hover:text-primary transition-colors" ] [ str e.Name ]

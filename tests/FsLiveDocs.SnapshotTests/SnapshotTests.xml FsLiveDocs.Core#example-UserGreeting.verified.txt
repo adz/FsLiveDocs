@@ -1,0 +1,10 @@
+{
+  Name: UserGreeting,
+  Scenario: {},
+  Source:
+> FsLiveDocs.Core.DocScenarioSamples.greet();;
+val it: string = "Hello Ada",
+  ExpectedOutput: {},
+  ActualOutput: val it: string = "Hello Ada",
+  Status: {}
+}

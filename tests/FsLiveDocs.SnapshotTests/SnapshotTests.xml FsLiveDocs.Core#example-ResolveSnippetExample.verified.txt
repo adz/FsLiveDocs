@@ -1,0 +1,20 @@
+{
+  Name: ResolveSnippetExample,
+  Source:
+> let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
+val package: PackageModel = { Version = "1.0"
+  Entities = []
+  Scenarios = []
+  Packages = [] }
+
+> ContentProvider.resolveSnippets "Hello" "." package "";;
+val it: string = "Hello",
+  ExpectedOutput: {},
+  ActualOutput:
+val package: PackageModel = { Version = "1.0"
+  Entities = []
+  Scenarios = []
+  Packages = [] }
+val it: string = "Hello",
+  Status: {}
+}

@@ -2,12 +2,18 @@
 
 FsLiveDocs is a "verified documentation" engine for F#. It treats your documentation as a first-class citizen of your codebase, ensuring every example compiles and runs exactly as shown.
 
+Start with the short tutorial, then use the [complete consumer deep reference](docs/deep-reference.md) for a copyable
+repository layout covering setup, every code-block contract, snippets, XML examples, generated tests, configuration,
+CI, releases, semantic artifacts, and history builds.
+
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
 [![Target](https://img.shields.io/badge/.NET-10.0-blue)](#)
 
 ## Key Features
 
 - **Verified Docstrings**: Code in `/// <example>` tags is extracted and run against your actual project.
+- **Verified Guide Code**: Expanded F# fences have stable identities and explicit page, isolated, run, transcript, or exclusion contracts.
+- **Semantic Hovers**: Compiler-derived types and XML documentation are generated at build time; the browser never compiles F#.
 - **Snippet Transclusion**: Use `{{< snippet id="Name" >}}` to pull live code from `.fs` files.
 - **Semantic Cross-References**: Link to API members using `xref:M:Namespace.Type.Method`.
 - **Version History**: Rebuild complete historical sites from checksum-verified API models and tagged documentation trees.
@@ -17,21 +23,33 @@ FsLiveDocs is a "verified documentation" engine for F#. It treats your documenta
 
 ## 🛠 Installation & Usage
 
-1. **Setup Environment**:
-   Ensure you have the .NET 10 SDK installed. We recommend using `mise`.
+1. **Setup Environment and pin the tool**:
+   Ensure you have the .NET 10 SDK and Node.js installed. We recommend using `mise`.
    ```bash
    mise use dotnet@10.0
+   mise use node@22
+   dotnet new tool-manifest
+   dotnet tool install FsLiveDocs
+   dotnet tool restore
    ```
+
+   Invoke a manifest-installed tool as `dotnet livedocs`; the shorter `livedocs` used below is equivalent when the
+   tool is installed globally or on `PATH`.
 
 2. **Initialize**:
    ```bash
    livedocs init
    ```
 
-3. **Verify Examples**:
+3. **Audit and verify examples**:
    ```bash
+   livedocs audit path/to/your/project.fsproj
    livedocs test path/to/your/project.fsproj
    ```
+
+   The same compiler-backed audit is enforced by `test` and production `build`. Ordinary `fsharp` guide blocks
+   compile in page scope but do not run. Add `run` only for intentional execution,
+   `isolated` for standalone blocks, `prepare` for hidden setup, or `no-check reason="…"` for deliberate pseudocode.
 
 4. **Build Static Site**:
    ```bash

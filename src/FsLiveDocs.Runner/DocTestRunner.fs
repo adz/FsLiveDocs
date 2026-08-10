@@ -19,11 +19,44 @@ module DocTestRunner =
         getAllExamples entities
         |> List.filter (fun ex -> ex.IsSnapshotTest)
 
+    /// <summary>Returns stable names for all explicitly selected XML examples.</summary>
+    let snapshotExampleNames (package: PackageModel) =
+        getSnapshotExamples package.Entities |> List.map _.Name
+
     let private statusOf (expected: string option) (actual: string) =
         match expected with
         | None -> ExampleStatus.FirstCut
         | Some expectedText when String.Equals(actual, expectedText.Trim(), StringComparison.Ordinal) -> ExampleStatus.Verified
         | Some _ -> ExampleStatus.Mismatch
+
+    /// <summary>Runs one named XML example so generated test discovery identifies it directly.</summary>
+    let collectSnapshotByName (package: PackageModel) (projectPath: string) (references: string list) name = async {
+        let example =
+            getSnapshotExamples package.Entities
+            |> List.tryFind (fun example -> example.Name = name)
+            |> Option.defaultWith (fun () -> invalidOp $"Snapshot-selected XML example no longer exists: {name}. Regenerate tests.")
+        let project = ProjectResolver.resolve projectPath
+        if String.IsNullOrWhiteSpace project.AssemblyPath || not (File.Exists project.AssemblyPath) then
+            invalidOp $"Could not resolve built assembly for {project.ProjectPath}"
+        let scenario =
+            example.Scenario
+            |> Option.map (fun scenarioName ->
+                package.Scenarios
+                |> List.tryFind (fun scenario -> scenario.Name = scenarioName)
+                |> Option.defaultWith (fun () -> invalidOp $"XML example {name} references missing scenario {scenarioName}."))
+        let output, expected, source =
+            FsiTranscriptRunner.runExample
+                { Project = project; References = references; Scenario = scenario; Example = example }
+        let actual = output.Trim()
+        return {
+            Name = example.Name
+            Scenario = example.Scenario
+            Source = source
+            ExpectedOutput = expected
+            ActualOutput = actual
+            Status = statusOf expected actual
+        }
+    }
 
     /// <summary>Runs snapshot-selected examples and returns structured results for a generated Verify project.</summary>
     /// <param name="package">The package model containing examples and scenarios.</param>

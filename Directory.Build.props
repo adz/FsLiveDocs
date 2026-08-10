@@ -7,7 +7,7 @@
     <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
-  <ItemGroup>
+  <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.fsproj' and '$(MSBuildProjectName)' != 'FsLiveDocs.SnapshotTests'">
     <PackageReference Include="FSharp.Core" Version="10.1.201" />
   </ItemGroup>
 </Project>

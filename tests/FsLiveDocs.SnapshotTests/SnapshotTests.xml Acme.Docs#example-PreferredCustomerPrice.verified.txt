@@ -1,0 +1,10 @@
+{
+  Name: PreferredCustomerPrice,
+  Scenario: {},
+  Source:
+> Acme.Docs.CustomerContext.price 100M;;
+val it: decimal = 90.0M,
+  ExpectedOutput: {},
+  ActualOutput: val it: decimal = 90.0M,
+  Status: {}
+}

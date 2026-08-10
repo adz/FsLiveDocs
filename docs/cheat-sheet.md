@@ -21,6 +21,7 @@ type: reference
 | `livedocs ci` | Generate GitHub Actions workflow. |
 | `livedocs generate-tests <fsproj...>` | Generate a Verify-based snapshot test project. |
 | `livedocs test <fsproj>` | Run the legacy direct docstring verifier. |
+| `livedocs audit <fsproj...>` | MSBuild-evaluate and compile all expanded F# blocks; report mapped modes, exclusions, and failures. |
 | `livedocs build <fsproj>` | Generate the static documentation site. |
 | `livedocs watch <fsproj>` | Start dev server with live rebuilds. |
 | `livedocs theme <name>` | Set DaisyUI theme (e.g., `dark`, `cupcake`). |
@@ -45,6 +46,17 @@ let add x y = x + y
 | `{{< snippet id="X" >}}` | Pull code from source file marked with `<snippet:X>`. |
 | `{{< example id="X" >}}` | Pull verified example with name `X`. |
 | `xref:M:Namespace.Func` | Create a semantic link to an API member. |
+
+## F# Fence Contracts
+
+| Fence info | Meaning |
+| :--- | :--- |
+| `fsharp` | Compile in the shared page context; do not execute. |
+| `fsharp prepare` | Hidden setup for later page blocks. |
+| `fsharp isolated` | Compile alone. |
+| `fsharp run` | Compile, then explicitly execute. |
+| `fsharp transcript` | Verify an FSI transcript. |
+| `fsharp no-check reason="…"` | Display deliberate pseudocode with an audit reason. |
 
 ## 🎨 DaisyUI Themes
 

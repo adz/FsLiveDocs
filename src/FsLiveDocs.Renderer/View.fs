@@ -408,7 +408,7 @@ module View =
                 |> Option.map (fun href -> link [ _rel "stylesheet"; _href (navigationHref href) ])
                 |> Option.defaultValue emptyText
                 script [] [ rawText $"const allowedThemes = [{themesJavaScript}]; const storedTheme = localStorage.getItem('theme'); const theme = allowedThemes.includes(storedTheme) ? storedTheme : allowedThemes[0]; document.documentElement.setAttribute('data-theme', theme); if (storedTheme !== theme) localStorage.setItem('theme', theme);" ]
-                style [] [ str """
+                style [] [ rawText """
                     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Fira+Code:wght@400;700&display=swap');
                     body { font-family: 'Inter', sans-serif; }
                     .drawer-side::-webkit-scrollbar { width: 4px; }
@@ -437,20 +437,55 @@ module View =
                         outline: 2px solid hsl(var(--p)) !important;
                         outline-offset: 1px !important;
                     }
-                    .code-frame {
+                    pre.code-frame {
                         position: relative;
+                        /* GitHub Primer light syntax palette. */
+                        --livedocs-code-background: #f6f8fa;
+                        --livedocs-code-foreground: #24292f;
+                        --livedocs-code-keyword: #cf222e;
+                        --livedocs-code-string: #0a3069;
+                        --livedocs-code-number: #0550ae;
+                        --livedocs-code-comment: #6e7781;
+                        --livedocs-code-type: #953800;
+                        --livedocs-code-function: #8250df;
+                        --livedocs-code-property: #0550ae;
+                        --livedocs-code-union-case: #116329;
+                        --livedocs-code-operator: #cf222e;
+                        margin: 0 !important;
+                        padding: 1.5rem !important;
+                        overflow-x: auto;
+                        border-radius: 0.3em;
+                        background: var(--livedocs-code-background) !important;
+                        color: var(--livedocs-code-foreground) !important;
+                        font: 1em/1.5 'Fira Code', monospace !important;
+                        text-shadow: none !important;
                     }
-                    .code-frame code {
+                    html[data-theme="dark"] pre.code-frame {
+                        /* GitHub Primer dark syntax palette. */
+                        --livedocs-code-background: #161b22;
+                        --livedocs-code-foreground: #c9d1d9;
+                        --livedocs-code-keyword: #ff7b72;
+                        --livedocs-code-string: #a5d6ff;
+                        --livedocs-code-number: #79c0ff;
+                        --livedocs-code-comment: #8b949e;
+                        --livedocs-code-type: #ffa657;
+                        --livedocs-code-function: #d2a8ff;
+                        --livedocs-code-property: #79c0ff;
+                        --livedocs-code-union-case: #7ee787;
+                        --livedocs-code-operator: #ff7b72;
+                    }
+                    pre.code-frame code {
                         white-space: pre !important;
                         word-break: normal !important;
                         overflow-wrap: normal !important;
                         display: block;
-                    }
-                    .code-frame .code-copy-button {
-                        position: absolute;
-                        top: 0.5rem;
-                        right: 0.5rem;
-                        z-index: 2;
+                        padding: 0 !important;
+                        border: 0 !important;
+                        border-radius: 0 !important;
+                        background: transparent !important;
+                        color: inherit !important;
+                        font: inherit !important;
+                        text-shadow: none !important;
                     }
                     .prompt-unselectable {
                         user-select: none;
@@ -476,11 +511,29 @@ module View =
                     table.pre .n { color: #f78c6c; }
                     table.pre .c { color: #7f8c98; font-style: italic; }
                     table.pre .m, table.pre .rt, table.pre .fn { color: #82aaff; }
-                    table.pre [data-fsdocs-tip] {
+                    table.pre [data-fsdocs-tip], .livedocs-semantic-code [data-fsdocs-tip] {
                         cursor: help;
                         text-decoration: underline dotted color-mix(in srgb, currentColor 45%, transparent);
                         text-underline-offset: 0.2em;
                     }
+                    .livedocs-code { margin: 1.7142857em -1.5rem; }
+                    @media (min-width: 768px) {
+                        .livedocs-code { margin-inline: -2rem; }
+                        .livedocs-code pre.code-frame { padding-inline: 2rem !important; }
+                    }
+                    .livedocs-code .tok-plain, .livedocs-code .tok-identifier,
+                    .livedocs-code .tok-punctuation, .livedocs-code .tok-preprocessor { color: var(--livedocs-code-foreground); }
+                    .livedocs-code .tok-keyword { color: var(--livedocs-code-keyword); }
+                    .livedocs-code .tok-string { color: var(--livedocs-code-string); }
+                    .livedocs-code .tok-number { color: var(--livedocs-code-number); }
+                    .livedocs-code .tok-comment { color: var(--livedocs-code-comment); font-style: italic; }
+                    .livedocs-code .tok-type, .livedocs-code .tok-module,
+                    .livedocs-code .tok-namespace { color: var(--livedocs-code-type); }
+                    .livedocs-code .tok-function { color: var(--livedocs-code-function); }
+                    .livedocs-code .tok-property { color: var(--livedocs-code-property); }
+                    .livedocs-code .tok-union-case,
+                    .livedocs-code .tok-active-pattern { color: var(--livedocs-code-union-case); }
+                    .livedocs-code .tok-operator { color: var(--livedocs-code-operator); }
                     .livedocs-tooltips { display: contents; }
                     .fsdocs-tip {
                         position: fixed;
@@ -510,11 +563,6 @@ module View =
                     .fsdocs-tip-summary { line-height: 1.5; }
                     .fsdocs-tip-detail { margin-top: 0.4rem; line-height: 1.45; color: #dbeafe; }
                     .fsdocs-tip-detail strong { color: #f8fafc; }
-                    .not-prose pre {
-                        background-color: hsl(var(--n)) !important;
-                        padding: 1.5rem !important;
-                        padding-top: 3.75rem !important;
-                    }
                 """ ]
                 title [] [ str $"{pageTitle} - {siteName}" ]
             ]
@@ -604,6 +652,7 @@ module View =
 
                 script [ _src (Url.resolve safeRoot "pagefind/pagefind-ui.js") ] []
                 script [] [ rawText "window.addEventListener('DOMContentLoaded', (event) => { if(typeof PagefindUI !== 'undefined') new PagefindUI({ element: '#search-ui', showSubResults: true }); });" ]
+                script [] [ rawText "window.Prism = window.Prism || {}; window.Prism.manual = true;" ]
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" ] []
                 script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-fsharp.min.js" ] []
                 script [] [ rawText "const applySiteTheme = (theme) => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('theme', theme); document.querySelectorAll('[data-theme-variant]').forEach(el => { el.style.display = el.getAttribute('data-theme-variant') === theme ? 'block' : 'none'; }); }; window.addEventListener('DOMContentLoaded', () => applySiteTheme(document.documentElement.getAttribute('data-theme'))); document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => applySiteTheme(el.getAttribute('data-set-theme'))));" ]
@@ -657,44 +706,24 @@ module View =
 
                             const raw = code.textContent.replace(/\r\n/g, '\n');
                             const lines = raw.split('\n');
-                            const copyText = raw.replace(/^(\s*)(iex\(\d+\)>|iex>|fsi>|\.{3}>|>)\s?/gm, '$1');
+                            const isManagedFSharp = code.closest('.livedocs-code') !== null;
+                            if (!isManagedFSharp) {{
+                                code.innerHTML = lines.map(line => {{
+                                    const match = line.match(/^(\s*)(iex\(\d+\)>|iex>|fsi>|\.{3}>|>)(\s?)(.*)$/);
+                                    if (!match) return escapeHtml(line);
+                                    const [, indent, prompt, spacer, rest] = match;
+                                    return `${{escapeHtml(indent)}}<span class="prompt-unselectable">${{escapeHtml(prompt + spacer)}}</span>${{escapeHtml(rest)}}`;
+                                }}).join('\n');
 
-                            code.innerHTML = lines.map(line => {{
-                                const match = line.match(/^(\s*)(iex\(\d+\)>|iex>|fsi>|\.{3}>|>)(\s?)(.*)$/);
-                                if (!match) return escapeHtml(line);
-                                const [, indent, prompt, spacer, rest] = match;
-                                return `${{escapeHtml(indent)}}<span class="prompt-unselectable">${{escapeHtml(prompt + spacer)}}</span>${{escapeHtml(rest)}}`;
-                            }}).join('\n');
+                                if (window.Prism && typeof window.Prism.highlightElement === 'function') {{
+                                    window.Prism.highlightElement(code);
+                                }}
 
-                            code.dataset.copyText = copyText;
-
-                            if (window.Prism && typeof window.Prism.highlightElement === 'function') {{
-                                window.Prism.highlightElement(code);
+                                // Prism preserves the code structure, but explicit breaks avoid whitespace collapsing
+                                // in browsers that flatten newline text nodes inside enhanced code frames.
+                                code.innerHTML = code.innerHTML.replace(/\n/g, '<br>');
                             }}
 
-                            // Prism preserves the code structure, but explicit breaks avoid whitespace collapsing
-                            // in browsers that flatten newline text nodes inside enhanced code frames.
-                            code.innerHTML = code.innerHTML.replace(/\n/g, '<br>');
-
-                            const button = document.createElement('button');
-                            button.type = 'button';
-                            button.className = 'code-copy-button btn btn-xs btn-outline';
-                            button.innerHTML = '<i class="bi bi-clipboard"></i><span class="ml-1">Copy</span>';
-                            button.addEventListener('click', async () => {{
-                                try {{
-                                    await navigator.clipboard.writeText(code.dataset.copyText || raw);
-                                    button.innerHTML = '<i class="bi bi-check2"></i><span class="ml-1">Copied</span>';
-                                    setTimeout(() => {{
-                                        button.innerHTML = '<i class="bi bi-clipboard"></i><span class="ml-1">Copy</span>';
-                                    }}, 1200);
-                                }} catch {{
-                                    button.innerHTML = '<i class="bi bi-x"></i><span class="ml-1">Failed</span>';
-                                    setTimeout(() => {{
-                                        button.innerHTML = '<i class="bi bi-clipboard"></i><span class="ml-1">Copy</span>';
-                                    }}, 1200);
-                                }}
-                            }});
-                            pre.appendChild(button);
                         }});
                     }});
                 """ ]

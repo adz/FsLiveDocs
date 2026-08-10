@@ -146,11 +146,48 @@ type PackageModel = {
 /// <summary>Versioned, schema-tagged API model stored as a release artifact.</summary>
 type ApiModelArtifact = { SchemaVersion: int; Package: PackageModel }
 
+/// Renderer-neutral semantic classification persisted for a documentation release.
+type SemanticTokenKind =
+    | PlainText | Keyword | Identifier | TypeName | Function | Property | UnionCase
+    | ActivePatternCase | Module | Namespace | Operator | Number | String | Comment
+    | Punctuation | Preprocessor
+
+type SemanticToken = { Text: string; Kind: SemanticTokenKind; Tooltip: int option }
+type SemanticLine = { Tokens: SemanticToken list }
+type SemanticTooltipSection = { Heading: string option; Content: string }
+type SemanticTooltip = {
+    Signature: string option
+    Documentation: string option
+    Sections: SemanticTooltipSection list
+    Footer: string option
+}
+type SemanticDiagnosticSeverity = | Warning | Error
+type SemanticDiagnostic = {
+    Severity: SemanticDiagnosticSeverity
+    Message: string
+    StartLine: int
+    StartColumn: int
+    EndLine: int
+    EndColumn: int
+}
+type SemanticCodeBlock = {
+    Id: string
+    SourceHash: string
+    ContextHash: string
+    Lines: SemanticLine list
+    Tooltips: SemanticTooltip list
+    Diagnostics: SemanticDiagnostic list
+}
+type SemanticPage = { SourcePath: string; Blocks: SemanticCodeBlock list }
+type SemanticDocumentationArtifact = { SchemaVersion: int; Prelude: string; Pages: SemanticPage list }
+
 /// <summary>One immutable API model and tagged documentation source in a history build.</summary>
 type HistoryEntry = {
     Version: string
     ModelPath: string
     ModelSha256: string
+    SemanticPath: string option
+    SemanticSha256: string option
     DocsPath: string
 }
 
@@ -226,6 +263,8 @@ type SiteConfig = {
     Themes: string list option
     /// <summary>Optional top-level navigation. Defaults to Home and API.</summary>
     Navigation: NavigationItem list option
+    /// <summary>Repository-owned F# setup compiled and shown on every page containing checked F#.</summary>
+    FSharpPrelude: string option
 }
 
 /// <summary>Resolved project paths and namespace information used by the doc-test runner.</summary>
@@ -245,6 +284,12 @@ type ContentMetadata = {
     Title: string
     /// <summary>Optional category or type identifier.</summary>
     Type: string option
+    /// <summary>Optional documentation project used to compile code blocks on this page.</summary>
+    Project: string option
+    /// <summary>Optional target framework used to compile code blocks on this page.</summary>
+    TargetFramework: string option
+    /// <summary>Optional runtime/compiler platform described by this page, such as fable.</summary>
+    Platform: string option
 }
 
 /// <summary>A processed documentation page.</summary>
@@ -312,6 +357,9 @@ type FSharpUnionConverter() =
             let cases = Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(objectType)
             match cases |> Array.tryFind (fun c -> c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) with
             | Some case -> Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, [||])
+            | None when objectType = typeof<SemanticTokenKind> ->
+                let plainText = cases |> Array.find (fun case -> case.Name = nameof PlainText)
+                Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(plainText, [||])
             | None -> failwithf "Unknown union case %s for type %s" name objectType.Name
         else
             failwithf "Expected string when reading union, got %O" reader.TokenType

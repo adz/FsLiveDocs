@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <PackageId>FsLiveDocs.Abstractions</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>FsLiveDocs contributors</Authors>
+    <Description>Lightweight documentation-test attributes for FsLiveDocs consumers.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/fsprojects/FsLiveDocs</RepositoryUrl>
+  </PropertyGroup>
+</Project>

@@ -11,7 +11,7 @@ You can pull live code directly from your source files into your documentation. 
 
 Mark your code with snippet tags:
 
-```fsharp
+```fsharp isolated
 // <snippet:ProjectStructure>
 type SourceLink = {
     File: string
@@ -28,4 +28,4 @@ Then reference it in your markdown docs:
 
 Here it's actually pulling from the snippet: xref:T:FsLiveDocs.Core.SourceLink
 
-{{< snippet id="ProjectStructure" >}}
+{{< snippet id="ProjectStructure" mode="isolated" >}}

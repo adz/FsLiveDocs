@@ -1,0 +1,26 @@
+{
+  Name: MapTranscript,
+  Source:
+> let m = Map [("a", "1")];;
+val m: Map<string,string> = map [("a", "1")]
+
+> m |> Map.tryFind "b";;
+val it: string option = None
+
+> m |> Map.tryFind "a";;
+val it: string option = Some "1"
+
+> let updatedA = m |> Map.add "b" "2";;
+val updatedA: Map<string,string> = map [("a", "1"); ("b", "2")]
+
+> updatedA |> Map.tryFind "b";;
+val it: string option = Some "2",
+  ExpectedOutput: {},
+  ActualOutput:
+val m: Map<string,string> = map [("a", "1")]
+val it: string option = None
+val it: string option = Some "1"
+val updatedA: Map<string,string> = map [("a", "1"); ("b", "2")]
+val it: string option = Some "2",
+  Status: {}
+}

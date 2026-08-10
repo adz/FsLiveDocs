@@ -1,0 +1,9 @@
+{
+  Name: CalculateTotal,
+  Source:
+> Acme.Docs.Order.create 7 20M |> Acme.Docs.Order.total 0.1M;;
+val it: decimal = 22.0M,
+  ExpectedOutput: {},
+  ActualOutput: val it: decimal = 22.0M,
+  Status: {}
+}

@@ -17,6 +17,16 @@ open System.Text.Json
 /// </example>
 module SymbolLister =
 
+    let private ancestors directory =
+        let rec loop current =
+            seq {
+                if not (String.IsNullOrWhiteSpace current) then
+                    yield current
+                    let parent = Directory.GetParent(current)
+                    if not (isNull parent) then yield! loop parent.FullName
+            }
+        loop directory
+
     let private rawXml (comment: ApiDocComment) =
         match comment.Xml with
         | Some xml -> xml.ToString(SaveOptions.DisableFormatting)
@@ -164,7 +174,11 @@ module SymbolLister =
     let private getPackageReferenceDirectories (projectPath: string) =
         let projectDir = Path.GetDirectoryName(projectPath)
         let projectName = Path.GetFileNameWithoutExtension(projectPath)
-        let sharedAssets = Path.GetFullPath(Path.Combine(projectDir, "../../artifacts/obj", projectName, "project.assets.json"))
+        let sharedAssets =
+            ancestors projectDir
+            |> Seq.map (fun root -> Path.Combine(root, "artifacts", "obj", projectName, "project.assets.json"))
+            |> Seq.tryFind File.Exists
+            |> Option.defaultValue ""
         let localAssets = Path.Combine(projectDir, "obj", "project.assets.json")
 
         [ sharedAssets; localAssets ]
@@ -301,22 +315,23 @@ module SymbolLister =
         let assemblyName = getAssemblyName projectPath
         let projDir = Path.GetDirectoryName(projectPath)
         
-        let sharedArtifacts = Path.GetFullPath(Path.Combine(projDir, "../../artifacts/bin"))
-        let searchPaths = [
-            Path.Combine(sharedArtifacts, projName)
-            Path.Combine(projDir, "bin")
-            sharedArtifacts
-        ]
+        let searchPaths =
+            [ yield Path.Combine(projDir, "bin")
+              for root in ancestors projDir do
+                  yield Path.Combine(root, "artifacts", "bin", projName)
+                  yield Path.Combine(root, "artifacts", "bin") ]
+            |> List.distinct
 
         let dllPath = 
             searchPaths 
             |> List.filter Directory.Exists
-            |> List.tryPick (fun path ->
+            |> List.collect (fun path ->
                 Directory.GetFiles(path, $"{assemblyName}.dll", SearchOption.AllDirectories)
                 |> Array.filter (fun dll -> File.Exists(Path.ChangeExtension(dll, ".xml")))
-                |> Array.sortByDescending File.GetLastWriteTimeUtc
-                |> Array.tryHead
-            )
+                |> Array.toList)
+            |> List.distinct
+            |> List.sortByDescending File.GetLastWriteTimeUtc
+            |> List.tryHead
             |> Option.defaultValue ""
 
         if String.IsNullOrEmpty dllPath || not (File.Exists dllPath) then

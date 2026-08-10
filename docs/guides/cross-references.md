@@ -75,7 +75,7 @@ The exact identifier must match the symbol ID FsLiveDocs extracted from the comp
 
 The implementation lives in the core Markdown resolver:
 
-{{< snippet id="XrefResolution" >}}
+{{< snippet id="XrefResolution" mode="no-check" reason="Excerpt depends on surrounding resolver locals" >}}
 
 This is the important part of the behavior:
 

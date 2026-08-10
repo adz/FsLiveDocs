@@ -21,6 +21,6 @@ The `SiteBuilder` uses **Giraffe.ViewEngine** for fast, type-safe HTML generatio
 
 You can control the look and feel of your site by passing a `theme` parameter (e.g., `emerald`, `dark`, `retro`).
 
-```fsharp
+```fsharp no-check reason="Abbreviated invocation; package, pages, and versions come from the build context"
 SiteBuilder.build package pages versions "emerald" "" "output"
 ```

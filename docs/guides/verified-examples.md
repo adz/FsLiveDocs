@@ -75,6 +75,10 @@ The scenario function is different. FsLiveDocs discovers it from the compiled pr
 
 The real code paths are here:
 
+```fsharp prepare
+open System
+```
+
 {{< snippet id="DocScenarioAttributeUsage" >}}
 
 {{< snippet id="DocScenarioPattern" >}}
@@ -91,7 +95,7 @@ This means:
 
 For service-heavy code, keep the setup function responsible for construction and keep the doc snippet focused on behavior.
 
-```fsharp
+```fsharp no-check reason="Application-specific service fixture types are abbreviated"
 let mutable service = Unchecked.defaultof<UserService>
 
 [<DocScenario("with-services")>]
@@ -138,4 +142,4 @@ livedocs generate-tests src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj src/FsLiveDoc
 
 The generated project can then be tested directly with `dotnet test`, and any received snapshots can be accepted through the usual Verify workflow.
 
-If you want the full design trade-offs around when not to use doc-tests, read the new [DocTest Design guide](doctest-design.html).
+If you want the full design trade-offs around when not to use doc-tests, read the [DocTest Design guide](../doctest-design.html).

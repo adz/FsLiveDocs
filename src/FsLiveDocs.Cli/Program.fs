@@ -25,6 +25,8 @@ type Arguments =
     | [<CliPrefix(CliPrefix.None)>] Extract of projectPaths:string list
     /// <summary>Runs verified code examples found in docstrings.</summary>
     | [<CliPrefix(CliPrefix.None)>] Test of projectPaths:string list
+    /// <summary>Audits coverage and compiler-checks every expanded F# documentation block.</summary>
+    | [<CliPrefix(CliPrefix.None)>] Audit of projectPaths:string list
     /// <summary>Builds the full static documentation site.</summary>
     | [<CliPrefix(CliPrefix.None)>] Build of projectPaths:string list
     /// <summary>Builds every version in a verified local history manifest.</summary>
@@ -51,6 +53,7 @@ type Arguments =
             | GenerateTests _ -> "Generate a Verify-based snapshot test project for the given projects."
             | Extract _ -> "Extract symbols from one or more projects into a JSON blob."
             | Test _ -> "Run the legacy direct docstring verifier for the given projects."
+            | Audit _ -> "Audit coverage, modes, and compilation for every expanded F# documentation block."
             | Build _ -> "Render the final static site for the given projects."
             | BuildHistory _ -> "Render all versions from a verified local history manifest."
             | Watch _ -> "Start a dev server with file watching."
@@ -159,7 +162,7 @@ module internal PreviewWatcher =
 /// <summary>The main entry point module for the CLI application.</summary>
 module Program =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None }
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None }
 
     let printBanner () =
         let figlet = FigletText("LiveDocs")
@@ -201,6 +204,200 @@ module Program =
                 Directory.CreateDirectory(dir) |> ignore
             File.WriteAllText(path, normalized)
 
+    type private DocumentationAnalysis = {
+        Blocks: DocumentationBlock list
+        Results: CheckedCompilationUnit list
+        Prelude: string
+        CachedArtifact: SemanticDocumentationArtifact option
+        CachePath: string
+    }
+
+    let private sha256Text (value: string) =
+        value
+        |> Text.Encoding.UTF8.GetBytes
+        |> Security.Cryptography.SHA256.HashData
+        |> Convert.ToHexString
+        |> _.ToLowerInvariant()
+
+    let private projectInputFingerprint (projectPaths: string list) =
+        let root = Directory.GetCurrentDirectory()
+        let ignoredSegments = set [ ".git"; ".livedocs"; "artifacts"; "bin"; "obj"; "output" ]
+        let isIgnored (path: string) =
+            Path.GetRelativePath(root, path).Split([| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |])
+            |> Array.exists ignoredSegments.Contains
+        let projectFiles =
+            projectPaths
+            |> List.collect (fun projectPath ->
+                let fullPath = Path.GetFullPath(projectPath)
+                let directory = Path.GetDirectoryName(fullPath)
+                fullPath :: (Directory.GetFiles(directory, "*.fs", SearchOption.AllDirectories) |> Array.toList))
+        let repositoryInputs =
+            [ "Directory.Build.props"; "Directory.Build.targets"; "Directory.Packages.props"; "global.json"; "NuGet.config" ]
+            |> List.map (fun path -> Path.Combine(root, path))
+            |> List.filter File.Exists
+        projectFiles @ repositoryInputs
+        |> List.filter (isIgnored >> not)
+        |> List.distinct
+        |> List.sort
+        |> List.collect (fun path -> [ Path.GetRelativePath(root, path).Replace('\\', '/'); File.ReadAllText(path) ])
+        |> String.concat "\n--fslivedocs-project-input--\n"
+        |> sha256Text
+
+    let private writeCurrentCache (path: string) (pattern: string) (value: string) =
+        let directory = Path.GetDirectoryName(path)
+        Directory.CreateDirectory(directory) |> ignore
+        File.WriteAllText(path, value)
+        for stale in Directory.GetFiles(directory, pattern) do
+            if not (Path.GetFullPath(stale).Equals(Path.GetFullPath(path), StringComparison.Ordinal)) then File.Delete(stale)
+
+    let private getUnifiedPackageCached (projectPaths: string list) =
+        let inputHash = projectInputFingerprint projectPaths
+        let cacheDirectory = Path.GetFullPath(Path.Combine(".livedocs", "cache"))
+        let cacheKey = sha256Text $"api-schema:{History.ApiModelSchemaVersion}|extractor:{typeof<PackageModel>.Assembly.ManifestModule.ModuleVersionId}|{inputHash}"
+        let cachePath = Path.Combine(cacheDirectory, cacheKey + ".package.json")
+        if File.Exists cachePath then
+            let package = Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(File.ReadAllText(cachePath), FsLiveDocs.Core.Serialization.jsonSettings)
+            if isNull (box package) then invalidOp $"Invalid cached package model: {cachePath}"
+            package, inputHash
+        else
+            let package = getUnifiedPackage projectPaths |> Async.RunSynchronously
+            writeCurrentCache cachePath "*.package.json" (Newtonsoft.Json.JsonConvert.SerializeObject(package, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
+            package, inputHash
+
+    let private analyzeDocumentation (projectPaths: string list) (projectFingerprint: string) (package: PackageModel) =
+        if List.isEmpty projectPaths then invalidOp "Documentation analysis requires at least one project path."
+        let docsDir = Path.GetFullPath("docs")
+        if not (Directory.Exists docsDir) then invalidOp $"Documentation directory is missing: {docsDir}"
+        let sourceDir = Directory.GetCurrentDirectory()
+        let resolvedProjects = projectPaths |> List.map Path.GetFullPath
+        let defaultProject = List.head resolvedProjects
+        let prelude = loadSiteConfig().FSharpPrelude |> Option.defaultValue ""
+        let pages =
+            [ for path in Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories) |> Array.sort do
+                let relative = Path.GetRelativePath(docsDir, path).Replace('\\', '/')
+                let raw = File.ReadAllText(path)
+                let frontMatter = ContentProvider.parseFrontMatter raw
+                let body = frontMatter |> Option.map snd |> Option.defaultValue raw
+                let selectedProject =
+                    match frontMatter |> Option.bind (fun (metadata, _) -> metadata.Project) with
+                    | None -> defaultProject
+                    | Some configured ->
+                        [ Path.GetFullPath(configured, sourceDir); Path.GetFullPath(configured, docsDir) ]
+                        |> List.tryFind File.Exists
+                        |> Option.defaultWith (fun () -> invalidOp $"Documentation project in {relative} does not exist: {configured}")
+                if not (resolvedProjects |> List.contains selectedProject) then
+                    invalidOp $"Documentation page {relative} selects {selectedProject}, but that project was not passed to livedocs."
+                let expanded = ContentProvider.resolveSnippets body sourceDir package ""
+                let blocks = DocumentationDiscovery.discoverMarkdown relative (Some selectedProject) expanded
+                DocumentationDiscovery.validateCoverage blocks
+                let platform = frontMatter |> Option.bind (fun (metadata, _) -> metadata.Platform) |> Option.map _.ToLowerInvariant()
+                match platform with
+                | Some "fable" when blocks |> List.exists (fun block -> match block.Mode with NoCheck _ | Transcript -> false | _ -> true) ->
+                    invalidOp $"Documentation page {relative} declares platform: fable, but FsLiveDocs cannot yet invoke the Fable compiler. Mark each F# block no-check with a reason or transclude code covered by a Fable build gate."
+                | Some value when value <> "dotnet" && value <> "fable" -> invalidOp $"Documentation page {relative} declares unsupported platform '{value}'."
+                | _ -> ()
+                let targetFramework = frontMatter |> Option.bind (fun (metadata, _) -> metadata.TargetFramework)
+                yield blocks, selectedProject, targetFramework ]
+        let blocks = pages |> List.collect (fun (blocks, _, _) -> blocks)
+        let packageFingerprint = Newtonsoft.Json.JsonConvert.SerializeObject(package, FsLiveDocs.Core.Serialization.jsonSettings)
+        let contextFingerprint =
+            [ yield $"semantic-schema:{History.SemanticSchemaVersion}"
+              yield $"compiler-mvid:{typeof<EvaluatedProject>.Assembly.ManifestModule.ModuleVersionId}"
+              yield $"project-inputs:{projectFingerprint}"
+              yield $"prelude:{prelude}"
+              yield packageFingerprint
+              for blocks, project, targetFramework in pages do
+                  let framework = targetFramework |> Option.defaultValue "<default>"
+                  yield $"project:{project}|framework:{framework}"
+                  for block in blocks do yield $"block:{block.Id}|{block.SourceHash}" ]
+            |> String.concat "\n"
+        let cacheDirectory = Path.Combine(".livedocs", "cache")
+        let cachePath = Path.Combine(cacheDirectory, sha256Text contextFingerprint + ".semantic.json") |> Path.GetFullPath
+        let cachedArtifact =
+            if File.Exists cachePath then
+                let artifact = Newtonsoft.Json.JsonConvert.DeserializeObject<SemanticDocumentationArtifact>(File.ReadAllText(cachePath), FsLiveDocs.Core.Serialization.jsonSettings)
+                if isNull (box artifact) || artifact.SchemaVersion <> History.SemanticSchemaVersion then None else Some artifact
+            else None
+        let results =
+            match cachedArtifact with
+            | Some _ -> []
+            | None ->
+                let evaluated = resolvedProjects |> List.map (fun path -> path, DocumentationCompiler.evaluateProject path)
+                let aggregateReferences = evaluated |> List.collect (snd >> _.References) |> List.distinct
+                let evaluatedProjects = evaluated |> List.map (fun (path, project) -> path, { project with References = aggregateReferences }) |> Map.ofList
+                pages
+                |> List.map (fun (blocks, selectedProject, targetFramework) ->
+                    let selectedEvaluation =
+                        match targetFramework with
+                        | None -> evaluatedProjects.[selectedProject]
+                        | Some _ ->
+                            let selected = DocumentationCompiler.evaluateProjectFor targetFramework selectedProject
+                            let references = selected.References @ aggregateReferences |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
+                            { selected with References = references }
+                    DocumentationCompiler.checkBlocksWithProject selectedEvaluation prelude blocks)
+                |> fun checks -> Async.Parallel(checks, maxDegreeOfParallelism = max 1 Environment.ProcessorCount)
+                |> Async.RunSynchronously
+                |> Array.toList
+                |> List.collect id
+        DocumentationDiscovery.validateCoverage blocks
+        { Blocks = blocks; Results = results; Prelude = prelude; CachedArtifact = cachedArtifact; CachePath = cachePath }
+
+    let private printAudit (analysis: DocumentationAnalysis) =
+        let diagnosticsByBlock =
+            match analysis.CachedArtifact with
+            | Some artifact ->
+                artifact.Pages
+                |> List.collect _.Blocks
+                |> List.collect (fun block ->
+                    block.Diagnostics
+                    |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
+                    |> List.map (fun diagnostic -> block.Id, (diagnostic.StartLine, diagnostic.StartColumn, diagnostic.Message)))
+                |> List.groupBy fst
+                |> Map.ofList
+            | None ->
+                analysis.Results
+                |> List.collect _.Diagnostics
+                |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error)
+                |> List.choose (fun item -> item.BlockId |> Option.map (fun id -> id, (item.StartLine, item.StartColumn, item.Message)))
+                |> List.groupBy fst
+                |> Map.ofList
+        let mutable failures = 0
+        for block in analysis.Blocks do
+            let errors = diagnosticsByBlock |> Map.tryFind block.Id |> Option.defaultValue [] |> List.map snd
+            let status, detail =
+                if not errors.IsEmpty then
+                    failures <- failures + 1
+                    let line, column, message = List.head errors
+                    "FAIL", $"{line}:{column} {message}"
+                else
+                    match block.Mode with
+                    | Page -> "PASS", "page"
+                    | Prepare -> "PASS", "prepare (shared setup)"
+                    | Isolated -> "PASS", "isolated"
+                    | Run -> "PASS", "run (compiled; execution is explicit)"
+                    | Transcript -> "PASS", "transcript (explicit execution case)"
+                    | NoCheck reason -> "EXCLUDED", reason
+            let color = if status = "PASS" then "green" elif status = "FAIL" then "red" else "yellow"
+            AnsiConsole.MarkupLine($"[{color}]{status,-8}[/] {Markup.Escape(block.Id)} ({Markup.Escape(detail)})")
+        if failures = 0 then
+            AnsiConsole.MarkupLine($"\n[green]✔ Audit complete:[/] {analysis.Blocks.Length} expanded F# block(s), all covered or explicitly excluded.")
+        else
+            AnsiConsole.MarkupLine($"\n[red]✖ Audit failed:[/] {failures} of {analysis.Blocks.Length} expanded F# block(s) contain compiler errors.")
+        failures
+
+    let auditAction (projectPaths: string list) =
+        if List.isEmpty projectPaths then invalidOp "Audit requires at least one project path."
+        let package, projectFingerprint = getUnifiedPackageCached projectPaths
+        let analysis = analyzeDocumentation projectPaths projectFingerprint package
+        if printAudit analysis = 0 then 0 else 1
+
+    let private createSemanticArtifact (projectPaths: string list) (package: PackageModel) =
+        let analysis = analyzeDocumentation projectPaths (projectInputFingerprint projectPaths) package
+        let artifact = analysis.CachedArtifact |> Option.defaultWith (fun () -> SemanticExtractor.artifact analysis.Results)
+        if analysis.CachedArtifact.IsNone then
+            writeCurrentCache analysis.CachePath "*.semantic.json" (Newtonsoft.Json.JsonConvert.SerializeObject(artifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
+        artifact, analysis.Prelude
+
     let private generateSnapshotTests (projectPaths: string list) =
         printBanner()
 
@@ -225,6 +422,23 @@ module Program =
                 |> List.map (fun relative -> $"    <ProjectReference Include=\"{relative}\" />")
                 |> String.concat eol
 
+            let toolReferences =
+                [ "FsLiveDocs.Core", typeof<PackageModel>.Assembly.Location
+                  "FsLiveDocs.Runner", typeof<FsiTranscriptRunner.DocTestExecutionContext>.Assembly.Location ]
+                |> List.map (fun (name, path) -> $"    <Reference Include=\"{name}\"><HintPath>{System.Security.SecurityElement.Escape(path)}</HintPath></Reference>")
+                |> String.concat eol
+
+            let allAssemblyPaths =
+                resolvedProjects
+                |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+                |> List.filter (String.IsNullOrWhiteSpace >> not)
+                |> List.distinct
+
+            let assemblyReferenceLiteral =
+                allAssemblyPaths
+                |> List.map (fun path -> "@\"" + path.Replace("\"", "\"\"") + "\"")
+                |> String.concat "; "
+
             let fsproj =
                 [
                     """<Project Sdk="Microsoft.NET.Sdk">"""
@@ -240,6 +454,7 @@ module Program =
                     ""
                     "  <ItemGroup>"
                     "    <PackageReference Include=\"Microsoft.NET.Test.Sdk\" Version=\"17.14.1\" />"
+                    "    <PackageReference Include=\"FSharp.Core\" Version=\"10.1.201\" />"
                     "    <PackageReference Include=\"xunit\" Version=\"2.9.3\" />"
                     "    <PackageReference Include=\"xunit.runner.visualstudio\" Version=\"3.1.4\" />"
                     "    <PackageReference Include=\"Verify.Xunit\" Version=\"31.12.5\" />"
@@ -247,27 +462,93 @@ module Program =
                     ""
                     "  <ItemGroup>"
                     projectRefs
+                    toolReferences
                     "  </ItemGroup>"
                     ""
                     "</Project>"
                 ]
                 |> String.concat eol
 
+            let projectExamples =
+                resolvedProjects
+                |> List.map (fun projectPath ->
+                    let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
+                    projectPath, DocTestRunner.snapshotExampleNames package)
+
             let testBodies =
-                List.zip resolvedProjects relativeProjects
-                |> List.map (fun (projectPath, relativeProjectPath) ->
+                projectExamples
+                |> List.mapi (fun index (projectPath, exampleNames) ->
                     let projectName = Path.GetFileNameWithoutExtension(projectPath)
-                    let escapedProjectPath = relativeProjectPath.Replace("\"", "\"\"")
-                    [
-                        "    [<Fact>]"
-                        $"    let ``{projectName} snapshot examples`` () ="
-                        "        task {"
-                        $"            let projectPath = @\"{escapedProjectPath}\""
-                        "            let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously"
-                        "            let! snapshot = DocTestRunner.collectSnapshots package projectPath []"
-                        "            return! Verifier.Verify(snapshot)"
-                        "        }"
-                    ]
+                    let escapedProjectPath = Path.GetFullPath(projectPath).Replace("\"", "\"\"")
+                    let packageName = $"xmlPackage{index}"
+                    let facts =
+                        exampleNames
+                        |> List.map (fun exampleName ->
+                            let escapedName = exampleName.Replace("`", "'").Replace("\"", "\"\"")
+                            [ ""
+                              "    [<Fact>]"
+                              $"    let ``xml {projectName}#example-{escapedName}`` () ="
+                              "        task {"
+                              $"            let projectPath = @\"{escapedProjectPath}\""
+                              $"            let references = [ {assemblyReferenceLiteral} ]"
+                              $"            let! snapshot = DocTestRunner.collectSnapshotByName {packageName}.Value projectPath references @\"{escapedName}\""
+                              "            return! Verifier.Verify(snapshot)"
+                              "        }" ]
+                            |> String.concat eol)
+                        |> String.concat eol
+                    [ $"    let private {packageName} = lazy (SymbolLister.extractFromProject @\"{escapedProjectPath}\" |> Async.RunSynchronously)"
+                      facts ]
+                    |> String.concat eol)
+                |> String.concat (eol + eol)
+
+            let package = getUnifiedPackage resolvedProjects |> Async.RunSynchronously
+            let docsDir = Path.GetFullPath("docs")
+            let sourceDir = Directory.GetCurrentDirectory()
+            let defaultProject = List.head resolvedProjects
+            let documentationCases =
+                [ for path in Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories) |> Array.sort do
+                    let relative = Path.GetRelativePath(docsDir, path).Replace('\\', '/')
+                    let raw = File.ReadAllText(path)
+                    let frontMatter = ContentProvider.parseFrontMatter raw
+                    let body = frontMatter |> Option.map snd |> Option.defaultValue raw
+                    let selectedProject =
+                        match frontMatter |> Option.bind (fun (metadata, _) -> metadata.Project) with
+                        | None -> defaultProject
+                        | Some configured ->
+                            [ Path.GetFullPath(configured, sourceDir); Path.GetFullPath(configured, docsDir) ]
+                            |> List.tryFind File.Exists
+                            |> Option.defaultWith (fun () -> invalidOp $"Documentation project in {relative} does not exist: {configured}")
+                    let expanded = ContentProvider.resolveSnippets body sourceDir package ""
+                    let encoded = Convert.ToBase64String(Text.Encoding.UTF8.GetBytes expanded)
+                    let blocks = DocumentationDiscovery.discoverMarkdown relative (Some selectedProject) expanded
+                    DocumentationDiscovery.validateCoverage blocks
+                    yield "coverage", relative + "#coverage", selectedProject, relative, encoded
+                    for unit in DocumentationDiscovery.compilationUnits selectedProject "" blocks do
+                        yield "compile", unit.Id, selectedProject, relative, encoded
+                    for block in blocks do
+                        match block.Mode, block.Origin with
+                        | (Run | Transcript), XmlExample -> () // The existing named XML snapshot case owns this execution.
+                        | (Run | Transcript), _ -> yield "execute", block.Id, selectedProject, relative, encoded
+                        | _ -> () ]
+
+            let documentationTestBodies =
+                documentationCases
+                |> List.map (fun (action, id, projectPath, sourcePath, encoded) ->
+                    let escapedProject = Path.GetFullPath(projectPath).Replace("\"", "\"\"")
+                    let escapedSource = sourcePath.Replace("\"", "\"\"")
+                    let escapedId = id.Replace("`", "'").Replace("\"", "\"\"")
+                    [ ""
+                      "    [<Fact>]"
+                      $"    let ``{action} {escapedId}`` () ="
+                      $"        let projectPath = @\"{escapedProject}\""
+                      $"        let references = [ {assemblyReferenceLiteral} ]"
+                      $"        let markdown = System.Text.Encoding.UTF8.GetString(System.Convert.FromBase64String(\"{encoded}\"))"
+                      if action = "coverage" then
+                          $"        GeneratedVerification.validateCoverage projectPath @\"{escapedSource}\" markdown"
+                      elif action = "compile" then
+                          $"        GeneratedVerification.verifyCompilationUnit projectPath references @\"{escapedSource}\" markdown @\"{id}\" |> Async.RunSynchronously"
+                      else
+                          $"        GeneratedVerification.executeBlock projectPath references @\"{escapedSource}\" markdown @\"{id}\"" ]
                     |> String.concat eol)
                 |> String.concat eol
 
@@ -283,6 +564,7 @@ module Program =
                     ""
                     "module SnapshotTests ="
                     testBodies
+                    documentationTestBodies
                 ]
                 |> String.concat eol
 
@@ -297,38 +579,23 @@ module Program =
 
     /// <summary>Orchestrates the build process for one or more projects.</summary>
     let buildAction (projectPaths: string list) (theme: string) (version: string option) =
+        let extracted, projectFingerprint = getUnifiedPackageCached projectPaths
+        let packageRaw = { extracted with Version = version |> Option.defaultValue extracted.Version }
+        let analysis = analyzeDocumentation projectPaths projectFingerprint packageRaw
+        if printAudit analysis <> 0 then
+            invalidOp "Documentation contains uncovered or non-compiling F# blocks. Fix the mapped audit failures before building."
         AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
             .Start("[blue]Building documentation site...[/]", fun ctx ->
-                let extracted = getUnifiedPackage projectPaths |> Async.RunSynchronously
-                let packageRaw = { extracted with Version = version |> Option.defaultValue extracted.Version }
+                let semanticArtifact = analysis.CachedArtifact |> Option.defaultWith (fun () -> SemanticExtractor.artifact analysis.Results)
+                if analysis.CachedArtifact.IsNone then
+                    writeCurrentCache analysis.CachePath "*.semantic.json" (Newtonsoft.Json.JsonConvert.SerializeObject(semanticArtifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
                 let sourceDir = Directory.GetCurrentDirectory() 
-                let projectAssemblies =
-                    projectPaths
-                    |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
-                    |> List.filter (String.IsNullOrWhiteSpace >> not)
-                let semanticReferences =
-                    let dependencies =
-                        projectAssemblies
-                        |> List.collect (fun assemblyPath ->
-                            Directory.GetFiles(Path.GetDirectoryName(assemblyPath), "*.dll")
-                            |> Array.toList)
-                    projectAssemblies @ dependencies
-                    |> List.filter (fun path ->
-                        let name = Path.GetFileNameWithoutExtension(path)
-                        not (name.Equals("FSharp.Core", StringComparison.OrdinalIgnoreCase))
-                        && not (name.Equals("FSharp.Compiler.Service", StringComparison.OrdinalIgnoreCase)))
-                    |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
                 let semanticCode =
                     {
                         SemanticCode.defaults with
-                            References = semanticReferences
-                            Opens =
-                                Presentation.flattenEntities packageRaw.Entities
-                                |> List.filter (fun entity -> entity.Kind = EntityKind.Namespace)
-                                |> List.map _.Id
-                                |> List.distinct
-                            OnDiagnostic = fun message -> AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(message)}[/]")
+                            Artifact = Some semanticArtifact
+                            Prelude = analysis.Prelude
                     }
                 let package = ContentProvider.applyApiDocsWithOptions "docs" sourceDir packageRaw semanticCode
                 let pages = ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
@@ -359,9 +626,16 @@ module Program =
                     invalidOp $"History docs tree is missing for {entry.Version}: {docsDir}"
                 let packageRaw = History.loadArtifact entry.Version entry.ModelSha256 modelPath
                 let sourceDir = Path.GetDirectoryName(docsDir)
-                let package = ContentProvider.applyApiDocsWithOptions docsDir sourceDir packageRaw SemanticCode.disabled
+                let semanticCode =
+                    match entry.SemanticPath, entry.SemanticSha256 with
+                    | Some semanticPath, Some checksum ->
+                        let manifestRoot = Path.GetDirectoryName(Path.GetFullPath(manifestPath))
+                        let artifact = History.loadSemanticArtifact checksum (Path.GetFullPath(Path.Combine(manifestRoot, semanticPath)))
+                        { SemanticCode.defaults with Artifact = Some artifact; Prelude = artifact.Prelude }
+                    | _ -> SemanticCode.disabled
+                let package = ContentProvider.applyApiDocsWithOptions docsDir sourceDir packageRaw semanticCode
                 let rootPath = if entry.Version = manifest.CurrentVersion then "" else "../../"
-                let pages = ContentProvider.scanDocsWithOptions docsDir sourceDir package rootPath SemanticCode.disabled
+                let pages = ContentProvider.scanDocsWithOptions docsDir sourceDir package rootPath semanticCode
                 entry.Version, package, pages, docsDir)
 
         SiteBuilder.buildHistory manifest.CurrentVersion sites config theme "output"
@@ -399,7 +673,35 @@ module Program =
                     if not (File.Exists(".livedocs/config.json")) then File.WriteAllText(".livedocs/config.json", "{}")
                     if not (Directory.Exists("docs")) then Directory.CreateDirectory("docs") |> ignore
                     if not (File.Exists("docs/index.md")) then
-                        File.WriteAllText("docs/index.md", "---\ntitle: Home\nweight: 1\n---\n# Welcome to FsLiveDocs\n\nEdit this file to get started.")
+                        let starter = """---
+title: Home
+weight: 1
+---
+
+# Your verified F# documentation
+
+FsLiveDocs builds API reference pages from your compiled project and checks F# guide examples against the same
+compiler context. Readers get inferred-type and XML-documentation hovers without running a compiler in the browser.
+
+## First useful build
+
+Replace the project path below, then run from your repository root:
+
+```bash
+dotnet build
+livedocs audit src/YourLibrary/YourLibrary.fsproj
+livedocs build src/YourLibrary/YourLibrary.fsproj
+livedocs watch src/YourLibrary/YourLibrary.fsproj --host 127.0.0.1 --port 5000
+```
+
+Add an ordinary `fsharp` fence to a guide for compile-only verification. Use `run` only for intentional execution,
+`transcript` for FSI input/output, `isolated` for standalone code, `prepare` for hidden setup, or
+`no-check reason="..."` for deliberate pseudocode.
+
+Next: add XML `summary` and `example` elements to public APIs, then generate stable xUnit cases with
+`livedocs generate-tests src/YourLibrary/YourLibrary.fsproj`.
+"""
+                        File.WriteAllText("docs/index.md", starter)
                     AnsiConsole.MarkupLine("[green]✔ Done![/]")
                     0
 
@@ -410,6 +712,7 @@ module Program =
                     let workflow = """
 name: LiveDocs
 on:
+  pull_request:
   push:
     branches: [ main ]
 jobs:
@@ -417,17 +720,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
-      - name: Build Docs
-        run: |
-          dotnet build
-          ./scripts/publish.sh
-          ./artifacts/livedocs build src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+      - uses: actions/setup-dotnet@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./output
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: dotnet tool restore
+      - name: Verify and build documentation
+        run: |
+          mapfile -t projects < <(find src -name '*.fsproj' -type f | sort)
+          test ${#projects[@]} -gt 0
+          dotnet build --nologo
+          dotnet livedocs generate-tests "${projects[@]}"
+          dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj --nologo
+          dotnet livedocs build "${projects[@]}"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: output
 """
                     File.WriteAllText(".github/workflows/livedocs.yml", workflow)
                     AnsiConsole.MarkupLine("[green]✔ Done:[/] .github/workflows/livedocs.yml")
@@ -451,14 +761,21 @@ jobs:
                         if not (String.IsNullOrWhiteSpace outputDirectory) && not (Directory.Exists(outputDirectory)) then
                             Directory.CreateDirectory(outputDirectory) |> ignore
                         File.WriteAllText(fileName, json)
+                        let semanticArtifact, _ = createSemanticArtifact projectPaths package
+                        let semanticJson = Newtonsoft.Json.JsonConvert.SerializeObject(semanticArtifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings)
+                        let semanticDirectory = Path.GetDirectoryName(fileName) |> Option.ofObj |> Option.filter (String.IsNullOrWhiteSpace >> not) |> Option.defaultValue "."
+                        let outputStem = Path.GetFileNameWithoutExtension(fileName)
+                        let semanticStem = if outputStem.EndsWith(".api", StringComparison.OrdinalIgnoreCase) then outputStem.Substring(0, outputStem.Length - 4) else outputStem
+                        let semanticFileName = Path.Combine(semanticDirectory, semanticStem + ".semantic.json")
+                        File.WriteAllText(semanticFileName, semanticJson)
                     )
-                    AnsiConsole.MarkupLine("[green]✔ API model extraction complete.[/]")
+                    AnsiConsole.MarkupLine("[green]✔ API and semantic documentation extraction complete.[/]")
                     0
 
                 elif results.Contains Test then
                     printBanner()
                     let projectPaths = results.GetResult Test
-                    let mutable allPassed = true
+                    let mutable allPassed = auditAction projectPaths = 0
                     for projectPath in projectPaths do
                         AnsiConsole.MarkupLine($"[bold blue]➜ Testing:[/] {projectPath}")
                         let results = 
@@ -479,6 +796,10 @@ jobs:
                     else 
                         AnsiConsole.MarkupLine("\n[bold red]✖ Some doc-tests failed.[/]")
                         1
+
+                elif results.Contains Audit then
+                    printBanner()
+                    auditAction (results.GetResult Audit)
 
                 elif results.Contains Build then
                     printBanner()

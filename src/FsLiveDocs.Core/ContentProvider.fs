@@ -256,7 +256,7 @@ module ContentProvider =
 
     /// <summary>Resolves shortcodes (snippets, examples) and semantic links (xrefs) in Markdown content.</summary>
     let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
-        let snippetPattern = @"{{<\s*snippet\s+id=""(?<id>[^""]+)""\s*(?:showOutput=""(?<showOutput>[^""]+)"")?\s*>}}"
+        let snippetPattern = @"{{<\s*snippet\s+(?<args>[^>]+)>}}"
         let examplePattern = @"{{<\s*example\s+id=""(?<id>[^""]+)""\s*>}}"
         let xrefPattern = @"xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
 
@@ -264,7 +264,12 @@ module ContentProvider =
             // 1. Resolve {{< snippet id="X" >}}
             let body1 =
                 System.Text.RegularExpressions.Regex.Replace(protectedBody, snippetPattern, fun (m: System.Text.RegularExpressions.Match) ->
-                    let id = m.Groups.["id"].Value
+                    let args = m.Groups.["args"].Value
+                    let attribute name =
+                        let pattern = "(?:^|\\s)" + Regex.Escape(name) + "=\"(?<value>[^\"]*)\""
+                        let found = Regex.Match(args, pattern)
+                        if found.Success then Some found.Groups.["value"].Value else None
+                    let id = attribute "id" |> Option.defaultWith (fun () -> invalidOp "A snippet shortcode requires id=\"...\".")
                     let files = Directory.GetFiles(sourceDir, "*.fs", SearchOption.AllDirectories)
                     let snippet =
                         files |> Seq.tryPick (fun f ->
@@ -276,7 +281,17 @@ module ContentProvider =
                             | _ -> None
                         )
                     match snippet with
-                    | Some s -> $"```fsharp\n{s}\n```"
+                    | Some s ->
+                        let mode = attribute "mode" |> Option.defaultValue ""
+                        let reason = attribute "reason"
+                        let info =
+                            match mode.ToLowerInvariant(), reason with
+                            | "", None -> "fsharp"
+                            | "no-check", Some explanation when not (System.String.IsNullOrWhiteSpace explanation) -> $"fsharp no-check reason=\"{explanation}\""
+                            | "no-check", _ -> invalidOp $"Snippet '{id}' uses no-check without a reason."
+                            | selected, None when set [ "prepare"; "isolated"; "run" ] |> Set.contains selected -> $"fsharp {selected}"
+                            | selected, _ -> invalidOp $"Snippet '{id}' has unsupported mode '{selected}'."
+                        $"```{info} origin=source-snippet\n{s}\n```"
                     | None -> invalidOp $"Snippet '{id}' was not found."
                 )
 
@@ -285,7 +300,13 @@ module ContentProvider =
                 System.Text.RegularExpressions.Regex.Replace(body1, examplePattern, fun (m: System.Text.RegularExpressions.Match) ->
                     let id = m.Groups.["id"].Value
                     match findExample id package with
-                    | Some ex -> $"```fsharp\n{ex.Content}\n```"
+                    | Some ex ->
+                        let info =
+                            if ex.Content.Replace("\r\n", "\n").Split('\n') |> Array.exists (fun line -> line.TrimStart().StartsWith("> ")) then
+                                "fsharp transcript"
+                            elif ex.IsSnapshotTest then "fsharp run"
+                            else "fsharp"
+                        $"```{info} origin=xml-example\n{ex.Content}\n```"
                     | None -> invalidOp $"Example '{id}' was not found."
                 )
 
@@ -315,6 +336,7 @@ module ContentProvider =
         )
 
     type private MarkdownContext = {
+        DocsDir: string
         SourceDir: string
         Package: PackageModel
         RootPath: string
@@ -327,7 +349,8 @@ module ContentProvider =
         let resolved = resolveSnippets body context.SourceDir context.Package context.RootPath
         let rewritten = rewriteLocalLinks context.CurrentOutputPath context.AllowedOutputs resolved
         validateLinks context.CurrentOutputPath context.AllowedOutputs rewritten
-        let formatted = SemanticCode.formatFences context.SemanticCode sourcePath rewritten
+        let semanticSourcePath = Path.GetRelativePath(context.DocsDir, sourcePath).Replace('\\', '/')
+        let formatted = SemanticCode.formatFences context.SemanticCode semanticSourcePath rewritten
         let semanticSegments = ResizeArray<string>()
         let semanticPattern =
             Regex(
@@ -348,10 +371,19 @@ module ContentProvider =
         match parseFrontMatter raw with
         | Some (metadata, body) ->
             let contentHtml = resolveMarkdown context filePath body
+            let labels =
+                [ metadata.Platform |> Option.map (fun value -> $"Platform: {System.Net.WebUtility.HtmlEncode value}")
+                  metadata.TargetFramework |> Option.map (fun value -> $"Target: {System.Net.WebUtility.HtmlEncode value}") ]
+                |> List.choose id
+            let contentHtml =
+                if labels.IsEmpty then contentHtml
+                else
+                    let labelText = String.concat " · " labels
+                    $"<aside class=\"livedocs-checking-context not-prose\" aria-label=\"Example checking context\">{labelText}</aside>" + contentHtml
             { Metadata = metadata; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
         | None ->
             let contentHtml = resolveMarkdown context filePath raw
-            { Metadata = { Title = defaultTitle filePath; Type = None }; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
+            { Metadata = { Title = defaultTitle filePath; Type = None; Project = None; TargetFramework = None; Platform = None }; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
 
     /// <summary>Loads and processes a single Markdown page.</summary>
     /// <param name="filePath">The markdown file to read.</param>
@@ -364,6 +396,7 @@ module ContentProvider =
     let loadPage (filePath: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (currentOutputPath: string) (allowedOutputs: Set<string>) =
         loadMarkdownPage
             {
+                DocsDir = Path.GetDirectoryName(Path.GetFullPath(filePath))
                 SourceDir = sourceDir
                 Package = package
                 RootPath = rootPath
@@ -387,6 +420,7 @@ module ContentProvider =
                 let page =
                     loadMarkdownPage
                         {
+                            DocsDir = docsDir
                             SourceDir = sourceDir
                             Package = package
                             RootPath = pageRootPath
@@ -436,6 +470,7 @@ module ContentProvider =
                     let page =
                         loadMarkdownPage
                             {
+                                DocsDir = docsDir
                                 SourceDir = sourceDir
                                 Package = package
                                 RootPath = ""

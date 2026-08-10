@@ -78,7 +78,7 @@ That pipeline compiles your code, extracts symbols, renders the static site, and
 
 Change the implementation so the example is wrong:
 
-```fsharp
+```fsharp isolated
 let add x y = x * y
 ```
 
@@ -94,4 +94,4 @@ Once the tutorial works, expand the site with:
 2. Examples that cover edge cases and error paths.
 3. A guide for when to use doc-tests and when to use ordinary tests.
 
-Next, read the [Verified Examples guide](verified-examples.html) for a task-oriented walkthrough of scenarios and setup functions.
+Next, read the [Verified Examples guide](guides/verified-examples.html) for a task-oriented walkthrough of scenarios and setup functions.

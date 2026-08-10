@@ -4,8 +4,83 @@ open System
 open System.IO
 open Xunit
 open FsLiveDocs.Core
+open FsLiveDocs.Runner
 
 module IntegrationTests =
+
+    let private coreProject = ProjectResolver.resolveProjectPath "FsLiveDocs.Core.fsproj"
+
+    [<Fact>]
+    let ``documentation compiler uses project references and page scope without executing`` () = async {
+        let blocks =
+            DocumentationDiscovery.discoverMarkdown
+                "guide.md"
+                (Some coreProject)
+                "```fsharp\nopen FsLiveDocs.Core\nlet package : PackageModel = { Version = \"1\"; Entities = []; Scenarios = []; Packages = [] }\n```\n```fsharp\nlet version : string = package.Version\n```"
+        let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
+        let result = Assert.Single(results)
+        let errors = result.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
+        Assert.Empty(errors)
+        let artifact = SemanticExtractor.artifact results
+        let semanticBlocks = artifact.Pages |> List.collect _.Blocks
+        let semanticBlock = List.head semanticBlocks
+        let signatures = semanticBlock.Tooltips |> List.choose _.Signature
+        Assert.Contains(signatures, fun signature -> signature.Contains("package:") && signature.Contains("PackageModel"))
+        Assert.Contains(semanticBlock.Tooltips, fun tooltip ->
+            tooltip.Documentation
+            |> Option.exists (fun documentation -> documentation.Contains("root model representing a documented package")))
+        Assert.Contains(semanticBlock.Tooltips, fun tooltip -> tooltip.Signature |> Option.exists _.StartsWith("package:") && tooltip.Footer.IsNone)
+        Assert.Contains(semanticBlock.Tooltips, fun tooltip -> tooltip.Signature = Some "FsLiveDocs.Core.PackageModel" && tooltip.Footer = Some "FsLiveDocs.Core")
+        Assert.Contains(
+            semanticBlocks |> List.collect _.Tooltips,
+            fun tooltip -> tooltip.Signature = Some "string" && tooltip.Footer.IsNone)
+        let original = semanticBlock.Lines |> List.map (fun line -> line.Tokens |> List.map _.Text |> String.concat "") |> String.concat "\n"
+        Assert.Equal(blocks.[0].ExpandedSource, original)
+    }
+
+    [<Fact>]
+    let ``documentation compiler maps errors back to owning block coordinates`` () = async {
+        let blocks =
+            DocumentationDiscovery.discoverMarkdown
+                "guides/broken.md"
+                (Some coreProject)
+                "```fsharp prepare\nlet available = 42\n```\n```fsharp\n\nlet value : MissingDocumentationType = available\n```"
+        let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
+        let diagnostic =
+            results
+            |> List.collect _.Diagnostics
+            |> List.find (fun item -> item.Severity = SemanticDiagnosticSeverity.Error && item.Message.Contains("MissingDocumentationType"))
+        Assert.Equal(Some "guides/broken.md#fsharp-1", diagnostic.BlockId)
+        Assert.Equal("guides/broken.md", diagnostic.SourcePath)
+        Assert.Equal(2, diagnostic.StartLine)
+    }
+
+    [<Fact>]
+    let ``documentation compiler evaluates a cross-targeting project in an inner build`` () =
+        let directory = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory) |> ignore
+        let projectPath = Path.Combine(directory, "MultiTarget.fsproj")
+        File.WriteAllText(
+            projectPath,
+            """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+  </PropertyGroup>
+</Project>""")
+        let restore = System.Diagnostics.Process.Start(System.Diagnostics.ProcessStartInfo("dotnet", $"restore \"{projectPath}\" --nologo"))
+        restore.WaitForExit()
+        Assert.Equal(0, restore.ExitCode)
+
+        let evaluated = DocumentationCompiler.evaluateProject projectPath
+
+        Assert.Equal("netstandard2.1", evaluated.TargetFramework)
+        Assert.NotEmpty(evaluated.References)
+
+        let net8 = DocumentationCompiler.evaluateProjectFor (Some "net8.0") projectPath
+        Assert.Equal("net8.0", net8.TargetFramework)
+
+        let unsupported = Assert.Throws<InvalidOperationException>(fun () -> DocumentationCompiler.evaluateProjectFor (Some "net6.0") projectPath |> ignore)
+        Assert.Contains("is not declared", unsupported.Message)
 
     let createTestProject dirName files =
         let baseDir = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", dirName)

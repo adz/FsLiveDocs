@@ -1,0 +1,9 @@
+{
+  Name: DocScenarioUsage,
+  Source:
+> FsLiveDocs.Core.DocScenarioAttribute("AuthenticatedUser").Name;;
+val it: string = "AuthenticatedUser",
+  ExpectedOutput: {},
+  ActualOutput: val it: string = "AuthenticatedUser",
+  Status: {}
+}

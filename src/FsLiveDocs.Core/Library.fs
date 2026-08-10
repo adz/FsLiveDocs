@@ -1,31 +1,19 @@
 namespace FsLiveDocs.Core
 
-open System
-
-// <snippet:DocScenarioAttributeUsage>
-/// <summary>Attribute used to mark a function as a DocTest setup scenario.</summary>
-/// <remarks>
-/// A scenario provides the necessary context, such as database connections or
-/// dependency injection, required for a code example to execute successfully.
-/// </remarks>
-/// <example name="DocScenarioUsage" data-livedocs="snapshot">
-/// > DocScenarioAttribute("AuthenticatedUser").Name;;
-/// val it: string = "AuthenticatedUser"
-/// </example>
-[<AttributeUsage(AttributeTargets.Method, AllowMultiple = false)>]
-type DocScenarioAttribute(name: string) =
-    inherit Attribute()
-    /// <summary>The unique name of the scenario.</summary>
-    member _.Name = name
-// </snippet:DocScenarioAttributeUsage>
-
 // <snippet:DocScenarioPattern>
 module DocScenarioSamples =
+    // <snippet:DocScenarioAttributeUsage>
     let mutable currentUser = "anonymous"
 
+    /// <summary>Loads deterministic setup for the named documentation scenario.</summary>
+    /// <example name="DocScenarioUsage" data-livedocs="snapshot">
+    /// > FsLiveDocs.Core.DocScenarioAttribute("AuthenticatedUser").Name;;
+    /// val it: string = "AuthenticatedUser"
+    /// </example>
     [<DocScenario("with-user")>]
     let loadUser () =
         currentUser <- "Ada"
+    // </snippet:DocScenarioAttributeUsage>
 
     /// <example name="UserGreeting" scenario="with-user">
     /// > FsLiveDocs.Core.DocScenarioSamples.greet();;

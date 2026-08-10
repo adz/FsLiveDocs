@@ -12,6 +12,9 @@ module History =
     let ApiModelSchemaVersion = 1
 
     [<Literal>]
+    let SemanticSchemaVersion = 2
+
+    [<Literal>]
     let ManifestSchemaVersion = 1
 
     let private deserialize<'value> path =
@@ -36,6 +39,28 @@ module History =
             invalidOp $"History API model version mismatch in {path}: expected {expectedVersion}, got {artifact.Package.Version}."
         artifact.Package
 
+    /// <summary>Loads renderer-neutral semantic documentation after checksum and schema validation.</summary>
+    let loadSemanticArtifact expectedSha256 path =
+        if not (File.Exists(path)) then invalidOp $"History semantic artifact is missing: {path}"
+        let actualSha256 = sha256 path
+        if not (actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase)) then
+            invalidOp $"History semantic artifact checksum mismatch: expected {expectedSha256}, got {actualSha256}."
+        let artifact = deserialize<SemanticDocumentationArtifact> path
+        if isNull (box artifact) then invalidOp $"History semantic artifact is empty: {path}"
+        if artifact.SchemaVersion <> SemanticSchemaVersion then
+            invalidOp $"Unsupported semantic documentation schema {artifact.SchemaVersion} in {path}; expected {SemanticSchemaVersion}."
+        artifact.Pages
+        |> List.collect _.Blocks
+        |> List.iter (fun block ->
+            block.Lines
+            |> List.collect _.Tokens
+            |> List.iter (fun token ->
+                match token.Tooltip with
+                | Some index when index < 0 || index >= block.Tooltips.Length ->
+                    invalidOp $"Semantic block {block.Id} contains invalid tooltip index {index}."
+                | _ -> ()))
+        artifact
+
     /// <summary>Loads a history manifest and resolves entry paths relative to the manifest.</summary>
     let loadManifest path =
         if not (File.Exists(path)) then invalidOp $"History manifest is missing: {path}"
@@ -48,6 +73,11 @@ module History =
             invalidOp "History manifest contains duplicate versions."
         if manifest.Entries |> List.exists (fun entry -> entry.Version = manifest.CurrentVersion) |> not then
             invalidOp $"Current history version {manifest.CurrentVersion} has no manifest entry."
+        manifest.Entries
+        |> List.iter (fun entry ->
+            match entry.SemanticPath, entry.SemanticSha256 with
+            | None, None | Some _, Some _ -> ()
+            | _ -> invalidOp $"History entry {entry.Version} must declare semanticPath and semanticSha256 together.")
         let root = Path.GetDirectoryName(Path.GetFullPath(path))
         manifest,
         manifest.Entries

@@ -2,10 +2,7 @@ namespace FsLiveDocs.Core
 
 open System
 open System.Net
-open System.Text
 open System.Text.RegularExpressions
-open System.Xml.Linq
-open FSharp.Formatting.CodeFormat
 
 /// Build-time semantic formatting for F# code embedded in documentation pages.
 module SemanticCode =
@@ -15,12 +12,11 @@ module SemanticCode =
 
     type Options = {
         Enabled: bool
-        References: string list
-        Opens: string list
-        OnDiagnostic: string -> unit
+        Artifact: SemanticDocumentationArtifact option
+        Prelude: string
     }
 
-    let defaults = { Enabled = true; References = []; Opens = []; OnDiagnostic = ignore }
+    let defaults = { Enabled = true; Artifact = None; Prelude = "" }
     let disabled = { defaults with Enabled = false }
 
     let private fencePattern =
@@ -28,154 +24,125 @@ module SemanticCode =
             @"(?ms)^```(?<info>fsharp(?:[ \t]+[^\r\n]*)?)[ \t]*\r?\n(?<code>.*?)^```[ \t]*$",
             RegexOptions.Compiled)
 
-    let private isSemanticFence (info: string) =
-        let options = info.Split([| ' '; '\t'; ',' |], StringSplitOptions.RemoveEmptyEntries)
-        options.Length > 0
-        && options.[0].Equals("fsharp", StringComparison.OrdinalIgnoreCase)
-        && not (options |> Array.exists (fun option ->
-            option.Equals("no-check", StringComparison.OrdinalIgnoreCase)
-            || option.Equals("transcript", StringComparison.OrdinalIgnoreCase)))
+    let private tokenClass = function
+        | PlainText -> "tok-plain" | Keyword -> "tok-keyword" | Identifier -> "tok-identifier"
+        | TypeName -> "tok-type" | Function -> "tok-function" | Property -> "tok-property"
+        | UnionCase -> "tok-union-case" | ActivePatternCase -> "tok-active-pattern"
+        | Module -> "tok-module" | Namespace -> "tok-namespace" | Operator -> "tok-operator"
+        | Number -> "tok-number" | String -> "tok-string" | Comment -> "tok-comment"
+        | Punctuation -> "tok-punctuation" | Preprocessor -> "tok-preprocessor"
 
-    let private compilerOptions references =
-        references
-        |> List.filter (String.IsNullOrWhiteSpace >> not)
-        |> List.distinct
-        |> List.map (fun path ->
-            let escapedPath = path.Replace("\"", "\\\"")
-            $"-r:\"{escapedPath}\"")
-        |> String.concat " "
-        |> function
-            | "" -> None
-            | options -> Some options
+    let private safeId (value: string) = Regex.Replace(value, @"[^A-Za-z0-9_-]", "-")
 
-    let private fallbackHtml (code: string) =
-        $"<pre><code class=\"language-fsharp\">{WebUtility.HtmlEncode(code.TrimEnd('\r', '\n'))}</code></pre>"
+    let private lexicalTokenPattern =
+        Regex("""//.*$|@?"(?:""|\\.|[^"])*"|\d+(?:\.\d+)?|[A-Za-z_'\p{L}][\w'\p{L}]*|[!%&*+\-./<=>?@^|~:]+|\s+|.""", RegexOptions.Compiled)
 
-    let private normalizeWhitespace (value: string) =
-        Regex.Replace(value, @"\s+", " ").Trim()
+    let private keywords =
+        set [ "abstract"; "and"; "as"; "assert"; "base"; "begin"; "class"; "default"; "delegate"; "do"; "done"; "downcast"; "downto"; "elif"; "else"; "end"; "exception"; "extern"; "false"; "finally"; "fixed"; "for"; "fun"; "function"; "global"; "if"; "in"; "inherit"; "inline"; "interface"; "internal"; "lazy"; "let"; "match"; "member"; "module"; "mutable"; "namespace"; "new"; "null"; "of"; "open"; "or"; "override"; "private"; "public"; "rec"; "return"; "return!"; "select"; "static"; "struct"; "then"; "to"; "true"; "try"; "type"; "upcast"; "use"; "use!"; "val"; "void"; "when"; "while"; "with"; "yield"; "yield!" ]
 
-    let private formatXmlDocumentation (tooltipHtml: string) =
-        Regex.Replace(
-            tooltipHtml,
-            "(?s)<em>(?<documentation>.*?)</em>",
-            fun matched ->
-                let encoded = matched.Groups.["documentation"].Value
-                let decoded = WebUtility.HtmlDecode(encoded)
-                if not (decoded.Contains("<summary", StringComparison.OrdinalIgnoreCase)) then matched.Value
-                else
-                    try
-                        let root = XElement.Parse("<root>" + decoded + "</root>")
-                        let sections =
-                            root.Elements()
-                            |> Seq.choose (fun element ->
-                                let content = element.Value |> normalizeWhitespace |> WebUtility.HtmlEncode
-                                if String.IsNullOrWhiteSpace content then None
-                                else
-                                    let name = element.Name.LocalName.ToLowerInvariant()
-                                    let attribute attributeName =
-                                        element.Attribute(XName.Get attributeName)
-                                        |> Option.ofObj
-                                        |> Option.map (_.Value >> WebUtility.HtmlEncode)
-                                    match name with
-                                    | "summary" -> Some $"<div class=\"fsdocs-tip-summary\">{content}</div>"
-                                    | "param" ->
-                                        let label = defaultArg (attribute "name") "Parameter"
-                                        Some $"<div class=\"fsdocs-tip-detail\"><strong>{label}:</strong> {content}</div>"
-                                    | "typeparam" ->
-                                        let label = defaultArg (attribute "name") "Type parameter"
-                                        Some $"<div class=\"fsdocs-tip-detail\"><strong>{label}:</strong> {content}</div>"
-                                    | "returns" -> Some $"<div class=\"fsdocs-tip-detail\"><strong>Returns:</strong> {content}</div>"
-                                    | "remarks" -> Some $"<div class=\"fsdocs-tip-detail\"><strong>Remarks:</strong> {content}</div>"
-                                    | "platforms" -> Some $"<div class=\"fsdocs-tip-detail\"><strong>Platforms:</strong> {content}</div>"
-                                    | "exception" -> Some $"<div class=\"fsdocs-tip-detail\"><strong>Exception:</strong> {content}</div>"
-                                    | "example" -> Some $"<div class=\"fsdocs-tip-detail\"><strong>Example:</strong> {content}</div>"
-                                    | _ -> None)
-                            |> String.concat ""
-                        if String.IsNullOrWhiteSpace sections then matched.Value
-                        else $"<div class=\"fsdocs-tip-docs\">{sections}</div>"
-                    with _ ->
-                        matched.Value)
+    let private lexicalClass (text: string) =
+        if String.IsNullOrWhiteSpace text then "tok-plain"
+        elif text.StartsWith("//") then "tok-comment"
+        elif text.StartsWith("\"") || text.StartsWith("@\"") then "tok-string"
+        elif Char.IsDigit text.[0] then "tok-number"
+        elif keywords.Contains text then "tok-keyword"
+        elif Regex.IsMatch(text, @"^[!%&*+\-./<=>?@^|~:]+$") then "tok-operator"
+        elif Char.IsUpper text.[0] then "tok-type"
+        elif Regex.IsMatch(text, @"^[A-Za-z_'\p{L}][\w'\p{L}]*$") then "tok-identifier"
+        else "tok-punctuation"
 
-    let private removeRecoveryTooltips (tooltipHtml: string) (snippetHtml: string) =
-        let tooltipPattern = Regex("(?s)<div popover class=\"fsdocs-tip\" id=\"(?<id>[^\"]+)\">(?<body>.*?)</div>")
-        let recoveryIds =
-            tooltipPattern.Matches(tooltipHtml)
+    let private renderLexicalLine (line: string) =
+        let prompt = Regex.Match(line, @"^(?<indent>\s*)(?<prompt>iex\(\d+\)>|iex>|fsi>|\.{3}>|>)(?<space>\s?)")
+        let prefix, source =
+            if prompt.Success then
+                let promptText = prompt.Groups.["indent"].Value + prompt.Groups.["prompt"].Value + prompt.Groups.["space"].Value
+                $"<span class=\"prompt-unselectable\">{WebUtility.HtmlEncode promptText}</span>", line.Substring(prompt.Length)
+            else "", line
+        let tokens =
+            lexicalTokenPattern.Matches(source)
             |> Seq.cast<Match>
-            |> Seq.filter (fun matched -> Regex.IsMatch(WebUtility.HtmlDecode(matched.Groups.["body"].Value), @"\bobj\b"))
-            |> Seq.map (fun matched -> matched.Groups.["id"].Value)
-            |> Seq.toList
-        let cleanTooltips =
-            tooltipPattern.Replace(tooltipHtml, fun matched ->
-                if recoveryIds |> List.contains matched.Groups.["id"].Value then "" else matched.Value)
-        let cleanSnippet =
-            recoveryIds
-            |> List.fold (fun html id ->
-                Regex.Replace(
-                    html,
-                    $" data-fsdocs-tip=\"{Regex.Escape(id)}\" data-fsdocs-tip-unique=\"\d+\"",
-                    "")) snippetHtml
-        cleanTooltips, cleanSnippet
+            |> Seq.map (fun matched -> $"<span class=\"{lexicalClass matched.Value}\">{WebUtility.HtmlEncode matched.Value}</span>")
+            |> String.concat ""
+        prefix + tokens
 
-    let private removeAllTooltipAttributes (snippetHtml: string) =
-        Regex.Replace(
-            snippetHtml,
-            " data-fsdocs-tip=\"[^\"]+\" data-fsdocs-tip-unique=\"\d+\"",
-            "")
+    let private codeFrame extraClass lines tooltips =
+        $"<div class=\"livedocs-code {extraClass} not-prose\"><pre class=\"code-frame\"><code class=\"language-fsharp\">{lines}</code></pre>{tooltips}</div>"
+
+    let private renderLexicalSource source =
+        let lines =
+            DocumentationDiscovery.normalizeSource(source).TrimEnd('\n').Split('\n')
+            |> Array.map renderLexicalLine
+            |> String.concat "\n"
+        codeFrame "livedocs-lexical-code" lines ""
+
+    let private renderPersistedBlock (block: SemanticCodeBlock) =
+        let tooltipId index = $"livedocs-tip-{safeId block.Id}-{index}"
+        let lines =
+            block.Lines
+            |> List.map (fun line ->
+                line.Tokens
+                |> List.map (fun token ->
+                    let encoded = WebUtility.HtmlEncode token.Text
+                    match token.Tooltip with
+                    | Some index ->
+                        let id = tooltipId index
+                        $"<span class=\"{tokenClass token.Kind}\" tabindex=\"0\" data-fsdocs-tip=\"{id}\" aria-describedby=\"{id}\">{encoded}</span>"
+                    | None -> $"<span class=\"{tokenClass token.Kind}\">{encoded}</span>")
+                |> String.concat "")
+            |> String.concat "\n"
+        let tooltips =
+            block.Tooltips
+            |> List.mapi (fun index tooltip ->
+                let signature = tooltip.Signature |> Option.map (WebUtility.HtmlEncode >> fun value -> $"<code>{value}</code>") |> Option.defaultValue ""
+                let documentation = tooltip.Documentation |> Option.map (WebUtility.HtmlEncode >> fun value -> $"<p>{value}</p>") |> Option.defaultValue ""
+                let sections =
+                    tooltip.Sections
+                    |> List.map (fun section ->
+                        let heading = section.Heading |> Option.map (WebUtility.HtmlEncode >> fun value -> $"<strong>{value}</strong>") |> Option.defaultValue ""
+                        $"<div>{heading}<p>{WebUtility.HtmlEncode section.Content}</p></div>")
+                    |> String.concat ""
+                let footer = tooltip.Footer |> Option.map (WebUtility.HtmlEncode >> fun value -> $"<small>{value}</small>") |> Option.defaultValue ""
+                $"<div class=\"livedocs-semantic-tooltip fsdocs-tip\" id=\"{tooltipId index}\" role=\"tooltip\" popover>{signature}{documentation}{sections}{footer}</div>")
+            |> String.concat ""
+        codeFrame "livedocs-semantic-code" lines $"<div class=\"livedocs-tooltips\">{tooltips}</div>"
+
+    let private renderPreparation (block: SemanticCodeBlock) =
+        $"<details class=\"livedocs-shared-setup not-prose\"><summary>Shared setup</summary>{renderPersistedBlock block}</details>"
+
+    let private renderPrelude (prelude: string) =
+        $"<details class=\"livedocs-shared-setup livedocs-repository-setup not-prose\"><summary>Repository F# setup</summary>{renderLexicalSource prelude}</details>"
+
+    let private formatFromArtifact options sourcePath markdown artifact =
+        let blocks = DocumentationDiscovery.discoverMarkdown sourcePath None markdown
+        let page = artifact.Pages |> List.tryFind (fun page -> page.SourcePath = sourcePath.Replace('\\', '/'))
+        let persistedById = page |> Option.map (fun value -> value.Blocks |> List.map (fun block -> block.Id, block) |> Map.ofList) |> Option.defaultValue Map.empty
+        let pageContextBlocks = blocks |> List.filter (fun block -> block.Mode <> Isolated && (match block.Mode with NoCheck _ | Transcript -> false | _ -> true))
+        let pageContextHash = DocumentationDiscovery.contextHash options.Prelude pageContextBlocks
+        let mutable ordinal = 0
+        fencePattern.Replace(markdown, fun matched ->
+            let block = blocks.[ordinal]
+            ordinal <- ordinal + 1
+            match block.Mode with
+            | Prepare ->
+                let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
+                if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}."
+                if persisted.ContextHash <> pageContextHash then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
+                htmlStartMarker + renderPreparation persisted + htmlEndMarker
+            | NoCheck _ | Transcript ->
+                htmlStartMarker + renderLexicalSource matched.Groups.["code"].Value + htmlEndMarker
+            | _ ->
+                let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
+                if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}."
+                let expectedContext = if block.Mode = Isolated then DocumentationDiscovery.contextHash options.Prelude [ block ] else pageContextHash
+                if persisted.ContextHash <> expectedContext then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
+                htmlStartMarker + renderPersistedBlock persisted + htmlEndMarker)
 
     /// Replaces compilable F# fences with compiler-enriched HTML and appends their shared tooltip payload.
-    /// Fences marked `fsharp no-check` or `fsharp transcript` remain available to the normal Markdown renderer.
+    /// Compiler-backed and lexical fallback F# fences share one HTML and styling contract.
     let formatFences (options: Options) (sourcePath: string) (markdown: string) =
         if not options.Enabled || not (fencePattern.IsMatch markdown) then markdown
-        else
-            let tooltips = ResizeArray<string>()
-            let mutable semanticIndex = 0
-            let result =
-                fencePattern.Replace(markdown, fun matched ->
-                    if not (isSemanticFence matched.Groups.["info"].Value) then matched.Value
-                    else
-                        let index = semanticIndex
-                        semanticIndex <- semanticIndex + 1
-                        let code = matched.Groups.["code"].Value
-                        try
-                            let checkingSource = StringBuilder()
-                            options.Opens
-                            |> List.filter (String.IsNullOrWhiteSpace >> not)
-                            |> List.distinct
-                            |> List.iter (fun namespaceName -> checkingSource.AppendLine($"open {namespaceName}") |> ignore)
-                            checkingSource.AppendLine("// [snippet:livedocs]") |> ignore
-                            checkingSource.Append(code) |> ignore
-                            checkingSource.AppendLine().AppendLine("// [/snippet]") |> ignore
-                            let snippets, diagnostics =
-                                CodeFormatter.ParseAndCheckSource(
-                                    $"{sourcePath}.{index}.fsx",
-                                    checkingSource.ToString(),
-                                    compilerOptions options.References,
-                                    None,
-                                    options.OnDiagnostic)
-                            let formatted = CodeFormat.FormatHtml(snippets, $"livedocs{index}-", addErrors = false)
-                            let displayed = formatted.Snippets |> Array.tryFind (fun snippet -> snippet.Key = "livedocs")
-                            match displayed with
-                            | None -> fallbackHtml code
-                            | Some snippet when String.IsNullOrWhiteSpace snippet.Content -> fallbackHtml code
-                            | Some snippet when diagnostics |> Array.exists (fun (SourceError(_, _, kind, _)) -> kind = ErrorKind.Error) ->
-                                htmlStartMarker + removeAllTooltipAttributes snippet.Content + htmlEndMarker
-                            | Some snippet ->
-                                    let formattedTooltips = formatXmlDocumentation formatted.ToolTip
-                                    let cleanTooltips, cleanSnippet = removeRecoveryTooltips formattedTooltips snippet.Content
-                                    if not (String.IsNullOrWhiteSpace cleanTooltips) then
-                                        tooltips.Add(cleanTooltips.Replace("\r", "").Replace("\n", "<br />"))
-                                    htmlStartMarker + cleanSnippet + htmlEndMarker
-                        with error ->
-                            options.OnDiagnostic $"Semantic F# formatting failed for {sourcePath}: {error.Message}"
-                            fallbackHtml code)
-
-            if tooltips.Count = 0 then result
-            else
-                result
-                + "\n"
-                + htmlStartMarker
-                + "<div class=\"livedocs-tooltips not-prose\">"
-                + String.concat "\n" tooltips
-                + "</div>"
-                + htmlEndMarker
-                + "\n"
+        elif options.Artifact.IsSome then
+            let formatted = formatFromArtifact options sourcePath markdown options.Artifact.Value
+            if String.IsNullOrWhiteSpace options.Prelude then formatted
+            else htmlStartMarker + renderPrelude options.Prelude + htmlEndMarker + "\n\n" + formatted
+        else markdown

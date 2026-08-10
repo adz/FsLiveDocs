@@ -7,6 +7,7 @@ PROJECTS=(
   "src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj"
   "src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj"
   "src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj"
+  "samples/DeepReference/Acme.Docs/Acme.Docs.fsproj"
 )
 
 echo -e "\033[1;34m--- FsLiveDocs: Documentation Preview ---\033[0m"

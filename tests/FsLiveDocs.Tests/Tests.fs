@@ -12,6 +12,31 @@ open Newtonsoft.Json
 module HistoryTests =
 
     [<Fact>]
+    let ``semantic artifact round trips and validates tooltip indexes`` () =
+        let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".semantic.json")
+        let block = {
+            Id = "guide.md#fsharp-0"; SourceHash = "source"; ContextHash = "context"
+            Lines = [ { Tokens = [ { Text = "value"; Kind = SemanticTokenKind.Identifier; Tooltip = Some 0 } ] } ]
+            Tooltips = [ { Signature = Some "value: int"; Documentation = Some "A value."; Sections = []; Footer = None } ]
+            Diagnostics = []
+        }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ block ] } ] }
+        File.WriteAllText(path, JsonConvert.SerializeObject(artifact, Formatting.Indented, Serialization.jsonSettings))
+        let loaded = History.loadSemanticArtifact (History.sha256 path) path
+        Assert.Equal("value", loaded.Pages.Head.Blocks.Head.Lines.Head.Tokens.Head.Text)
+
+        let invalid = { artifact with Pages = [ { SourcePath = "guide.md"; Blocks = [ { block with Lines = [ { Tokens = [ { Text = "bad"; Kind = Identifier; Tooltip = Some 2 } ] } ] } ] } ] }
+        File.WriteAllText(path, JsonConvert.SerializeObject(invalid, Formatting.Indented, Serialization.jsonSettings))
+        let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadSemanticArtifact (History.sha256 path) path |> ignore)
+        Assert.Contains("invalid tooltip index", error.Message)
+
+    [<Fact>]
+    let ``unknown future semantic classifications degrade to plain text`` () =
+        let json = "{\"Text\":\"future\",\"Kind\":\"FutureClassification\",\"Tooltip\":null}"
+        let token = JsonConvert.DeserializeObject<SemanticToken>(json, Serialization.jsonSettings)
+        Assert.Equal(SemanticTokenKind.PlainText, token.Kind)
+
+    [<Fact>]
     let ``loadArtifact verifies checksum schema and version`` () =
         let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
         let package : PackageModel = { Version = "1.2.3"; Entities = []; Scenarios = []; Packages = [] }
@@ -30,12 +55,34 @@ module HistoryTests =
         let manifest : HistoryManifest = {
             SchemaVersion = History.ManifestSchemaVersion
             CurrentVersion = "2.0.0"
-            Entries = [ { Version = "1.0.0"; ModelPath = "model.json"; ModelSha256 = "checksum"; DocsPath = "docs" } ]
+            Entries = [ { Version = "1.0.0"; ModelPath = "model.json"; ModelSha256 = "checksum"; SemanticPath = None; SemanticSha256 = None; DocsPath = "docs" } ]
         }
         File.WriteAllText(path, JsonConvert.SerializeObject(manifest, Serialization.jsonSettings))
 
         let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadManifest path |> ignore)
         Assert.Contains("has no manifest entry", error.Message)
+
+    [<Fact>]
+    let ``semantic manifest fields must be paired`` () =
+        let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
+        let manifest : HistoryManifest = {
+            SchemaVersion = History.ManifestSchemaVersion
+            CurrentVersion = "1.0.0"
+            Entries = [ { Version = "1.0.0"; ModelPath = "model.json"; ModelSha256 = "checksum"; SemanticPath = Some "semantic.json"; SemanticSha256 = None; DocsPath = "docs" } ]
+        }
+        File.WriteAllText(path, JsonConvert.SerializeObject(manifest, Serialization.jsonSettings))
+        let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadManifest path |> ignore)
+        Assert.Contains("semanticPath and semanticSha256 together", error.Message)
+
+    [<Fact>]
+    let ``legacy manifest without semantic fields remains valid`` () =
+        let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
+        File.WriteAllText(path, """{"SchemaVersion":1,"CurrentVersion":"1.0.0","Entries":[{"Version":"1.0.0","ModelPath":"model.json","ModelSha256":"checksum","DocsPath":"docs"}]}""")
+        let manifest, entries = History.loadManifest path
+        Assert.Equal("1.0.0", manifest.CurrentVersion)
+        let entry, _, _ = Assert.Single(entries)
+        Assert.Equal(None, entry.SemanticPath)
+        Assert.Equal(None, entry.SemanticSha256)
 
 module SymbolListerTests =
 
@@ -92,64 +139,179 @@ module ContentProviderTests =
     let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
 
     [<Fact>]
-    let ``semantic F sharp fences contain compiler tooltips`` () =
-        let markdown = "```fsharp\nlet answer = List.sum [ 40; 2 ]\n```"
-        let html = SemanticCode.formatFences SemanticCode.defaults "guide.fsx" markdown
+    let ``canonical discovery assigns stable ids modes and normalized hashes`` () =
+        let markdown = "```fsharp prepare\r\nopen System\r\n```\r\n```fsharp isolated\r\nlet answer = 42\r\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "docs\\start.md" None markdown
 
-        Assert.DoesNotContain("```fsharp", html)
-        Assert.Contains("answer", html)
-        Assert.Contains("fsdocs-tip", html)
-        Assert.Contains("livedocs-tooltips not-prose", html)
-
-    [<Fact>]
-    let ``semantic F sharp fences resolve referenced project types`` () =
-        let markdown = "```fsharp\nlet package : PackageModel = Unchecked.defaultof<_>\n```"
-        let options =
-            {
-                SemanticCode.defaults with
-                    References = [ typeof<PackageModel>.Assembly.Location ]
-                    Opens = [ "FsLiveDocs.Core" ]
-            }
-        let html = SemanticCode.formatFences options "guide.fsx" markdown
-
-        Assert.Contains("val package: PackageModel", html)
-        Assert.DoesNotContain("val package: obj", html)
-        Assert.Contains("The root model representing a documented package or solution.", html)
-        Assert.Contains("fsdocs-tip-docs", html)
-        Assert.DoesNotContain("&lt;summary&gt;", html)
+        Assert.Equal<string list>([ "docs/start.md#fsharp-0"; "docs/start.md#fsharp-1" ], blocks |> List.map _.Id)
+        Assert.Equal(Prepare, blocks.[0].Mode)
+        Assert.Equal(Isolated, blocks.[1].Mode)
+        Assert.DoesNotContain("\r", blocks.[0].ExpandedSource)
 
     [<Fact>]
-    let ``no-check F sharp fences remain Markdown`` () =
-        let markdown = "```fsharp no-check\nlet incomplete =\n```"
-        let formatted = SemanticCode.formatFences SemanticCode.defaults "guide.fsx" markdown
-
-        Assert.Equal(markdown, formatted)
-
-    [<Fact>]
-    let ``invalid F sharp fences do not publish compiler recovery types`` () =
-        let markdown = "```fsharp\nlet value : MissingType = ...\n```"
-        let html = SemanticCode.formatFences SemanticCode.defaults "guide.fsx" markdown
-
-        Assert.Contains("table class=\"pre\"", html)
-        Assert.Contains("pre class=\"fssnip\"", html)
-        Assert.DoesNotContain("fsdocs-tip", html)
-        Assert.DoesNotContain("val value: obj", html)
+    let ``no-check requires a reason and contradictory modes fail discovery`` () =
+        let missing = Assert.Throws<InvalidOperationException>(fun () -> DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp no-check\nx\n```" |> ignore)
+        Assert.Contains("requires a non-empty reason", missing.Message)
+        let contradictory = Assert.Throws<InvalidOperationException>(fun () -> DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp run isolated\nx\n```" |> ignore)
+        Assert.Contains("Contradictory", contradictory.Message)
 
     [<Fact>]
-    let ``inferred obj recovery tooltips are omitted`` () =
-        let markdown = "```fsharp\nlet placeholder = Unchecked.defaultof<_>\n```"
-        let html = SemanticCode.formatFences SemanticCode.defaults "guide.fsx" markdown
+    let ``verification compiles page and isolated units but only executes explicit modes`` () =
+        let markdown = "```fsharp\nlet a = 1\n```\n```fsharp run\nprintfn \"run\"\n```\n```fsharp isolated\nlet a = 2\n```\n```fsharp transcript\n> 1 + 1;;\nval it: int = 2\n```\n```fsharp no-check reason=\"pseudocode\"\n...\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown
+        let cases = DocumentationDiscovery.verificationCases "sample.fsproj" "" blocks
 
-        Assert.Contains("placeholder", html)
-        Assert.DoesNotContain("val placeholder: obj", html)
-        Assert.DoesNotContain("data-fsdocs-tip", html)
+        Assert.Equal(4, cases.Length)
+        Assert.Equal(2, cases |> List.choose (function Compile unit -> Some unit | _ -> None) |> List.length)
+        Assert.Equal(1, cases |> List.choose (function Execute block -> Some block | _ -> None) |> List.length)
+        Assert.Equal(1, cases |> List.choose (function ExecuteTranscript block -> Some block | _ -> None) |> List.length)
 
     [<Fact>]
-    let ``identical F sharp fences receive distinct semantic output`` () =
-        let fence = "```fsharp\nlet value = 42\n```"
-        let html = SemanticCode.formatFences SemanticCode.defaults "guide.fsx" (fence + "\n\n" + fence)
+    let ``snippet modes and example transcripts survive canonical expansion`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        File.WriteAllText(Path.Combine(root, "Sample.fs"), "// <snippet:Partial>\nmissing ...\n// </snippet:Partial>")
+        let example = ExampleModel.Create("Session", "> 1 + 1;;\nval it: int = 2", Some "val it: int = 2", None)
+        let memberModel = { Id = "M"; Name = "M"; Signature = ""; Parameters = []; ReturnType = ""; SummaryHtml = ""; RemarksHtml = ""; Examples = [ example ]; Location = { File = ""; Line = 1 } }
+        let entity = { Id = "E"; Name = "E"; Kind = EntityKind.Module; SummaryHtml = ""; Members = [ memberModel ]; Examples = []; Entities = [] }
+        let package = { emptyPackage with Entities = [ entity ] }
+        let expanded =
+            ContentProvider.resolveSnippets
+                "{{< snippet id=\"Partial\" mode=\"no-check\" reason=\"Excerpt\" >}}\n{{< example id=\"Session\" >}}"
+                root package ""
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None expanded
+        Assert.Equal(NoCheck "Excerpt", blocks.[0].Mode)
+        Assert.Equal(Transcript, blocks.[1].Mode)
 
-        Assert.Equal(2, Regex.Matches(html, "val value: int").Count)
+    [<Fact>]
+    let ``frontmatter selects a documentation project`` () =
+        let parsed = ContentProvider.parseFrontMatter "---\ntitle: Browser\nproject: src/Browser/Browser.fsproj\ntargetFramework: net8.0\nplatform: dotnet\n---\nBody"
+        Assert.Equal(Some "src/Browser/Browser.fsproj", parsed |> Option.bind (fun (metadata, _) -> metadata.Project))
+        Assert.Equal(Some "net8.0", parsed |> Option.bind (fun (metadata, _) -> metadata.TargetFramework))
+        Assert.Equal(Some "dotnet", parsed |> Option.bind (fun (metadata, _) -> metadata.Platform))
+
+    [<Fact>]
+    let ``persisted semantic records render accessible encoded tooltips and reject stale source`` () =
+        let markdown = "```fsharp\nlet value = List.head [ \"<safe>\" ]\n```"
+        let discovered = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown |> List.head
+        let tooltip = { Signature = Some "val value: string"; Documentation = Some "Returns <content>."; Sections = []; Footer = Some "Sample" }
+        let semantic = {
+            Id = discovered.Id
+            SourceHash = discovered.SourceHash
+            ContextHash = DocumentationDiscovery.contextHash "" [ discovered ]
+            Lines = [ { Tokens = [ { Text = discovered.ExpandedSource; Kind = SemanticTokenKind.Identifier; Tooltip = Some 0 } ] } ]
+            Tooltips = [ tooltip ]
+            Diagnostics = []
+        }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ semantic ] } ] }
+        let html = SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact } "guide.md" markdown
+        Assert.Contains("aria-describedby=", html)
+        Assert.Contains("&lt;safe&gt;", html)
+        Assert.Contains("Returns &lt;content&gt;.", html)
+        Assert.DoesNotContain("Returns <content>.", html)
+        let error = Assert.Throws<InvalidOperationException>(fun () -> SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact } "guide.md" (markdown.Replace("value", "changed")) |> ignore)
+        Assert.Contains("source hash mismatch", error.Message)
+
+    [<Fact>]
+    let ``persisted semantic records reject changed preparation context and missing blocks`` () =
+        let markdown = "```fsharp prepare\nopen System\n```\n\n```fsharp\nlet value = DateTime.UnixEpoch\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown
+        let displayed = blocks.[1]
+        let semantic = {
+            Id = displayed.Id; SourceHash = displayed.SourceHash
+            ContextHash = DocumentationDiscovery.contextHash "" blocks
+            Lines = [ { Tokens = [ { Text = displayed.ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]
+            Tooltips = []; Diagnostics = []
+        }
+        let preparation = {
+            Id = blocks.[0].Id; SourceHash = blocks.[0].SourceHash
+            ContextHash = DocumentationDiscovery.contextHash "" blocks
+            Lines = [ { Tokens = [ { Text = blocks.[0].ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]
+            Tooltips = []; Diagnostics = []
+        }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ preparation; semantic ] } ] }
+        let changedPreparation = markdown.Replace("open System", "open System.IO")
+        let contextError =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact } "guide.md" changedPreparation |> ignore)
+        Assert.Contains("source hash mismatch", contextError.Message)
+
+        let missingArtifact = { artifact with Pages = [ { SourcePath = "guide.md"; Blocks = [] } ] }
+        let missingError =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some missingArtifact } "guide.md" markdown |> ignore)
+        Assert.Contains("missing block", missingError.Message)
+
+    [<Fact>]
+    let ``prepare blocks render as inspectable shared setup`` () =
+        let markdown = "```fsharp prepare\nopen System\n```\n\n```fsharp\nlet value = DateTime.UnixEpoch\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown
+        let semantic (block: DocumentationBlock) = {
+            Id = block.Id; SourceHash = block.SourceHash
+            ContextHash = DocumentationDiscovery.contextHash "" blocks
+            Lines = [ { Tokens = [ { Text = block.ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]
+            Tooltips = []; Diagnostics = []
+        }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = blocks |> List.map semantic } ] }
+
+        let html = SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact } "guide.md" markdown
+
+        Assert.Contains("<details class=\"livedocs-shared-setup", html)
+        Assert.Contains("Shared setup", html)
+        Assert.Contains("open System", html)
+
+    [<Fact>]
+    let ``configured repository prelude is rendered and participates in context validation`` () =
+        let markdown = "```fsharp\nlet value = DateTime.UnixEpoch\n```"
+        let block = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown |> List.head
+        let prelude = "open System"
+        let semantic = {
+            Id = block.Id; SourceHash = block.SourceHash; ContextHash = DocumentationDiscovery.contextHash prelude [ block ]
+            Lines = [ { Tokens = [ { Text = block.ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]; Tooltips = []; Diagnostics = [] }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = prelude; Pages = [ { SourcePath = "guide.md"; Blocks = [ semantic ] } ] }
+
+        let html = SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact; Prelude = artifact.Prelude } "guide.md" markdown
+
+        Assert.Contains("Repository F# setup", html)
+        Assert.Contains("<span class=\"tok-keyword\">open</span>", html)
+        Assert.Contains(">System</span>", html)
+
+    [<Fact>]
+    let ``no-check F sharp fences use the shared lexical renderer when an artifact is present`` () =
+        let markdown = "```fsharp no-check reason=\"Illustrative\"\nlet incomplete =\n```"
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [] }
+        let formatted = SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact } "guide.fsx" markdown
+
+        Assert.Contains("livedocs-code livedocs-lexical-code", formatted)
+        Assert.Contains("<span class=\"tok-keyword\">let</span>", formatted)
+        Assert.DoesNotContain("```fsharp", formatted)
+
+    [<Fact>]
+    let ``semantic and lexical F sharp blocks share one code frame contract`` () =
+        let markdown = "```fsharp\nlet checkedValue = 1\n```\n\n```fsharp no-check reason=\"Illustrative\"\nlet illustrativeValue = 2\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown
+        let checkedBlock = blocks.[0]
+        let semantic = {
+            Id = checkedBlock.Id
+            SourceHash = checkedBlock.SourceHash
+            ContextHash = DocumentationDiscovery.contextHash "" [ checkedBlock ]
+            Lines = [ { Tokens = [ { Text = "let"; Kind = Keyword; Tooltip = None }; { Text = " checkedValue = 1"; Kind = PlainText; Tooltip = None } ] } ]
+            Tooltips = []
+            Diagnostics = []
+        }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ semantic ] } ] }
+
+        let html = SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact } "guide.md" markdown
+
+        Assert.Equal(2, Regex.Matches(html, "<pre class=\"code-frame\"><code class=\"language-fsharp\">").Count)
+        Assert.Equal(2, Regex.Matches(html, "<span class=\"tok-keyword\">let</span>").Count)
+        Assert.Contains("livedocs-code livedocs-semantic-code", html)
+        Assert.Contains("livedocs-code livedocs-lexical-code", html)
+
+    [<Fact>]
+    let ``semantic formatting without a release artifact is syntax-only`` () =
+        let markdown = "```fsharp\nlet answer = 42\n```"
+        Assert.Equal(markdown, SemanticCode.formatFences SemanticCode.defaults "guide.md" markdown)
 
     [<Fact>]
     let ``outputPathFor preserves folders and removes ordering prefixes`` () =
@@ -194,7 +356,7 @@ module ContentProviderTests =
         Assert.Contains("href=\"details.html\"", indexPage.ContentHtml)
 
     [<Fact>]
-    let ``scanDocs preserves semantic spans across indented code`` () =
+    let ``scanDocs preserves indented code in syntax-only fallback`` () =
         let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(docsDir) |> ignore
         File.WriteAllText(
@@ -203,12 +365,13 @@ module ContentProviderTests =
 
         let page = ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> List.exactlyOne
 
-        Assert.Contains("<span class=\"k\">match</span>", page.ContentHtml)
+        Assert.Contains("match value with", page.ContentHtml)
+        Assert.Contains("<pre><code class=\"language-fsharp\">", page.ContentHtml)
         Assert.DoesNotContain("&lt;span", page.ContentHtml)
         Assert.DoesNotContain("data-fslivedocs-semantic-placeholder", page.ContentHtml)
 
     [<Fact>]
-    let ``valid and invalid F sharp fences use the same code frame`` () =
+    let ``syntax-only fallback uses the same code frame for every F sharp fence`` () =
         let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(docsDir) |> ignore
         File.WriteAllText(
@@ -217,8 +380,7 @@ module ContentProviderTests =
 
         let page = ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> List.exactlyOne
 
-        Assert.Equal(2, Regex.Matches(page.ContentHtml, "<table class=\"pre\">").Count)
-        Assert.Equal(2, Regex.Matches(page.ContentHtml, "<pre class=\"fssnip\">").Count / 2)
+        Assert.Equal(2, Regex.Matches(page.ContentHtml, "<pre><code class=\"language-fsharp\">").Count)
 
     [<Fact>]
     let ``copyStaticFiles preserves paths and ignores Markdown`` () =
@@ -252,7 +414,7 @@ module ContentProviderTests =
         }
         let body = "Look at {{< example id=\"E1\" >}} and xref:M:M1.add"
         let resolved = ContentProvider.resolveSnippets body "." package "/"
-        Assert.Contains("```fsharp\n1+1\n```", resolved)
+        Assert.Contains("```fsharp origin=xml-example\n1+1\n```", resolved)
         Assert.Contains("[add](/api/M1.html#M1.add)", resolved)
 
 module DocTestRunnerTests =
@@ -386,12 +548,12 @@ module DocTestRunnerTests =
 
 module ViewTests =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None }
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None }
 
     [<Fact>]
     let ``tooltip surface is explicitly opaque`` () =
         let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
-        let page = { Metadata = { Title = "Guide"; Type = None }; ContentHtml = ""; FilePath = "guide.md"; OutputPath = "guide.html"; SectionOrder = 0 }
+        let page = { Metadata = { Title = "Guide"; Type = None; Project = None; TargetFramework = None; Platform = None }; ContentHtml = ""; FilePath = "guide.md"; OutputPath = "guide.html"; SectionOrder = 0 }
         let context : SiteBuilder.SiteRenderContext =
             { AllPages = [ page ]; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "dark"; RootPath = "" }
 
@@ -450,7 +612,34 @@ module ViewTests =
 
 module SiteBuilderTests =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None }
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None }
+
+    [<Fact>]
+    let ``history renders persisted semantic hovers without a historical project`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let docsDir = Path.Combine(root, "tagged", "docs")
+        let outputDir = Path.Combine(root, "output")
+        Directory.CreateDirectory(docsDir) |> ignore
+        let markdown = "---\ntitle: Historical\n---\n```fsharp\nlet answer = 42\n```"
+        File.WriteAllText(Path.Combine(docsDir, "index.md"), markdown)
+        let discovered = DocumentationDiscovery.discoverMarkdown "index.md" None markdown |> List.head
+        let semanticBlock = {
+            Id = discovered.Id; SourceHash = discovered.SourceHash; ContextHash = DocumentationDiscovery.contextHash "" [ discovered ]
+            Lines = [ { Tokens = [ { Text = "let"; Kind = Keyword; Tooltip = None }; { Text = " answer = 42"; Kind = Identifier; Tooltip = Some 0 } ] } ]
+            Tooltips = [ { Signature = Some "answer: int"; Documentation = Some "Stored release documentation."; Sections = []; Footer = None } ]
+            Diagnostics = []
+        }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "index.md"; Blocks = [ semanticBlock ] } ] }
+        let options = { SemanticCode.defaults with Artifact = Some artifact }
+        let package : PackageModel = { Version = "1.0.0"; Entities = []; Scenarios = []; Packages = [] }
+        let pages = ContentProvider.scanDocsWithOptions docsDir (Path.GetDirectoryName docsDir) package "" options
+
+        SiteBuilder.buildHistory "1.0.0" [ "1.0.0", package, pages, docsDir ] defaultSiteConfig "light" outputDir
+
+        let html = File.ReadAllText(Path.Combine(outputDir, "index.html"))
+        Assert.Contains("answer: int", html)
+        Assert.Contains("Stored release documentation.", html)
+        Assert.Contains("data-fsdocs-tip", html)
 
     [<Fact>]
     let ``API summaries link compiler references to generated entity pages`` () =
@@ -525,7 +714,7 @@ module SiteBuilderTests =
     [<Fact>]
     let ``build preserves an authored homepage and nested page paths`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
-        let metadata title = { Title = title; Type = None }
+        let metadata title = { Title = title; Type = None; Project = None; TargetFramework = None; Platform = None }
         let pages =
             [
                 { Metadata = metadata "Home"; ContentHtml = "<h1>Consumer home</h1>"; FilePath = "docs/index.md"; OutputPath = "index.html"; SectionOrder = Int32.MaxValue }
@@ -554,6 +743,17 @@ module SiteBuilderTests =
         Assert.Contains("data-docs-group=\"http/advanced\"", nestedPage)
         Assert.True(nestedPage.IndexOf("data-docs-group=\"http/advanced\"", StringComparison.Ordinal) < nestedPage.IndexOf(">Client</a>", StringComparison.Ordinal))
         Assert.Contains("currentSidebarLink.setAttribute('aria-current', 'page')", nestedPage)
+        Assert.Contains("const isManagedFSharp = code.closest('.livedocs-code') !== null", nestedPage)
+        Assert.Contains("if (!isManagedFSharp)", nestedPage)
+        Assert.DoesNotContain("code-copy-button", nestedPage)
+        Assert.DoesNotContain("navigator.clipboard", nestedPage)
+        Assert.Contains("--livedocs-code-background: #f6f8fa;", nestedPage)
+        Assert.Contains("html[data-theme=\"dark\"] pre.code-frame", nestedPage)
+        Assert.Contains("--livedocs-code-background: #161b22;", nestedPage)
+        Assert.Contains(".livedocs-code { margin: 1.7142857em -1.5rem; }", nestedPage)
+        Assert.Contains("window.Prism.manual = true", nestedPage)
+        Assert.True(nestedPage.IndexOf("window.Prism.manual = true", StringComparison.Ordinal) < nestedPage.IndexOf("prism.min.js", StringComparison.Ordinal))
+        Assert.Contains(".livedocs-code .tok-keyword { color: var(--livedocs-code-keyword); }", nestedPage)
         Assert.Contains("#sidebar-root [data-sidebar-item=\"true\"] a[href]", nestedPage)
         Assert.Contains("el.style.display = el.getAttribute('data-theme-variant') === theme ? 'block' : 'none'", nestedPage)
 
@@ -571,6 +771,7 @@ module SiteBuilderTests =
             Stylesheet = Some "content/example.css"
             Themes = Some [ "light"; "dark" ]
             Navigation = Some [ { Label = "Guides"; Href = "index.html" }; { Label = "Source"; Href = "https://github.com/example/library" } ]
+            FSharpPrelude = None
         }
 
         SiteBuilder.build {

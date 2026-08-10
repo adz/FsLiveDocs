@@ -41,8 +41,20 @@ module FsiTranscriptRunner =
             valueType.Name
 
     let private buildLoadScript (project: ResolvedProject) (references: string list) (extraOpens: string list) =
+        let projectDependencies =
+            if String.IsNullOrWhiteSpace project.AssemblyPath then []
+            else
+                let directory = Path.GetDirectoryName project.AssemblyPath
+                if Directory.Exists directory then
+                    Directory.GetFiles(directory, "*.dll")
+                    |> Array.filter (fun path ->
+                        let name = Path.GetFileNameWithoutExtension path
+                        not (name.Equals("FSharp.Core", StringComparison.OrdinalIgnoreCase))
+                        && not (name.Equals("FSharp.Compiler.Service", StringComparison.OrdinalIgnoreCase)))
+                    |> Array.toList
+                else []
         let refs =
-            project.AssemblyPath :: references
+            project.AssemblyPath :: (projectDependencies @ references)
             |> List.distinct
             |> List.filter (fun path -> not (String.IsNullOrWhiteSpace path))
             |> List.map (fun path -> $"#r @\"{Path.GetFullPath path}\"")
@@ -51,8 +63,12 @@ module FsiTranscriptRunner =
             [
                 "open System"
                 if not (String.IsNullOrWhiteSpace project.ProjectNamespace) then $"open {project.ProjectNamespace}"
+                for reference in references do
+                    let namespaceName = Path.GetFileNameWithoutExtension(reference)
+                    if not (String.IsNullOrWhiteSpace namespaceName) && Char.IsUpper(namespaceName.[0]) then $"open {namespaceName}"
                 yield! extraOpens
             ]
+            |> List.distinct
 
         String.concat "\n" (refs @ opens)
 
@@ -87,7 +103,9 @@ module FsiTranscriptRunner =
             session.ValueBound.Subscribe(fun (valueObj, valueType, name) ->
                 let name = if String.IsNullOrWhiteSpace name then "it" else name
                 let typeName = formatTypeName valueType
-                let valueText = session.FormatValue(valueObj, valueType)
+                let valueText =
+                    if valueType = typeof<decimal> then (unbox<decimal> valueObj).ToString(System.Globalization.CultureInfo.InvariantCulture) + "M"
+                    else session.FormatValue(valueObj, valueType)
                 boundOutputs.Add($"val {name}: {typeName} = {valueText}")
             )
 
@@ -97,10 +115,10 @@ module FsiTranscriptRunner =
                 |> Array.map (fun line -> line.Trim())
                 |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line))
                 |> Array.iter (fun line -> session.EvalInteraction(line) |> ignore)
-            elif normalized.EndsWith(";;", StringComparison.Ordinal) then
-                session.EvalInteraction(normalized) |> ignore
             else
-                session.EvalExpression(normalized) |> ignore
+                // A run block may contain page setup (`open`, declarations, then an
+                // expression), so it is an FSI interaction rather than one expression.
+                session.EvalInteraction(normalized) |> ignore
         with ex ->
             output.Add(ex.Message)
 
@@ -117,13 +135,16 @@ module FsiTranscriptRunner =
 
         output |> Seq.toList
 
-    let private runFsiTranscript (blocks: string list) =
+    let private runFsiTranscript setupCount (blocks: string list) =
         let session, outStream, errStream = createSession ()
         use session = session
 
         blocks
         |> List.filter (fun block -> not (String.IsNullOrWhiteSpace block))
-        |> List.collect (fun block -> evalBlock session outStream errStream block)
+        |> List.mapi (fun index block ->
+            let output = evalBlock session outStream errStream block
+            if index < setupCount && not (output |> List.exists (fun line -> line.Contains("error FS", StringComparison.OrdinalIgnoreCase))) then [] else output)
+        |> List.collect id
         |> String.concat "\n"
 
     let runExample (context: DocTestExecutionContext) =
@@ -131,19 +152,12 @@ module FsiTranscriptRunner =
         let scenarioCall =
             context.Scenario
             |> Option.map (fun s -> $"{s.MethodId}()")
-        let scenarioOpens =
-            context.Scenario
-            |> Option.map (fun s ->
-                let parts = s.MethodId.Split('.')
-                if parts.Length > 1 then parts.[parts.Length - 2] else s.MethodId)
-            |> Option.toList
-
         let scriptBlocks =
             [
-                buildLoadScript context.Project context.References scenarioOpens
+                buildLoadScript context.Project context.References []
             ]
-            @ (scenarioCall |> Option.map (fun call -> "do " + call) |> Option.toList)
+            @ (scenarioCall |> Option.toList)
             @ transcript.Interactions
 
-        let output = runFsiTranscript scriptBlocks
+        let output = runFsiTranscript (1 + (if scenarioCall.IsSome then 1 else 0)) scriptBlocks
         output, transcript.ExpectedOutput, transcript.DisplayText

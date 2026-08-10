@@ -41,18 +41,28 @@ module ProjectResolver =
             |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
             |> Option.defaultValue projectName
 
-        let searchPaths = [
-            Path.GetFullPath(Path.Combine(projDir, "../../artifacts/bin", projectName))
-            Path.Combine(projDir, "bin")
-        ]
+        let rec ancestors directory =
+            seq {
+                if not (System.String.IsNullOrWhiteSpace directory) then
+                    yield directory
+                    let parent = Directory.GetParent(directory)
+                    if not (isNull parent) then yield! ancestors parent.FullName
+            }
+        let searchPaths =
+            [ yield Path.Combine(projDir, "bin")
+              for ancestor in ancestors projDir do
+                  yield Path.Combine(ancestor, "artifacts", "bin", projectName) ]
+            |> List.distinct
 
         searchPaths
         |> List.filter Directory.Exists
-        |> List.tryPick (fun path ->
+        |> List.collect (fun path ->
             Directory.GetFiles(path, $"{assemblyName}.dll", SearchOption.AllDirectories)
             |> Array.filter (fun assembly -> File.Exists(Path.ChangeExtension(assembly, ".xml")))
-            |> Array.sortByDescending File.GetLastWriteTimeUtc
-            |> Array.tryHead)
+            |> Array.toList)
+        |> List.distinct
+        |> List.sortByDescending File.GetLastWriteTimeUtc
+        |> List.tryHead
         |> Option.defaultValue ""
 
     let resolve (projectPath: string) =

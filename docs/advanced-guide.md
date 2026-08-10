@@ -25,7 +25,7 @@ Mark an intentionally incomplete fragment with `no-check` to keep ordinary synta
 tooltips:
 
 ````markdown
-```fsharp no-check
+```fsharp no-check reason="Intentionally incomplete declaration"
 let unfinished =
 ```
 ````
@@ -39,8 +39,8 @@ val it: int = 42
 ```
 ````
 
-Historical builds use their stored API model and documentation source without requiring old assemblies, so their code
-blocks retain syntax highlighting but are not semantically rechecked.
+The complete authoring model—including page scope, hidden preparation, isolated examples, explicit execution, audit,
+and immutable history data—is covered in [Semantic and Verified Code Blocks](guides/semantic-code.html).
 
 ## 🔍 Accessing Symbols & Modules
 
@@ -64,6 +64,8 @@ A local history build consumes a materialized manifest:
       "version": "1.2.0",
       "modelPath": "models/1.2.0.json",
       "modelSha256": "<lowercase sha256>",
+      "semanticPath": "models/1.2.0.semantic.json",
+      "semanticSha256": "<lowercase sha256>",
       "docsPath": "sources/1.2.0/docs"
     }
   ]
@@ -105,7 +107,7 @@ If your code examples require a specific state, use the `[<DocScenario>]` attrib
 
 {{< example id="DocScenarioUsage" >}}
 
-For the full selection and acceptance workflow, see the [Verified Examples](verified-examples.html) guide.
+For the full selection and acceptance workflow, see the [Verified Examples](guides/verified-examples.html) guide.
 
 ---
 
