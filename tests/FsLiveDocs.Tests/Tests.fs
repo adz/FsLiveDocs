@@ -209,6 +209,7 @@ module ContentProviderTests =
         Assert.Contains("&lt;safe&gt;", html)
         Assert.Contains("Returns &lt;content&gt;.", html)
         Assert.DoesNotContain("Returns <content>.", html)
+        Assert.DoesNotContain("<small>Sample</small>", html)
         let error = Assert.Throws<InvalidOperationException>(fun () -> SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact } "guide.md" (markdown.Replace("value", "changed")) |> ignore)
         Assert.Contains("source hash mismatch", error.Message)
 

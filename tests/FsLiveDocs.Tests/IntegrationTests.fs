@@ -30,10 +30,7 @@ module IntegrationTests =
             tooltip.Documentation
             |> Option.exists (fun documentation -> documentation.Contains("root model representing a documented package")))
         Assert.Contains(semanticBlock.Tooltips, fun tooltip -> tooltip.Signature |> Option.exists _.StartsWith("package:") && tooltip.Footer.IsNone)
-        Assert.Contains(semanticBlock.Tooltips, fun tooltip -> tooltip.Signature = Some "FsLiveDocs.Core.PackageModel" && tooltip.Footer = Some "FsLiveDocs.Core")
-        Assert.Contains(
-            semanticBlocks |> List.collect _.Tooltips,
-            fun tooltip -> tooltip.Signature = Some "string" && tooltip.Footer.IsNone)
+        Assert.All(semanticBlocks |> List.collect _.Tooltips, fun tooltip -> Assert.True(tooltip.Footer.IsNone))
         let original = semanticBlock.Lines |> List.map (fun line -> line.Tokens |> List.map _.Text |> String.concat "") |> String.concat "\n"
         Assert.Equal(blocks.[0].ExpandedSource, original)
     }

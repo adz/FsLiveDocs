@@ -101,8 +101,7 @@ module SemanticCode =
                         let heading = section.Heading |> Option.map (WebUtility.HtmlEncode >> fun value -> $"<strong>{value}</strong>") |> Option.defaultValue ""
                         $"<div>{heading}<p>{WebUtility.HtmlEncode section.Content}</p></div>")
                     |> String.concat ""
-                let footer = tooltip.Footer |> Option.map (WebUtility.HtmlEncode >> fun value -> $"<small>{value}</small>") |> Option.defaultValue ""
-                $"<div class=\"livedocs-semantic-tooltip fsdocs-tip\" id=\"{tooltipId index}\" role=\"tooltip\" popover>{signature}{documentation}{sections}{footer}</div>")
+                $"<div class=\"livedocs-semantic-tooltip fsdocs-tip\" id=\"{tooltipId index}\" role=\"tooltip\" popover>{signature}{documentation}{sections}</div>")
             |> String.concat ""
         codeFrame "livedocs-semantic-code" lines $"<div class=\"livedocs-tooltips\">{tooltips}</div>"
 

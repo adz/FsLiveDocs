@@ -109,23 +109,13 @@ module SemanticExtractor =
     let private tokenPattern = Regex("""//.*$|@?"(?:""|\\.|[^"])*"|\d+(?:\.\d+)?|[A-Za-z_'\p{L}][\w'\p{L}]*|[!%&*+\-./<=>?@^|~:]+|\s+|.""", RegexOptions.Compiled)
 
     let private buildTooltip (use': FSharpSymbolUse) =
-        let isFrameworkAssembly (name: string) =
-            name.Equals("FSharp.Core", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("netstandard", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("mscorlib", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("System.Private.CoreLib", StringComparison.OrdinalIgnoreCase)
-            || name.StartsWith("System.", StringComparison.OrdinalIgnoreCase)
-        let footer =
-            use'.Symbol.Assembly.SimpleName
-            |> Option.ofObj
-            |> Option.filter (fun name ->
-                not (name.Contains(".md_", StringComparison.OrdinalIgnoreCase))
-                && not (isFrameworkAssembly name))
         {
             Signature = symbolSignature use'
             Documentation = symbolDocumentation use'.Symbol
             Sections = []
-            Footer = footer
+            // Assembly ownership is compiler implementation detail, especially for
+            // namespaces contributed by several references. It is never user-facing hover content.
+            Footer = None
         }
 
     let extractBlock contextHash (range: CompilationSourceRange) (uses: FSharpSymbolUse array) diagnostics =
