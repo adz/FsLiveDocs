@@ -101,6 +101,85 @@ module IntegrationTests =
             
         projFile
 
+    /// Writes a project whose source files carry the supplied content verbatim, then builds it.
+    let private buildProjectWithSource dirName (files: (string * string) list) =
+        let baseDir = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", dirName)
+        if Directory.Exists(baseDir) then Directory.Delete(baseDir, true)
+        Directory.CreateDirectory(baseDir) |> ignore
+
+        let projFile = Path.Combine(baseDir, dirName + ".fsproj")
+        let compileItems =
+            files |> List.map (fun (name, _) -> $"<Compile Include=\"{name}\" />") |> String.concat "\n    "
+        File.WriteAllText(
+            projFile,
+            $"""<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    {compileItems}
+  </ItemGroup>
+</Project>""")
+
+        for (name, content) in files do
+            File.WriteAllText(Path.Combine(baseDir, name), content)
+
+        let psi = System.Diagnostics.ProcessStartInfo("dotnet", $"build \"{projFile}\"")
+        psi.RedirectStandardOutput <- true
+        psi.UseShellExecute <- false
+        let proc = System.Diagnostics.Process.Start(psi)
+        proc.WaitForExit()
+        projFile
+
+    [<Fact>]
+    let ``extraction rejects a parameter destructured in the parameter list`` () = async {
+        // A union destructured directly in the parameter list has no source-level name, so
+        // the usage signature and the parameter table would each invent a different one.
+        let source =
+            """namespace TestNamespace
+
+module Destructured =
+    type ColdTask<'value> = ColdTask of (int -> 'value)
+
+    /// <summary>Runs it.</summary>
+    let run (token: int) (ColdTask operation) = operation token
+"""
+
+        let projFile = buildProjectWithSource "UnnamedParameter" [ "Destructured.fs", source ]
+
+        let error =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                SymbolLister.extractFromProject projFile |> Async.RunSynchronously |> ignore)
+
+        Assert.Contains("Destructured.run", error.Message)
+        Assert.Contains("unnamed public parameter at position 2", error.Message)
+    }
+
+    [<Fact>]
+    let ``extraction accepts named and unit parameters`` () = async {
+        let source =
+            """namespace TestNamespace
+
+module Named =
+    type ColdTask<'value> = ColdTask of (int -> 'value)
+
+    /// <summary>Runs it.</summary>
+    let run (token: int) (coldTask: ColdTask<'value>) =
+        let (ColdTask operation) = coldTask
+        operation token
+
+    /// <summary>Does nothing.</summary>
+    let reset () = ()
+"""
+
+        let projFile = buildProjectWithSource "NamedParameter" [ "Named.fs", source ]
+
+        let! package = SymbolLister.extractFromProject projFile
+
+        Assert.NotEmpty(package.Entities)
+    }
+
     [<Fact>]
     let ``Full Extraction and Merging Integration`` () = async {
         let files = [ "File1.fs"; "File2.fs" ]

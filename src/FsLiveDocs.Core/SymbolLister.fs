@@ -85,6 +85,46 @@ module SymbolLister =
             }
         ]
 
+    /// <summary>
+    /// Finds the 1-based positions of public parameters that carry no source-level name,
+    /// such as a union destructured directly in the parameter list
+    /// (<c>let run (ColdTask operation) = ...</c>).
+    /// </summary>
+    /// <remarks>
+    /// FSharp.Formatting invents a synthetic name independently for the usage signature and
+    /// for the parameter metadata, so the two can disagree (<c>arg2</c> against <c>arg1</c>)
+    /// and cannot be reconciled into one canonical name. The authoritative signal is the
+    /// compiler's own <c>Name</c>, which is <c>None</c> exactly when the source gave none;
+    /// matching on synthetic-looking text would misfire on a parameter genuinely named
+    /// <c>arg1</c>.
+    /// </remarks>
+    let unnamedParameterPositions (m: ApiDocMember) : int list =
+        match box m.Symbol with
+        | :? FSharpMemberOrFunctionOrValue as mfv when not (List.isEmpty m.Parameters) ->
+            // Operators and indexers are positional by nature; there is no name to authored.
+            let isPositionalByNature =
+                mfv.CompiledName.StartsWith("op_", StringComparison.Ordinal)
+                || mfv.IsPropertyGetterMethod
+                || mfv.IsPropertySetterMethod
+
+            if isPositionalByNature then
+                []
+            else
+                // A unit parameter is unnamed because there is nothing to name, and both
+                // renderings agree on `()`.
+                let isUnit (p: FSharpParameter) =
+                    // `unit` carries no TryFullName, so match the definition's own names.
+                    p.Type.HasTypeDefinition
+                    && p.Type.TypeDefinition.LogicalName = "unit"
+
+                mfv.CurriedParameterGroups
+                |> Seq.collect id
+                |> Seq.indexed
+                |> Seq.choose (fun (index, p) ->
+                    if p.Name.IsNone && not (isUnit p) then Some(index + 1) else None)
+                |> Seq.toList
+        | _ -> []
+
     let mapMember (m: ApiDocMember) : MemberModel =
         let location = 
             match m.Symbol.DeclarationLocation with
@@ -141,6 +181,26 @@ module SymbolLister =
             Examples = e.Comment |> rawXml |> extractExamples
             Entities = nested
         }
+
+    /// <summary>Describes every unnamed public parameter reachable from an entity.</summary>
+    let rec unnamedParameterDiagnostics (e: ApiDocEntity) : string list =
+        let describe (m: ApiDocMember) =
+            match unnamedParameterPositions m with
+            | [] -> None
+            | positions ->
+                let where =
+                    match m.Symbol.DeclarationLocation with
+                    | Some loc -> $"{loc.FileName}({loc.StartLine})"
+                    | None -> "<unknown location>"
+                let which = positions |> List.map string |> String.concat ", "
+                let plural = if positions.Length = 1 then "parameter" else "parameters"
+                Some(
+                    $"{where}: {m.Symbol.FullName} has unnamed public {plural} at position {which}. "
+                    + "Give the parameter a name and destructure in the body "
+                    + "(let f x = let (Case y) = x in ...), so the signature and the parameter table agree.")
+
+        [ yield! e.AllMembers |> Seq.choose describe
+          yield! e.NestedEntities |> List.collect unnamedParameterDiagnostics ]
 
     let private isSyntheticDefaultNamespace (e: EntityModel) =
         e.Kind = EntityKind.Namespace
@@ -372,11 +432,20 @@ module SymbolLister =
                 let isProjectEntity (e: ApiDocEntity) =
                     e.Symbol.Assembly.SimpleName.Equals(assemblyName, StringComparison.OrdinalIgnoreCase)
 
-                let entities =
-                    model.EntityInfos 
+                let projectEntities =
+                    model.EntityInfos
                     |> Seq.filter (fun ei -> isProjectEntity ei.Entity)
-                    |> Seq.collect (fun ei -> flatten ei.Entity)
+                    |> Seq.map (fun ei -> ei.Entity)
                     |> Seq.toList
+
+                match projectEntities |> List.collect unnamedParameterDiagnostics with
+                | [] -> ()
+                | diagnostics ->
+                    invalidOp (
+                        "FsLiveDocs cannot render a stable parameter name for the following members:\n"
+                        + (diagnostics |> List.map (fun d -> "  " + d) |> String.concat "\n"))
+
+                let entities = projectEntities |> List.collect (flatten >> List.ofSeq)
 
                 return {
                     Version = "0.1.0"
