@@ -339,7 +339,17 @@ module Program =
                         |> List.tryFind File.Exists
                         |> Option.defaultWith (fun () -> invalidOp $"Documentation project in {relative} does not exist: {configured}")
                 if not (resolvedProjects |> List.contains selectedProject) then
-                    invalidOp $"Documentation page {relative} selects {selectedProject}, but that project was not passed to livedocs."
+                    // Naming what was passed turns this from "something is wrong" into a diff the
+                    // caller can act on: the usual cause is an incomplete project list.
+                    let describe (path: string) = Path.GetRelativePath(sourceDir, path).Replace('\\', '/')
+                    let passed =
+                        resolvedProjects
+                        |> List.map (fun project -> "  " + describe project)
+                        |> String.concat "\n"
+                    invalidOp
+                        $"Documentation page {relative} selects {describe selectedProject}, but that project was not passed to livedocs.\n\
+                          Projects passed:\n{passed}\n\
+                          Add the selected project to the command, or change the 'project:' front matter on that page."
                 let expanded = ContentProvider.resolveSnippets body sourceDir package ""
                 let blocks = DocumentationDiscovery.discoverMarkdown relative (Some selectedProject) expanded
                 DocumentationDiscovery.validateCoverage blocks

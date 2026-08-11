@@ -63,7 +63,17 @@ module DocumentationCompiler =
         let errors = evaluationProcess.StandardError.ReadToEnd()
         evaluationProcess.WaitForExit()
         if evaluationProcess.ExitCode <> 0 then
-            invalidOp $"MSBuild evaluation failed for {fullPath}: {errors.Trim()}"
+            // MSBuild reports errors on either stream depending on the failure.
+            let detail = (errors + Environment.NewLine + output).Trim()
+            // A project outside the solution is never restored by a solution-level build, so this
+            // failure usually means the project list includes something the solution does not build.
+            if detail.Contains("NETSDK1004", StringComparison.Ordinal) then
+                invalidOp
+                    $"Project is not restored: {fullPath}\n\
+                      Run 'dotnet restore \"{fullPath}\"' first. If this project is not part of your solution, \
+                      a solution-level restore never covers it — check that you meant to pass it to livedocs."
+            else
+                invalidOp $"MSBuild evaluation failed for {fullPath}: {detail}"
         JObject.Parse(output)
 
     /// Runs an inner-build ResolveReferences target so package, project, framework, and SDK references all come from MSBuild evaluation.

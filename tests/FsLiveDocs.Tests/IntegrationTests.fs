@@ -79,6 +79,28 @@ module IntegrationTests =
         let unsupported = Assert.Throws<InvalidOperationException>(fun () -> DocumentationCompiler.evaluateProjectFor (Some "net6.0") projectPath |> ignore)
         Assert.Contains("is not declared", unsupported.Message)
 
+    [<Fact>]
+    let ``evaluating an unrestored project explains that it needs restoring`` () =
+        // A project outside the solution is never restored by a solution-level build, so this is
+        // what a caller hits after passing a project the solution does not build.
+        let directory = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory) |> ignore
+        let projectPath = Path.Combine(directory, "Unrestored.fsproj")
+        File.WriteAllText(
+            projectPath,
+            """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>""")
+
+        let failure =
+            Assert.Throws<InvalidOperationException>(fun () -> DocumentationCompiler.evaluateProject projectPath |> ignore)
+
+        Assert.Contains("is not restored", failure.Message)
+        Assert.Contains("dotnet restore", failure.Message)
+        Assert.Contains("Unrestored.fsproj", failure.Message)
+
     let createTestProject dirName files =
         let baseDir = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", dirName)
         if Directory.Exists(baseDir) then Directory.Delete(baseDir, true)
