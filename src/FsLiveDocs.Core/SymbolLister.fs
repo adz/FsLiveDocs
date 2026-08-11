@@ -146,8 +146,75 @@ module SymbolLister =
                 |> Seq.toList
         | _ -> []
 
+    /// <summary>
+    /// The name to display for every parameter, in flattened curried order.
+    /// </summary>
+    /// <remarks>
+    /// Prefers the name the source gave. Where the source destructured in place there is no such
+    /// name, so the pattern the author actually wrote (<c>ColdTask operation</c>) is shown; it
+    /// describes the argument better than any invented identifier and, unlike a name guessed from
+    /// the type, it is not a guess. Only when the declaring source cannot be read does this fall
+    /// back to FSharp.Formatting's synthetic name.
+    /// </remarks>
+    let displayParameterNames (m: ApiDocMember) : string list =
+        let authored = authoredParameterNames m
+        let fromSource =
+            match m.Symbol.DeclarationLocation with
+            | Some loc ->
+                let texts = SourceParameters.parameterTexts loc.FileName loc.StartLine
+                // Patterns map to parameters one-for-one only when no group is tupled.
+                if texts.Length = m.Parameters.Length then texts else []
+            | None -> []
+
+        m.Parameters
+        |> List.mapi (fun index p ->
+            match authored |> List.tryItem index |> Option.flatten with
+            | Some name -> name
+            | None ->
+                match fromSource |> List.tryItem index with
+                | Some text when not (String.IsNullOrWhiteSpace text) -> text.Trim('(', ')', ' ')
+                | _ -> p.ParameterNameText)
+
+    /// <summary>
+    /// Rewrites the synthetic placeholders FSharp.Formatting put in a usage signature so it names
+    /// each argument exactly as the parameter table does.
+    /// </summary>
+    let reconcileUsageSignature (replacements: string list) (usage: string) =
+        if String.IsNullOrWhiteSpace usage then
+            usage
+        else
+            // FSharp.Formatting numbers its placeholders independently of the parameter metadata,
+            // so the k-th placeholder left-to-right is matched to the k-th unnamed parameter
+            // rather than trusting the number it carries.
+            let replaceable = replacements
+            let mutable next = 0
+            Regex.Replace(
+                usage,
+                @"\barg\d+\b",
+                fun _ ->
+                    let replacement =
+                        match replaceable |> List.tryItem next with
+                        | Some name when name.Contains(" ") -> "(" + Net.WebUtility.HtmlEncode name + ")"
+                        | Some name -> Net.WebUtility.HtmlEncode name
+                        | None -> "arg" + string (next + 1)
+                    next <- next + 1
+                    replacement)
+
+    /// <summary>The usage signature with every synthetic placeholder replaced by its display name.</summary>
+    let mapMemberSignature (m: ApiDocMember) =
+        let authored = authoredParameterNames m
+        let unnamedDisplayNames =
+            displayParameterNames m
+            |> List.mapi (fun index name ->
+                match authored |> List.tryItem index |> Option.flatten with
+                | Some _ -> None
+                | None -> Some name)
+            |> List.choose id
+
+        m.UsageHtml.HtmlText |> reconcileUsageSignature unnamedDisplayNames
+
     let mapMember (m: ApiDocMember) : MemberModel =
-        let location = 
+        let location =
             match m.Symbol.DeclarationLocation with
             | Some loc ->
                 let file =
@@ -161,21 +228,18 @@ module SymbolLister =
                 { File = file; Line = loc.StartLine }
             | None -> { File = ""; Line = 0 }
 
+        // One canonical name per argument, used for both the signature and the table so the two
+        // cannot disagree.
+        let displayNames = displayParameterNames m
+
         {
             Id = m.Symbol.FullName
             Name = m.Name
-            Signature = m.UsageHtml.HtmlText // usage is often better for members
+            Signature = mapMemberSignature m
             Parameters =
-                // Names come from the canonical source, not from FSharp.Formatting's independently
-                // synthesised ParameterNameText, so the table cannot drift from the signature.
-                let authored = authoredParameterNames m
                 m.Parameters
                 |> List.mapi (fun index p -> {
-                    Name =
-                        authored
-                        |> List.tryItem index
-                        |> Option.flatten
-                        |> Option.defaultValue p.ParameterNameText
+                    Name = displayNames |> List.tryItem index |> Option.defaultValue p.ParameterNameText
                     Type = p.ParameterType.HtmlText
                     DescriptionHtml = p.ParameterDocs |> Option.map (fun d -> d.HtmlText) |> Option.defaultValue ""
                 })
@@ -211,51 +275,75 @@ module SymbolLister =
         }
 
     /// <summary>
-    /// Canonical parameter names the rendered usage signature fails to mention, which would
-    /// leave the signature and the parameter table naming the same argument differently.
+    /// Synthetic placeholders the rendered usage signature shows in place of a parameter the
+    /// table names differently.
     /// </summary>
     let signatureNameMismatches (m: ApiDocMember) : string list =
-        let usage = m.UsageHtml.HtmlText
+        // Only a usage signature that actually renders parameter names can contradict the table.
+        // For .NET-style members FSharp.Formatting renders the member alone (`this.Bind`), naming
+        // nothing, so there is nothing to disagree with. What must never appear is a synthetic
+        // placeholder standing in for a parameter the table names differently.
+        // Checked against the signature as rendered, after placeholders have been reconciled.
+        let usage = mapMemberSignature m
         if String.IsNullOrWhiteSpace usage then
             []
         else
-            authoredParameterNames m
-            |> List.choose id
-            |> List.filter (fun name ->
-                not (Regex.IsMatch(usage, $@"\b{Regex.Escape name}\b")))
+            let canonical = displayParameterNames m |> Set.ofList
+            Regex.Matches(usage, @"\barg\d+\b")
+            |> Seq.map (fun placeholder -> placeholder.Value)
+            |> Seq.filter (fun placeholder -> not (canonical.Contains placeholder))
+            |> Seq.distinct
+            |> Seq.toList
 
-    /// <summary>Describes every unnamed public parameter reachable from an entity.</summary>
-    let rec unnamedParameterDiagnostics (e: ApiDocEntity) : string list =
-        let describe (m: ApiDocMember) =
-            match unnamedParameterPositions m with
+    /// <summary>Reports every parameter-naming problem reachable from an entity.</summary>
+    let rec parameterDiagnostics (e: ApiDocEntity) : ApiDiagnostic list =
+        let locationOf (m: ApiDocMember) =
+            match m.Symbol.DeclarationLocation with
+            | Some loc -> { File = loc.FileName; Line = loc.StartLine }
+            | None -> { File = ""; Line = 0 }
+
+        let describeUnnamed (m: ApiDocMember) =
+            // An unnamed parameter is only a problem when its pattern could not be recovered from
+            // source; otherwise it is shown as the author wrote it and needs no attention.
+            let displayNames = displayParameterNames m
+            let unrecovered =
+                unnamedParameterPositions m
+                |> List.filter (fun position ->
+                    match displayNames |> List.tryItem (position - 1) with
+                    | Some name -> Regex.IsMatch(name, @"^arg\d+$")
+                    | None -> true)
+
+            match unrecovered with
             | [] -> None
             | positions ->
-                let where =
-                    match m.Symbol.DeclarationLocation with
-                    | Some loc -> $"{loc.FileName}({loc.StartLine})"
-                    | None -> "<unknown location>"
                 let which = positions |> List.map string |> String.concat ", "
-                let plural = if positions.Length = 1 then "parameter" else "parameters"
-                Some(
-                    $"{where}: {m.Symbol.FullName} has unnamed public {plural} at position {which}. "
-                    + "Give the parameter a name and destructure in the body "
-                    + "(let f x = let (Case y) = x in ...), so the signature and the parameter table agree.")
+                let subject =
+                    if positions.Length = 1 then $"The parameter at position {which} is"
+                    else $"The parameters at positions {which} are"
+                Some {
+                    Code = "unnamed-parameter"
+                    Symbol = m.Symbol.FullName
+                    Location = locationOf m
+                    Message = $"{subject} shown under a generated name, because no name could be read from the declaration."
+                    Remedy = "Naming the parameter in the declaration would let the documentation use that name instead."
+                }
 
         let describeMismatch (m: ApiDocMember) =
             match signatureNameMismatches m with
             | [] -> None
-            | names ->
-                let where =
-                    match m.Symbol.DeclarationLocation with
-                    | Some loc -> $"{loc.FileName}({loc.StartLine})"
-                    | None -> "<unknown location>"
-                let listed = String.concat ", " names
-                Some
-                    $"{where}: {m.Symbol.FullName} renders a signature that never mentions its parameter(s) {listed}."
+            | placeholders ->
+                let listed = String.concat ", " placeholders
+                Some {
+                    Code = "signature-name-mismatch"
+                    Symbol = m.Symbol.FullName
+                    Location = locationOf m
+                    Message = $"The rendered signature shows {listed}, which the parameter table names differently."
+                    Remedy = "Name every public parameter so both renderings resolve to the same name."
+                }
 
-        [ yield! e.AllMembers |> Seq.choose describe
+        [ yield! e.AllMembers |> Seq.choose describeUnnamed
           yield! e.AllMembers |> Seq.choose describeMismatch
-          yield! e.NestedEntities |> List.collect unnamedParameterDiagnostics ]
+          yield! e.NestedEntities |> List.collect parameterDiagnostics ]
 
     let private isSyntheticDefaultNamespace (e: EntityModel) =
         e.Kind = EntityKind.Namespace
@@ -423,8 +511,11 @@ module SymbolLister =
 
         buildTree "" entities
 
-    /// <summary>Scans a project file and extracts all documented symbols using FSharp.Formatting.</summary>
-    let extractFromProject (projectPath: string) = async {
+    /// <summary>
+    /// Scans a project file and extracts all documented symbols using FSharp.Formatting,
+    /// together with any parameter-naming problems found in the API itself.
+    /// </summary>
+    let extractFromProjectWithDiagnostics (projectPath: string) = async {
         // ApiDocs needs the DLL and XML to be built first.
         let projName = Path.GetFileNameWithoutExtension(projectPath)
         let assemblyName = getAssemblyName projectPath
@@ -450,13 +541,13 @@ module SymbolLister =
             |> Option.defaultValue ""
 
         if String.IsNullOrEmpty dllPath || not (File.Exists dllPath) then
-            return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }
+            return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }, []
         else
             // FSharp.Formatting REQUIRES the .xml file to be next to the .dll
             let xmlPath = Path.ChangeExtension(dllPath, ".xml")
             if not (File.Exists xmlPath) then
                 printfn "Warning: Skipping project %s because associated XML file was not found at %s" projName xmlPath
-                return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }
+                return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }, []
             else
                 let input = ApiDocInput.FromFile(dllPath)
                 let libDirs = 
@@ -493,12 +584,7 @@ module SymbolLister =
                     |> Seq.map (fun ei -> ei.Entity)
                     |> Seq.toList
 
-                match projectEntities |> List.collect unnamedParameterDiagnostics with
-                | [] -> ()
-                | diagnostics ->
-                    invalidOp (
-                        "FsLiveDocs cannot render a stable parameter name for the following members:\n"
-                        + (diagnostics |> List.map (fun d -> "  " + d) |> String.concat "\n"))
+                let diagnostics = projectEntities |> List.collect parameterDiagnostics
 
                 let entities = projectEntities |> List.collect (flatten >> List.ofSeq)
 
@@ -507,7 +593,13 @@ module SymbolLister =
                     Entities = entities
                     Scenarios = extractScenariosFromAssembly dllPath
                     Packages = [ { Name = assemblyName; EntityIds = entities |> List.map (fun entity -> entity.Id) |> List.distinct } ]
-                }
+                }, diagnostics
+    }
+
+    /// <summary>Scans a project file and extracts all documented symbols using FSharp.Formatting.</summary>
+    let extractFromProject (projectPath: string) = async {
+        let! package, _ = extractFromProjectWithDiagnostics projectPath
+        return package
     }
 
     /// <summary>Merges multiple PackageModels into a single unified documentation model and reconstructs hierarchy.</summary>

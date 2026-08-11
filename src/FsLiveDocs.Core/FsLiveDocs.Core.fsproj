@@ -15,6 +15,7 @@
     <Compile Include="Transcript.fs" />
     <Compile Include="Models.fs" />
     <Compile Include="History.fs" />
+    <Compile Include="SourceParameters.fs" />
     <Compile Include="SymbolLister.fs" />
     <Compile Include="DocumentationDiscovery.fs" />
     <Compile Include="SemanticCode.fs" />

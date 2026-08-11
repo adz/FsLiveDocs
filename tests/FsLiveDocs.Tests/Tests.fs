@@ -127,6 +127,22 @@ module SymbolListerTests =
         Assert.Equal("flow {\n    return 42\n}", example.Content.Trim())
 
     [<Fact>]
+    let ``reconcileUsageSignature replaces placeholders in order, not by their number`` () =
+        // FSharp.Formatting numbers placeholders independently of the parameter metadata, so the
+        // number carried by a placeholder cannot be trusted to identify which argument it is.
+        let usage = "<code><span>run&#32;<span>token&#32;arg2</span></span></code>"
+
+        let reconciled = SymbolLister.reconcileUsageSignature [ "ColdTask operation" ] usage
+
+        Assert.Equal("<code><span>run&#32;<span>token&#32;(ColdTask operation)</span></span></code>", reconciled)
+
+    [<Fact>]
+    let ``reconcileUsageSignature keeps a placeholder it has no name for`` () =
+        let usage = "<code><span>pass&#32;<span>arg1</span></span></code>"
+
+        Assert.Equal(usage, SymbolLister.reconcileUsageSignature [] usage)
+
+    [<Fact>]
     let ``merge removes empty synthetic Default namespace`` () =
         let child = { Id = "Default.Sample"; Name = "Sample"; Kind = EntityKind.Module; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
         let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = EntityKind.Namespace; SummaryHtml = ""; Members = []; Examples = []; Entities = [ child ] }

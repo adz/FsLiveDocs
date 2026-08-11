@@ -133,7 +133,7 @@ module IntegrationTests =
         projFile
 
     [<Fact>]
-    let ``extraction rejects a parameter destructured in the parameter list`` () = async {
+    let ``extraction shows the source pattern for a parameter destructured in the parameter list`` () = async {
         // A union destructured directly in the parameter list has no source-level name, so
         // the usage signature and the parameter table would each invent a different one.
         let source =
@@ -148,12 +148,20 @@ module Destructured =
 
         let projFile = buildProjectWithSource "UnnamedParameter" [ "Destructured.fs", source ]
 
-        let error =
-            Assert.Throws<InvalidOperationException>(fun () ->
-                SymbolLister.extractFromProject projFile |> Async.RunSynchronously |> ignore)
+        let! package, diagnostics = SymbolLister.extractFromProjectWithDiagnostics projFile
 
-        Assert.Contains("Destructured.run", error.Message)
-        Assert.Contains("unnamed public parameter at position 2", error.Message)
+        let rec allMembers (entities: EntityModel list) =
+            entities |> List.collect (fun e -> e.Members @ allMembers e.Entities)
+
+        let run = allMembers package.Entities |> List.find (fun m -> m.Name.StartsWith("run"))
+
+        // The pattern the author wrote is shown, in both renderings, rather than a placeholder.
+        Assert.Equal<string list>([ "token"; "ColdTask operation" ], run.Parameters |> List.map _.Name)
+        Assert.Contains("(ColdTask operation)", run.Signature)
+        Assert.DoesNotContain("arg", run.Signature)
+
+        // Presentable, so nothing to report.
+        Assert.Empty(diagnostics)
     }
 
     [<Fact>]

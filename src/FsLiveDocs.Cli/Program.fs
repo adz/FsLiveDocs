@@ -45,6 +45,8 @@ type Arguments =
     | [<Inherit>] Port of int
     /// <summary>Adds directory names the preview watcher must not watch or rebuild for.</summary>
     | [<Inherit>] Ignore of string
+    /// <summary>Fails the run when the documented API produces quality warnings.</summary>
+    | [<Inherit; AltCommandLine("--warnaserror")>] Warn_As_Error
     interface IArgParserTemplate with
         member s.Usage =
             match s with
@@ -63,6 +65,7 @@ type Arguments =
             | Host _ -> "Set the preview bind host (default: 0.0.0.0)."
             | Port _ -> "Set the preview port (default: 5000)."
             | Ignore _ -> "Add a comma-separated list of directory names the watcher ignores. Repeatable."
+            | Warn_As_Error -> "Fail the run when the documented API produces quality warnings (default: warn only)."
 
 /// <summary>Watches source and documentation files so the preview server rebuilds after an edit.</summary>
 module internal PreviewWatcher =
@@ -173,10 +176,12 @@ module Program =
     /// <summary>Loads and merges multiple project models into a unified package.</summary>
     let getUnifiedPackage (projectPaths: string list) = async {
         let packages = ResizeArray()
+        let diagnostics = ResizeArray()
         for projectPath in projectPaths do
-            let! package = SymbolLister.extractFromProject projectPath
+            let! package, projectDiagnostics = SymbolLister.extractFromProjectWithDiagnostics projectPath
             packages.Add(package)
-        return SymbolLister.merge (Seq.toList packages)
+            diagnostics.AddRange(projectDiagnostics)
+        return SymbolLister.merge (Seq.toList packages), List.ofSeq diagnostics
     }
 
     let loadSiteConfig () =
@@ -255,14 +260,62 @@ module Program =
         let cacheDirectory = Path.GetFullPath(Path.Combine(".livedocs", "cache"))
         let cacheKey = sha256Text $"api-schema:{History.ApiModelSchemaVersion}|extractor:{typeof<PackageModel>.Assembly.ManifestModule.ModuleVersionId}|{inputHash}"
         let cachePath = Path.Combine(cacheDirectory, cacheKey + ".package.json")
+        // Diagnostics describe the run, not the snapshot, so they live beside the cached package
+        // rather than inside it — otherwise a warning would be reported once and never again.
+        let diagnosticsPath = Path.Combine(cacheDirectory, cacheKey + ".diagnostics.json")
         if File.Exists cachePath then
             let package = Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(File.ReadAllText(cachePath), FsLiveDocs.Core.Serialization.jsonSettings)
             if isNull (box package) then invalidOp $"Invalid cached package model: {cachePath}"
-            package, inputHash
+            let diagnostics =
+                if File.Exists diagnosticsPath then
+                    Newtonsoft.Json.JsonConvert.DeserializeObject<ApiDiagnostic list>(File.ReadAllText(diagnosticsPath), FsLiveDocs.Core.Serialization.jsonSettings)
+                    |> Option.ofObj
+                    |> Option.defaultValue []
+                else []
+            package, diagnostics, inputHash
         else
-            let package = getUnifiedPackage projectPaths |> Async.RunSynchronously
+            let package, diagnostics = getUnifiedPackage projectPaths |> Async.RunSynchronously
             writeCurrentCache cachePath "*.package.json" (Newtonsoft.Json.JsonConvert.SerializeObject(package, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
-            package, inputHash
+            writeCurrentCache diagnosticsPath "*.diagnostics.json" (Newtonsoft.Json.JsonConvert.SerializeObject(diagnostics, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
+            package, diagnostics, inputHash
+
+    /// <summary>
+    /// Reports API-quality warnings, grouped by the file that declares them.
+    /// </summary>
+    /// <remarks>
+    /// These never block a build by default. The documentation still renders correctly, and the
+    /// author may not be free to change the API being documented, so a first run must not fail on
+    /// them. <c>--warn-as-error</c> is for projects that have chosen to hold the line.
+    /// </remarks>
+    let private printApiDiagnostics (warnAsError: bool) (diagnostics: ApiDiagnostic list) =
+        if diagnostics.IsEmpty then
+            0
+        else
+            let label = if warnAsError then "[red]error[/]" else "[yellow]warning[/]"
+            let root = Directory.GetCurrentDirectory()
+            let relative (path: string) =
+                if String.IsNullOrWhiteSpace path then "(unknown source)"
+                elif Path.IsPathRooted path then Path.GetRelativePath(root, path).Replace('\\', '/')
+                else path.Replace('\\', '/')
+
+            AnsiConsole.MarkupLine("")
+            for file, items in diagnostics |> List.groupBy (fun d -> relative d.Location.File) do
+                AnsiConsole.MarkupLine($"[bold]{Markup.Escape file}[/]")
+                for item in items |> List.sortBy (fun d -> d.Location.Line) do
+                    let symbol = Markup.Escape item.Symbol
+                    AnsiConsole.MarkupLine($"  {label} [grey]{item.Location.Line}[/] {symbol} [grey]({Markup.Escape item.Code})[/]")
+                    AnsiConsole.MarkupLine($"        {Markup.Escape item.Message}")
+                    AnsiConsole.MarkupLine($"        [grey]{Markup.Escape item.Remedy}[/]")
+
+            let count = diagnostics.Length
+            let noun = if count = 1 then "warning" else "warnings"
+            if warnAsError then
+                let verb = if count = 1 then "treated as an error" else "treated as errors"
+                AnsiConsole.MarkupLine($"\n[red]✖ {count} API documentation {noun} {verb} (--warn-as-error).[/]")
+                count
+            else
+                AnsiConsole.MarkupLine($"\n[yellow]⚠ {count} API documentation {noun}.[/] [grey]Documentation still rendered; pass --warn-as-error to fail on these.[/]")
+                0
 
     let private analyzeDocumentation (projectPaths: string list) (projectFingerprint: string) (package: PackageModel) =
         if List.isEmpty projectPaths then invalidOp "Documentation analysis requires at least one project path."
@@ -385,11 +438,13 @@ module Program =
             AnsiConsole.MarkupLine($"\n[red]✖ Audit failed:[/] {failures} of {analysis.Blocks.Length} expanded F# block(s) contain compiler errors.")
         failures
 
-    let auditAction (projectPaths: string list) =
+    let auditAction (warnAsError: bool) (projectPaths: string list) =
         if List.isEmpty projectPaths then invalidOp "Audit requires at least one project path."
-        let package, projectFingerprint = getUnifiedPackageCached projectPaths
+        let package, diagnostics, projectFingerprint = getUnifiedPackageCached projectPaths
         let analysis = analyzeDocumentation projectPaths projectFingerprint package
-        if printAudit analysis = 0 then 0 else 1
+        let blockFailures = printAudit analysis
+        let apiFailures = printApiDiagnostics warnAsError diagnostics
+        if blockFailures = 0 && apiFailures = 0 then 0 else 1
 
     let private createSemanticArtifact (projectPaths: string list) (package: PackageModel) =
         let analysis = analyzeDocumentation projectPaths (projectInputFingerprint projectPaths) package
@@ -501,7 +556,7 @@ module Program =
                     |> String.concat eol)
                 |> String.concat (eol + eol)
 
-            let package = getUnifiedPackage resolvedProjects |> Async.RunSynchronously
+            let package, _ = getUnifiedPackage resolvedProjects |> Async.RunSynchronously
             let docsDir = Path.GetFullPath("docs")
             let sourceDir = Directory.GetCurrentDirectory()
             let defaultProject = List.head resolvedProjects
@@ -578,12 +633,14 @@ module Program =
             0
 
     /// <summary>Orchestrates the build process for one or more projects.</summary>
-    let buildAction (projectPaths: string list) (theme: string) (version: string option) =
-        let extracted, projectFingerprint = getUnifiedPackageCached projectPaths
+    let buildAction (warnAsError: bool) (projectPaths: string list) (theme: string) (version: string option) =
+        let extracted, apiDiagnostics, projectFingerprint = getUnifiedPackageCached projectPaths
         let packageRaw = { extracted with Version = version |> Option.defaultValue extracted.Version }
         let analysis = analyzeDocumentation projectPaths projectFingerprint packageRaw
         if printAudit analysis <> 0 then
             invalidOp "Documentation contains uncovered or non-compiling F# blocks. Fix the mapped audit failures before building."
+        if printApiDiagnostics warnAsError apiDiagnostics <> 0 then
+            invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
         AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
             .Start("[blue]Building documentation site...[/]", fun ctx ->
@@ -750,8 +807,10 @@ jobs:
                 elif results.Contains Extract then
                     printBanner()
                     let projectPaths = results.GetResult Extract
+                    let mutable extractDiagnostics = []
                     AnsiConsole.Status().Start("Extracting symbols...", fun ctx ->
-                        let packageRaw = getUnifiedPackage projectPaths |> Async.RunSynchronously
+                        let packageRaw, apiDiagnostics = getUnifiedPackage projectPaths |> Async.RunSynchronously
+                        extractDiagnostics <- apiDiagnostics
                         let version = results.GetResult(Version, defaultValue = packageRaw.Version)
                         let package = { packageRaw with Version = version }
                         let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
@@ -770,12 +829,12 @@ jobs:
                         File.WriteAllText(semanticFileName, semanticJson)
                     )
                     AnsiConsole.MarkupLine("[green]✔ API and semantic documentation extraction complete.[/]")
-                    0
+                    printApiDiagnostics (results.Contains Warn_As_Error) extractDiagnostics
 
                 elif results.Contains Test then
                     printBanner()
                     let projectPaths = results.GetResult Test
-                    let mutable allPassed = auditAction projectPaths = 0
+                    let mutable allPassed = auditAction (results.Contains Warn_As_Error) projectPaths = 0
                     for projectPath in projectPaths do
                         AnsiConsole.MarkupLine($"[bold blue]➜ Testing:[/] {projectPath}")
                         let results = 
@@ -799,12 +858,12 @@ jobs:
 
                 elif results.Contains Audit then
                     printBanner()
-                    auditAction (results.GetResult Audit)
+                    auditAction (results.Contains Warn_As_Error) (results.GetResult Audit)
 
                 elif results.Contains Build then
                     printBanner()
                     let projectPaths = results.GetResult Build
-                    buildAction projectPaths theme (results.TryGetResult Version)
+                    buildAction (results.Contains Warn_As_Error) projectPaths theme (results.TryGetResult Version)
                     0
 
                 elif results.Contains BuildHistory then
@@ -821,7 +880,7 @@ jobs:
                     if String.IsNullOrWhiteSpace host then invalidArg "host" "Preview host must not be empty."
                     if port < 1 || port > 65535 then invalidArg "port" "Preview port must be between 1 and 65535."
                     let previewUrl = $"http://{host}:{port}"
-                    buildAction projectPaths theme version
+                    buildAction (results.Contains Warn_As_Error) projectPaths theme version
                     
                     try
                         let builder = WebApplication.CreateBuilder()
@@ -857,7 +916,7 @@ jobs:
                             PreviewWatcher.start
                                 (Directory.GetCurrentDirectory())
                                 (PreviewWatcher.parseIgnored (results.GetResults Ignore))
-                                (fun () -> buildAction projectPaths theme version)
+                                (fun () -> buildAction (results.Contains Warn_As_Error) projectPaths theme version)
                         AnsiConsole.MarkupLine("")
 
                         app.Run(previewUrl)
