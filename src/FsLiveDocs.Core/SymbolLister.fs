@@ -53,7 +53,19 @@ module SymbolLister =
         [ for m in matches do
             let tag = m.Groups.["tag"].Value
             let attrs = m.Groups.["attrs"].Value
-            let rawCode = System.Net.WebUtility.HtmlDecode(m.Groups.["code"].Value)
+            let matchedContent = m.Groups.["code"].Value
+            let nestedCode =
+                if tag.Equals("example", StringComparison.OrdinalIgnoreCase) then
+                    Regex.Match(
+                        matchedContent,
+                        @"^\s*<code(?:\s[^>]*)?>(?<code>.*?)</code>\s*$",
+                        RegexOptions.IgnoreCase ||| RegexOptions.Singleline)
+                else
+                    Match.Empty
+            let encodedCode =
+                if nestedCode.Success then nestedCode.Groups.["code"].Value
+                else matchedContent
+            let rawCode = System.Net.WebUtility.HtmlDecode(encodedCode)
             let parsed = ExampleTranscript.parse rawCode
             let explicitSnapshot = hasSnapshotMarker attrs
             let language =

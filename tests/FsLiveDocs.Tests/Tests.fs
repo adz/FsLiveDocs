@@ -110,6 +110,23 @@ module SymbolListerTests =
         Assert.True(List.item 1 examples |> fun ex -> ex.IsSnapshotTest)
 
     [<Fact>]
+    let ``extractExamples removes code wrapper from an example`` () =
+        let xml =
+            """
+            <example>
+            <code>
+            flow {
+                return 42
+            }
+            </code>
+            </example>
+            """
+
+        let example = SymbolLister.extractExamples xml |> Assert.Single
+
+        Assert.Equal("flow {\n    return 42\n}", example.Content.Trim())
+
+    [<Fact>]
     let ``merge removes empty synthetic Default namespace`` () =
         let child = { Id = "Default.Sample"; Name = "Sample"; Kind = EntityKind.Module; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
         let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = EntityKind.Namespace; SummaryHtml = ""; Members = []; Examples = []; Entities = [ child ] }
