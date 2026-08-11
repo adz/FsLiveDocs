@@ -836,7 +836,9 @@ jobs:
                         let outputDir = Path.Combine(Directory.GetCurrentDirectory(), "output")
                         app.UseStaticFiles(StaticFileOptions(
                             FileProvider = new PhysicalFileProvider(outputDir),
-                            RequestPath = ""
+                            RequestPath = "",
+                            ServeUnknownFileTypes = true,
+                            DefaultContentType = "application/octet-stream"
                         )) |> ignore
                         
                         app.Use(fun (context: HttpContext) (next: Func<Threading.Tasks.Task>) ->
