@@ -86,22 +86,31 @@ module SymbolLister =
         ]
 
     /// <summary>
+    /// The name the source gave each parameter, in flattened curried order, or <c>None</c>
+    /// where the source gave none.
+    /// </summary>
+    /// <remarks>
+    /// This is the single canonical name source. FSharp.Formatting invents a synthetic name
+    /// independently for the usage signature and for the parameter metadata, so the two can
+    /// disagree (<c>arg2</c> against <c>arg1</c>); the compiler's own <c>Name</c> is the only
+    /// value both must be reconciled against. Matching on synthetic-looking text instead would
+    /// misfire on a parameter genuinely named <c>arg1</c>.
+    /// </remarks>
+    let authoredParameterNames (m: ApiDocMember) : string option list =
+        match box m.Symbol with
+        | :? FSharpMemberOrFunctionOrValue as mfv ->
+            mfv.CurriedParameterGroups |> Seq.collect id |> Seq.map (fun p -> p.Name) |> Seq.toList
+        | _ -> []
+
+    /// <summary>
     /// Finds the 1-based positions of public parameters that carry no source-level name,
     /// such as a union destructured directly in the parameter list
     /// (<c>let run (ColdTask operation) = ...</c>).
     /// </summary>
-    /// <remarks>
-    /// FSharp.Formatting invents a synthetic name independently for the usage signature and
-    /// for the parameter metadata, so the two can disagree (<c>arg2</c> against <c>arg1</c>)
-    /// and cannot be reconciled into one canonical name. The authoritative signal is the
-    /// compiler's own <c>Name</c>, which is <c>None</c> exactly when the source gave none;
-    /// matching on synthetic-looking text would misfire on a parameter genuinely named
-    /// <c>arg1</c>.
-    /// </remarks>
     let unnamedParameterPositions (m: ApiDocMember) : int list =
         match box m.Symbol with
         | :? FSharpMemberOrFunctionOrValue as mfv when not (List.isEmpty m.Parameters) ->
-            // Operators and indexers are positional by nature; there is no name to authored.
+            // Operators and property accessors are positional by nature; there is no name to author.
             let isPositionalByNature =
                 mfv.CompiledName.StartsWith("op_", StringComparison.Ordinal)
                 || mfv.IsPropertyGetterMethod
@@ -144,12 +153,19 @@ module SymbolLister =
             Id = m.Symbol.FullName
             Name = m.Name
             Signature = m.UsageHtml.HtmlText // usage is often better for members
-            Parameters = 
-                m.Parameters 
-                |> List.map (fun p -> { 
-                    Name = p.ParameterNameText
+            Parameters =
+                // Names come from the canonical source, not from FSharp.Formatting's independently
+                // synthesised ParameterNameText, so the table cannot drift from the signature.
+                let authored = authoredParameterNames m
+                m.Parameters
+                |> List.mapi (fun index p -> {
+                    Name =
+                        authored
+                        |> List.tryItem index
+                        |> Option.flatten
+                        |> Option.defaultValue p.ParameterNameText
                     Type = p.ParameterType.HtmlText
-                    DescriptionHtml = p.ParameterDocs |> Option.map (fun d -> d.HtmlText) |> Option.defaultValue "" 
+                    DescriptionHtml = p.ParameterDocs |> Option.map (fun d -> d.HtmlText) |> Option.defaultValue ""
                 })
             ReturnType = m.ReturnInfo.ReturnType |> Option.map (fun (_, h) -> h.HtmlText) |> Option.defaultValue "unit"
             SummaryHtml = m.Comment.Summary.HtmlText
@@ -182,6 +198,20 @@ module SymbolLister =
             Entities = nested
         }
 
+    /// <summary>
+    /// Canonical parameter names the rendered usage signature fails to mention, which would
+    /// leave the signature and the parameter table naming the same argument differently.
+    /// </summary>
+    let signatureNameMismatches (m: ApiDocMember) : string list =
+        let usage = m.UsageHtml.HtmlText
+        if String.IsNullOrWhiteSpace usage then
+            []
+        else
+            authoredParameterNames m
+            |> List.choose id
+            |> List.filter (fun name ->
+                not (Regex.IsMatch(usage, $@"\b{Regex.Escape name}\b")))
+
     /// <summary>Describes every unnamed public parameter reachable from an entity.</summary>
     let rec unnamedParameterDiagnostics (e: ApiDocEntity) : string list =
         let describe (m: ApiDocMember) =
@@ -199,7 +229,20 @@ module SymbolLister =
                     + "Give the parameter a name and destructure in the body "
                     + "(let f x = let (Case y) = x in ...), so the signature and the parameter table agree.")
 
+        let describeMismatch (m: ApiDocMember) =
+            match signatureNameMismatches m with
+            | [] -> None
+            | names ->
+                let where =
+                    match m.Symbol.DeclarationLocation with
+                    | Some loc -> $"{loc.FileName}({loc.StartLine})"
+                    | None -> "<unknown location>"
+                let listed = String.concat ", " names
+                Some
+                    $"{where}: {m.Symbol.FullName} renders a signature that never mentions its parameter(s) {listed}."
+
         [ yield! e.AllMembers |> Seq.choose describe
+          yield! e.AllMembers |> Seq.choose describeMismatch
           yield! e.NestedEntities |> List.collect unnamedParameterDiagnostics ]
 
     let private isSyntheticDefaultNamespace (e: EntityModel) =

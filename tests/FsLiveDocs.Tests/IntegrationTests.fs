@@ -177,7 +177,15 @@ module Named =
 
         let! package = SymbolLister.extractFromProject projFile
 
-        Assert.NotEmpty(package.Entities)
+        let rec allMembers (entities: EntityModel list) =
+            entities |> List.collect (fun e -> e.Members @ allMembers e.Entities)
+
+        let run = allMembers package.Entities |> List.find (fun m -> m.Name.StartsWith("run"))
+
+        // The names come from source, and each also appears in the rendered signature.
+        Assert.Equal<string list>([ "token"; "coldTask" ], run.Parameters |> List.map _.Name)
+        for parameter in run.Parameters do
+            Assert.Contains(parameter.Name, run.Signature)
     }
 
     [<Fact>]
