@@ -27,6 +27,8 @@ type Arguments =
     | [<CliPrefix(CliPrefix.None)>] Capture of projectPaths:string list
     /// <summary>Verifies and describes a release capsule.</summary>
     | [<CliPrefix(CliPrefix.None)>] Inspect of capsulePath:string
+    /// <summary>Adds an immutable capsule reference to a release history index.</summary>
+    | [<CliPrefix(CliPrefix.None); AltCommandLine("history-add")>] HistoryAdd of version:string
     /// <summary>Runs verified code examples found in docstrings.</summary>
     | [<CliPrefix(CliPrefix.None)>] Test of projectPaths:string list
     /// <summary>Audits coverage and compiler-checks every expanded F# documentation block.</summary>
@@ -43,6 +45,12 @@ type Arguments =
     | [<Inherit>] Version of string
     /// <summary>Sets the API model extraction output path.</summary>
     | [<Inherit>] Output of string
+    /// <summary>Sets a local capsule path for history-add.</summary>
+    | [<Inherit>] Capsule of string
+    /// <summary>Sets an HTTPS capsule URL for history-add.</summary>
+    | [<Inherit>] Url of string
+    /// <summary>Sets the expected capsule SHA-256 for history-add.</summary>
+    | [<Inherit>] Sha256 of string
     /// <summary>Sets the network interface used by the preview server.</summary>
     | [<Inherit>] Host of string
     /// <summary>Sets the TCP port used by the preview server.</summary>
@@ -60,6 +68,7 @@ type Arguments =
             | Extract _ -> "Extract symbols from one or more projects into a JSON blob."
             | Capture _ -> "Verify and capture a self-contained documentation release capsule."
             | Inspect _ -> "Verify and describe a documentation release capsule."
+            | HistoryAdd _ -> "Add an immutable capsule reference to a release history index."
             | Test _ -> "Verify documentation without generating a test project: audits every F# block, then runs each snapshot-selected example."
             | Audit _ -> "Audit coverage, modes, and compilation for every expanded F# documentation block."
             | Build _ -> "Render the final static site for the given projects."
@@ -68,6 +77,9 @@ type Arguments =
             | Theme _ -> "Set the visual theme (default: light)."
             | Version _ -> "Set the version stored by API model extraction."
             | Output _ -> "Set the API model extraction output path."
+            | Capsule _ -> "Set the local capsule path for history-add."
+            | Url _ -> "Set the HTTPS capsule URL for history-add."
+            | Sha256 _ -> "Set the expected capsule SHA-256 for history-add."
             | Host _ -> "Set the preview bind host (default: 0.0.0.0)."
             | Port _ -> "Set the preview port (default: 5000)."
             | Ignore _ -> "Add a comma-separated list of directory names the watcher ignores. Repeatable."
@@ -657,6 +669,39 @@ module Program =
         AnsiConsole.MarkupLine($"  SHA-256: {report.Sha256}")
         0
 
+    let historyAddAction indexPath version capsulePath capsuleUrl checksum =
+        let index =
+            if File.Exists indexPath then ReleaseCapsule.loadHistoryIndex indexPath
+            else { SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion; CurrentVersion = version; Entries = [] }
+        if index.Entries |> List.exists (fun entry -> entry.Version = version) then
+            invalidOp $"Release history already contains version {version}. Published entries are immutable."
+        let path, url, sha256 =
+            match capsulePath, capsuleUrl with
+            | Some path, None ->
+                let fullPath = Path.GetFullPath path
+                if not (File.Exists fullPath) then invalidOp $"Release capsule is missing: {fullPath}"
+                Some path, None, checksum |> Option.defaultValue (History.sha256 fullPath)
+            | None, Some url ->
+                let expected = checksum |> Option.defaultWith (fun () -> invalidOp "A remote capsule requires --sha256.")
+                None, Some url, expected
+            | _ -> invalidOp "Specify exactly one of --capsule or --url."
+        let updated =
+            {
+                index with
+                    CurrentVersion = version
+                    Entries =
+                        { Version = version; CapsulePath = path; CapsuleUrl = url; CapsuleSha256 = sha256 }
+                        :: index.Entries
+                        |> List.sortByDescending _.Version
+            }
+        let directory = Path.GetDirectoryName(Path.GetFullPath indexPath)
+        Directory.CreateDirectory directory |> ignore
+        File.WriteAllText(indexPath, Newtonsoft.Json.JsonConvert.SerializeObject(updated, Newtonsoft.Json.Formatting.Indented, Serialization.jsonSettings))
+        // Load what was written so malformed checksums and source combinations cannot be persisted silently.
+        ReleaseCapsule.loadHistoryIndex indexPath |> ignore
+        AnsiConsole.MarkupLine($"[green]✔ History index updated:[/] {Markup.Escape(Path.GetFullPath indexPath)}")
+        0
+
     let private generateSnapshotTests (projectPaths: string list) =
         printBanner()
 
@@ -876,7 +921,9 @@ module Program =
 
     let buildHistoryAction manifestPath theme =
         let raw = File.ReadAllText manifestPath
-        let isCapsuleIndex = raw.Contains("\"CapsulePath\"", StringComparison.OrdinalIgnoreCase)
+        let isCapsuleIndex =
+            raw.Contains("\"CapsulePath\"", StringComparison.OrdinalIgnoreCase)
+            || raw.Contains("\"CapsuleUrl\"", StringComparison.OrdinalIgnoreCase)
         if isCapsuleIndex then
             let index = ReleaseCapsule.loadHistoryIndex manifestPath
             let indexRoot = Path.GetDirectoryName(Path.GetFullPath manifestPath)
@@ -886,10 +933,7 @@ module Program =
                 let loaded =
                     index.Entries
                     |> List.map (fun entry ->
-                        let capsulePath = Path.GetFullPath(Path.Combine(indexRoot, entry.CapsulePath))
-                        let actual = History.sha256 capsulePath
-                        if not (actual.Equals(entry.CapsuleSha256, StringComparison.OrdinalIgnoreCase)) then
-                            invalidOp $"Release capsule checksum mismatch for {entry.Version}: expected {entry.CapsuleSha256}, got {actual}."
+                        let capsulePath = ReleaseCapsule.acquire indexRoot (Path.GetFullPath(".livedocs/releases")) entry
                         let docsDir = Path.Combine(temporaryRoot, entry.Version, "docs")
                         let packageRaw, semanticArtifact, site = ReleaseCapsule.materializeContent capsulePath docsDir
                         if packageRaw.Version <> entry.Version then
@@ -1057,6 +1101,16 @@ jobs:
                     AnsiConsole.MarkupLine($"  Capsule: {report.CompressedSize:N0} bytes")
                     AnsiConsole.MarkupLine($"  SHA-256: {report.Sha256}")
                     0
+
+                elif results.Contains HistoryAdd then
+                    let version = results.GetResult HistoryAdd
+                    let indexPath = results.GetResult(Output, defaultValue = ".livedocs/history.json")
+                    historyAddAction
+                        indexPath
+                        version
+                        (results.TryGetResult Capsule)
+                        (results.TryGetResult Url)
+                        (results.TryGetResult Sha256)
 
                 elif results.Contains Extract then
                     printBanner()

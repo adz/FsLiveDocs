@@ -52,7 +52,8 @@ type ReleaseCapsuleReport = {
 /// One immutable capsule referenced by a history index.
 type ReleaseHistoryEntry = {
     Version: string
-    CapsulePath: string
+    CapsulePath: string option
+    CapsuleUrl: string option
     CapsuleSha256: string
 }
 

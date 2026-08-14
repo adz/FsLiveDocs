@@ -5,6 +5,7 @@ open System.IO
 open System.IO.Compression
 open System.Security.Cryptography
 open System.Text
+open System.Net.Http
 open Newtonsoft.Json
 
 /// Creates, validates, inspects, and extracts deterministic release capsules.
@@ -202,4 +203,47 @@ module ReleaseCapsule =
             invalidOp "Release history index contains duplicate versions."
         if index.Entries |> List.exists (fun entry -> entry.Version = index.CurrentVersion) |> not then
             invalidOp $"Current history version {index.CurrentVersion} has no capsule entry."
+        for entry in index.Entries do
+            match entry.CapsulePath, entry.CapsuleUrl with
+            | Some path, None when not (String.IsNullOrWhiteSpace path) -> ()
+            | None, Some url when not (String.IsNullOrWhiteSpace url) -> ()
+            | _ -> invalidOp $"Release {entry.Version} must declare exactly one of CapsulePath or CapsuleUrl."
+            if entry.CapsuleSha256.Length <> 64
+               || entry.CapsuleSha256 |> Seq.exists (fun value -> not (Uri.IsHexDigit value)) then
+                invalidOp $"Release {entry.Version} has an invalid SHA-256 checksum."
         index
+
+    /// Resolves a local or remote capsule into the checksum-addressed download cache.
+    let acquire indexRoot cacheRoot (entry: ReleaseHistoryEntry) =
+        let verify path =
+            let actual = History.sha256 path
+            if not (actual.Equals(entry.CapsuleSha256, StringComparison.OrdinalIgnoreCase)) then
+                invalidOp $"Release capsule checksum mismatch for {entry.Version}: expected {entry.CapsuleSha256}, got {actual}."
+            path
+
+        match entry.CapsulePath, entry.CapsuleUrl with
+        | Some relative, None -> Path.GetFullPath(Path.Combine(indexRoot, relative)) |> verify
+        | None, Some source ->
+            let uri =
+                match Uri.TryCreate(source, UriKind.Absolute) with
+                | true, value when value.Scheme = Uri.UriSchemeHttps -> value
+                | _ -> invalidOp $"Release {entry.Version} capsule URL must use HTTPS."
+            Directory.CreateDirectory cacheRoot |> ignore
+            let cached = Path.Combine(cacheRoot, entry.CapsuleSha256.ToLowerInvariant() + ".livedocs.zip")
+            if File.Exists cached then verify cached
+            else
+                let temporary = cached + ".download-" + Guid.NewGuid().ToString("N")
+                try
+                    use client = new HttpClient()
+                    use response = client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult()
+                    response.EnsureSuccessStatusCode() |> ignore
+                    use sourceStream = response.Content.ReadAsStream()
+                    use destination = File.Create temporary
+                    sourceStream.CopyTo destination
+                    destination.Dispose()
+                    verify temporary |> ignore
+                    File.Move(temporary, cached)
+                    cached
+                finally
+                    if File.Exists temporary then File.Delete temporary
+        | _ -> invalidOp $"Release {entry.Version} must declare exactly one capsule source."

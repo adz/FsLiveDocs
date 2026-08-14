@@ -160,6 +160,12 @@ module ReleaseCapsuleTests =
         let inspected = ReleaseCapsule.inspect first
         Assert.Equal("1.2.3", inspected.Manifest.ProductVersion)
         Assert.Equal("abc123", inspected.Manifest.SourceRevision)
+        let acquired =
+            ReleaseCapsule.acquire
+                root
+                (Path.Combine(root, "cache"))
+                { Version = "1.2.3"; CapsulePath = Some "first.zip"; CapsuleUrl = None; CapsuleSha256 = firstReport.Sha256 }
+        Assert.Equal(Path.GetFullPath first, acquired)
 
         let docsDir = Path.Combine(root, "materialized")
         let package, loadedSemantic, loadedSite = ReleaseCapsule.materializeContent first docsDir
@@ -209,6 +215,10 @@ module ReleaseCapsuleTests =
         File.WriteAllText(path, """{"SchemaVersion":1,"CurrentVersion":"1.0.0","Entries":[{"Version":"1.0.0","CapsulePath":"one.zip","CapsuleSha256":"hash"},{"Version":"1.0.0","CapsulePath":"two.zip","CapsuleSha256":"hash"}]}""")
         let duplicate = Assert.Throws<InvalidOperationException>(fun () -> ReleaseCapsule.loadHistoryIndex path |> ignore)
         Assert.Contains("duplicate versions", duplicate.Message)
+
+        File.WriteAllText(path, """{"SchemaVersion":1,"CurrentVersion":"1.0.0","Entries":[{"Version":"1.0.0","CapsulePath":"one.zip","CapsuleUrl":"https://example.com/one.zip","CapsuleSha256":"0000000000000000000000000000000000000000000000000000000000000000"}]}""")
+        let ambiguous = Assert.Throws<InvalidOperationException>(fun () -> ReleaseCapsule.loadHistoryIndex path |> ignore)
+        Assert.Contains("exactly one", ambiguous.Message)
 
 module SymbolListerTests =
 
