@@ -683,7 +683,10 @@ module Program =
         AnsiConsole.MarkupLine($"  API: {publicReport.Manifest.Api.Size:N0} bytes")
         AnsiConsole.MarkupLine($"  Semantic: {publicReport.Manifest.Semantic.Size:N0} bytes")
         AnsiConsole.MarkupLine($"  Content: {publicReport.Manifest.Content.Size:N0} bytes")
+        AnsiConsole.MarkupLine($"  Inventory: {publicReport.Counts.Entities:N0} entities, {publicReport.Counts.Members:N0} members, {publicReport.Counts.DocumentationNodes:N0} documentation nodes, {publicReport.Counts.Examples:N0} examples")
+        AnsiConsole.MarkupLine($"  Content: {publicReport.Counts.Pages:N0} pages, {publicReport.Counts.CodeBlocks:N0} code blocks, {publicReport.Counts.Tooltips:N0} tooltips, {publicReport.Counts.Diagnostics:N0} diagnostics, {publicReport.Counts.Assets:N0} assets")
         AnsiConsole.MarkupLine($"  Compressed: {publicReport.CompressedSize:N0} bytes")
+        AnsiConsole.MarkupLine($"  Uncompressed: {publicReport.UncompressedSize:N0} bytes")
         AnsiConsole.MarkupLine($"  SHA-256: {publicReport.Sha256}")
         0
 
@@ -1153,7 +1156,10 @@ jobs:
                     AnsiConsole.MarkupLine($"  API schema: {report.Manifest.Api.SchemaVersion} ({report.Manifest.Api.Size:N0} bytes)")
                     AnsiConsole.MarkupLine($"  Semantic schema: {report.Manifest.Semantic.SchemaVersion} ({report.Manifest.Semantic.Size:N0} bytes)")
                     AnsiConsole.MarkupLine($"  Content schema: {report.Manifest.Content.SchemaVersion} ({report.Manifest.Content.Size:N0} bytes)")
+                    AnsiConsole.MarkupLine($"  Inventory: {report.Counts.Entities:N0} entities, {report.Counts.Members:N0} members, {report.Counts.DocumentationNodes:N0} documentation nodes, {report.Counts.Examples:N0} examples")
+                    AnsiConsole.MarkupLine($"  Content: {report.Counts.Pages:N0} pages, {report.Counts.CodeBlocks:N0} code blocks, {report.Counts.Tooltips:N0} tooltips, {report.Counts.Diagnostics:N0} diagnostics, {report.Counts.Assets:N0} assets")
                     AnsiConsole.MarkupLine($"  Capsule: {report.CompressedSize:N0} bytes")
+                    AnsiConsole.MarkupLine($"  Uncompressed: {report.UncompressedSize:N0} bytes")
                     AnsiConsole.MarkupLine($"  SHA-256: {report.Sha256}")
                     0
 

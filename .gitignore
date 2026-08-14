@@ -2,7 +2,8 @@ bin/
 obj/
 output/
 artifacts/
-.livedocs/
+.livedocs/cache/
+.livedocs/releases/
 *.user
 
 .fake

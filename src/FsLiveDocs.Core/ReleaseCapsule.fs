@@ -21,6 +21,9 @@ module ReleaseCapsule =
     let HistoryIndexSchemaVersion = 1
 
     let private archiveTimestamp = DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let private maximumEntryCount = 10_000
+    let private maximumEntrySize = 64L * 1024L * 1024L
+    let private maximumTotalSize = 256L * 1024L * 1024L
 
     let private sha256Bytes (bytes: byte array) =
         bytes |> SHA256.HashData |> Convert.ToHexString |> _.ToLowerInvariant()
@@ -48,12 +51,59 @@ module ReleaseCapsule =
             Size = int64 bytes.LongLength
         }
 
+    let private mediaType (path: string) =
+        match Path.GetExtension(path).ToLowerInvariant() with
+        | ".css" -> "text/css"
+        | ".js" -> "text/javascript"
+        | ".json" -> "application/json"
+        | ".svg" -> "image/svg+xml"
+        | ".png" -> "image/png"
+        | ".jpg" | ".jpeg" -> "image/jpeg"
+        | ".gif" -> "image/gif"
+        | ".webp" -> "image/webp"
+        | ".ico" -> "image/x-icon"
+        | ".woff" -> "font/woff"
+        | ".woff2" -> "font/woff2"
+        | ".txt" -> "text/plain"
+        | _ -> "application/octet-stream"
+
     let private writeEntry (archive: ZipArchive) path bytes =
         let entry = archive.CreateEntry(normalizedEntryPath path, CompressionLevel.Optimal)
         entry.LastWriteTime <- archiveTimestamp
         entry.ExternalAttributes <- 0
         use stream = entry.Open()
         stream.Write(bytes, 0, bytes.Length)
+
+    let private captureCounts (api: ApiModelArtifact) (semantic: SemanticDocumentationArtifact) (content: ReleaseContentArtifact) =
+        let rec countEntities (entities: EntityModel list) : int * int * int =
+            entities
+            |> List.fold (fun (entityCount, memberCount, exampleCount) (entity: EntityModel) ->
+                let nestedEntities, nestedMembers, nestedExamples = countEntities entity.Entities
+                entityCount + nestedEntities + 1,
+                memberCount + nestedMembers + entity.Members.Length,
+                exampleCount + nestedExamples + entity.Examples.Length + (entity.Members |> List.sumBy (fun member' -> member'.Examples.Length))) (0, 0, 0)
+        let entities, members, examples = countEntities api.Package.Entities
+        let rec countNodes nodes = nodes |> List.sumBy (fun node -> 1 + countNodes node.Children)
+        let documentationNodes =
+            let rec inEntities entities =
+                entities
+                |> List.sumBy (fun entity ->
+                    countNodes entity.Summary
+                    + (entity.Members |> List.sumBy (fun member' -> countNodes member'.Summary + countNodes member'.Remarks))
+                    + inEntities entity.Entities)
+            inEntities api.Package.Entities
+        let blocks = semantic.Pages |> List.collect _.Blocks
+        {
+            Entities = entities
+            Members = members
+            Examples = examples
+            DocumentationNodes = documentationNodes
+            Pages = content.Pages.Length
+            CodeBlocks = blocks.Length
+            Tooltips = blocks |> List.sumBy _.Tooltips.Length
+            Diagnostics = blocks |> List.sumBy _.Diagnostics.Length
+            Assets = content.Assets.Length
+        }
 
     /// Creates a complete capsule without overwriting an existing release.
     let create path sourceRevision captureToolVersion (api: ApiModelArtifact) (semantic: SemanticDocumentationArtifact) site pages assets =
@@ -77,7 +127,7 @@ module ReleaseCapsule =
                 Pages = pages |> List.sortBy _.SourcePath
                 Assets =
                     normalizedAssets
-                    |> List.map (fun (path, bytes) -> { Path = path; Sha256 = sha256Bytes bytes; Size = int64 bytes.LongLength })
+                    |> List.map (fun (path, bytes) -> { Path = path; MediaType = mediaType path; Sha256 = sha256Bytes bytes; Size = int64 bytes.LongLength })
                 Site = site
             }
         let contentBytes = serialize content
@@ -109,20 +159,34 @@ module ReleaseCapsule =
             Path = fullPath
             Sha256 = History.sha256 fullPath
             CompressedSize = FileInfo(fullPath).Length
+            UncompressedSize = int64 manifestBytes.LongLength + manifest.Api.Size + manifest.Semantic.Size + manifest.Content.Size + (content.Assets |> List.sumBy _.Size)
             Manifest = manifest
+            Counts = captureCounts api semantic content
         }
 
     let private readEntries path =
         use archive = ZipFile.OpenRead path
         let entries = archive.Entries |> Seq.toList
+        if entries.Length > maximumEntryCount then
+            invalidOp $"Release capsule has {entries.Length} entries; the limit is {maximumEntryCount}."
         let duplicates = entries |> List.countBy _.FullName |> List.filter (fun (_, count) -> count > 1)
         if not duplicates.IsEmpty then invalidOp $"Release capsule contains duplicate entry: {fst duplicates.Head}"
+        let mutable totalSize = 0L
         entries
         |> List.map (fun entry ->
             let name = normalizedEntryPath entry.FullName
+            if name.EndsWith("/", StringComparison.Ordinal) then invalidOp $"Release capsule contains a directory entry: {name}"
+            let unixFileType = (entry.ExternalAttributes >>> 16) &&& 0xF000
+            if unixFileType = 0xA000 then invalidOp $"Release capsule contains a symbolic link: {name}"
+            if entry.Length < 0L || entry.Length > maximumEntrySize then
+                invalidOp $"Release capsule entry {name} is larger than the {maximumEntrySize} byte limit."
+            totalSize <- totalSize + entry.Length
+            if totalSize > maximumTotalSize then
+                invalidOp $"Release capsule expands beyond the {maximumTotalSize} byte limit."
             use stream = entry.Open()
-            use memory = new MemoryStream()
+            use memory = new MemoryStream(int entry.Length)
             stream.CopyTo memory
+            if memory.Length <> entry.Length then invalidOp $"Release capsule entry size changed while reading: {name}"
             name, memory.ToArray())
         |> Map.ofList
 
@@ -161,13 +225,15 @@ module ReleaseCapsule =
 
     /// Inspects and fully verifies a capsule without extracting it.
     let inspect path =
-        let manifest, _, _, _, _ = load path
+        let manifest, api, semantic, content, entries = load path
         let fullPath = Path.GetFullPath path
         {
             Path = fullPath
             Sha256 = History.sha256 fullPath
             CompressedSize = FileInfo(fullPath).Length
+            UncompressedSize = entries |> Map.toSeq |> Seq.sumBy (fun (_, bytes) -> int64 bytes.LongLength)
             Manifest = manifest
+            Counts = captureCounts api semantic content
         }
 
     /// Materializes renderer-neutral content under a validated destination.

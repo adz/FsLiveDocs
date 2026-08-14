@@ -160,6 +160,8 @@ module ReleaseCapsuleTests =
         let inspected = ReleaseCapsule.inspect first
         Assert.Equal("1.2.3", inspected.Manifest.ProductVersion)
         Assert.Equal("abc123", inspected.Manifest.SourceRevision)
+        Assert.Equal(1, inspected.Counts.Pages)
+        Assert.Equal(1, inspected.Counts.Assets)
         let acquired =
             ReleaseCapsule.acquire
                 root

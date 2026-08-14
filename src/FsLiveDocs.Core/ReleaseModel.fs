@@ -10,6 +10,7 @@ type ReleaseContentPage = {
 /// One non-Markdown file stored in the release capsule.
 type ReleaseAsset = {
     Path: string
+    MediaType: string
     Sha256: string
     Size: int64
 }
@@ -41,12 +42,27 @@ type ReleaseCapsuleManifest = {
     Content: ReleaseComponent
 }
 
+/// Inventory counts that make release capture observable without opening the capsule.
+type ReleaseCaptureCounts = {
+    Entities: int
+    Members: int
+    Examples: int
+    DocumentationNodes: int
+    Pages: int
+    CodeBlocks: int
+    Tooltips: int
+    Diagnostics: int
+    Assets: int
+}
+
 /// Summary returned after a release capsule is written or inspected.
 type ReleaseCapsuleReport = {
     Path: string
     Sha256: string
     CompressedSize: int64
+    UncompressedSize: int64
     Manifest: ReleaseCapsuleManifest
+    Counts: ReleaseCaptureCounts
 }
 
 /// One immutable capsule referenced by a history index.
