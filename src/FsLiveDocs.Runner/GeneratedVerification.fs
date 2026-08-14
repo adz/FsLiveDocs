@@ -59,3 +59,72 @@ module GeneratedVerification =
             invalidOp $"{blockId} output mismatch.{Environment.NewLine}Expected:{Environment.NewLine}{expected}{Environment.NewLine}Actual:{Environment.NewLine}{output}"
         | _ when output.Contains("error FS", StringComparison.OrdinalIgnoreCase) -> invalidOp $"{blockId} execution failed:{Environment.NewLine}{output}"
         | _ -> ()
+
+    /// <summary>
+    /// Compiles XML examples that no page transcludes and no snapshot runs, against the project
+    /// that declares them.
+    /// </summary>
+    /// <remarks>
+    /// A markdown fence is compiled unless excluded in writing; this brings XML examples to the
+    /// same standard. An example carrying its own no-check reason is skipped, as is one already
+    /// covered elsewhere. Failures are returned rather than raised, so the caller decides whether
+    /// they warn or fail the run.
+    /// </remarks>
+    let compileUncoveredExamples (projectPath: string) (covered: Set<string>) (package: PackageModel) = async {
+        let examples =
+            let rec walk (entity: EntityModel) =
+                [ let entityExamples = if isNull (box entity.Examples) then [] else entity.Examples
+                  for example in entityExamples do
+                      yield entity.Id, { File = ""; Line = 0 }, example
+                  for entityMember in entity.Members do
+                      for example in entityMember.Examples do
+                          yield entityMember.Id, entityMember.Location, example
+                  for nested in entity.Entities do
+                      yield! walk nested ]
+            package.Entities
+            |> List.collect walk
+            |> List.filter (fun (_, _, example) ->
+                example.NoCheckReason.IsNone
+                && not example.IsSnapshotTest
+                && not (covered.Contains example.Name))
+
+        if examples.IsEmpty then
+            return []
+        else
+            let blocks =
+                examples
+                |> List.mapi (fun ordinal (owner, _, example) -> {
+                    Id = $"{owner}#example-{example.Name}"
+                    Origin = XmlExample
+                    SourcePath = owner
+                    Ordinal = ordinal
+                    ExpandedSource = example.Content
+                    SourceHash = DocumentationDiscovery.sourceHash Isolated example.Content
+                    // Isolated: an example is a standalone illustration, not part of a page's flow.
+                    Mode = Isolated
+                    Project = Some projectPath
+                })
+
+            let! results = DocumentationCompiler.checkBlocks projectPath "" blocks
+            let locations =
+                examples
+                |> List.map (fun (owner, location, example) -> $"{owner}#example-{example.Name}", (owner, location))
+                |> Map.ofList
+
+            return
+                results
+                |> List.collect (fun result ->
+                    result.Diagnostics
+                    |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
+                    |> List.truncate 1
+                    |> List.map (fun diagnostic ->
+                        let owner, location =
+                            locations |> Map.tryFind result.Unit.Id |> Option.defaultValue (result.Unit.Id, { File = ""; Line = 0 })
+                        {
+                            Code = "example-does-not-compile"
+                            Symbol = result.Unit.Id
+                            Location = location
+                            Message = $"This example does not compile: {diagnostic.Message}"
+                            Remedy = $"Fix the example, transclude it into a page, or exclude it with data-livedocs=\"no-check\" reason=\"...\" ({owner})."
+                        }))
+    }
