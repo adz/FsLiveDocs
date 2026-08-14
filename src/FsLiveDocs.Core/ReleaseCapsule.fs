@@ -105,6 +105,48 @@ module ReleaseCapsule =
             Assets = content.Assets.Length
         }
 
+    let private validateApi (api: ApiModelArtifact) =
+        if String.IsNullOrWhiteSpace api.Package.Version then invalidOp "Release API artifact has no product version."
+        let rec collectIds (entities: EntityModel list) =
+            entities
+            |> List.collect (fun (entity: EntityModel) -> entity.Id :: ((entity.Members |> List.map _.Id) @ collectIds entity.Entities))
+        let ids = collectIds api.Package.Entities
+        match ids |> List.tryFind String.IsNullOrWhiteSpace with
+        | Some _ -> invalidOp "Release API artifact contains an empty symbol ID."
+        | None -> ()
+        match ids |> List.countBy id |> List.tryFind (fun (_, count) -> count > 1) with
+        | Some (id, _) -> invalidOp $"Release API artifact contains duplicate symbol ID {id}."
+        | None -> ()
+
+    let private validateSemantic (semantic: SemanticDocumentationArtifact) =
+        match semantic.Pages |> List.countBy _.SourcePath |> List.tryFind (fun (_, count) -> count > 1) with
+        | Some (path, _) -> invalidOp $"Release semantic artifact contains duplicate page {path}."
+        | None -> ()
+        let blocks = semantic.Pages |> List.collect _.Blocks
+        match blocks |> List.countBy _.Id |> List.tryFind (fun (_, count) -> count > 1) with
+        | Some (id, _) -> invalidOp $"Release semantic artifact contains duplicate block ID {id}."
+        | None -> ()
+        for block in blocks do
+            if String.IsNullOrWhiteSpace block.Id || String.IsNullOrWhiteSpace block.SourceHash || String.IsNullOrWhiteSpace block.ContextHash then
+                invalidOp "Release semantic artifact contains a block without an ID, source hash, or context hash."
+            for token in block.Lines |> List.collect _.Tokens do
+                match token.Tooltip with
+                | Some index when index < 0 || index >= block.Tooltips.Length ->
+                    invalidOp $"Release semantic block {block.Id} contains invalid tooltip index {index}."
+                | _ -> ()
+
+    let private validateContent (content: ReleaseContentArtifact) =
+        match content.Pages |> List.countBy _.SourcePath |> List.tryFind (fun (_, count) -> count > 1) with
+        | Some (path, _) -> invalidOp $"Release content artifact contains duplicate page {path}."
+        | None -> ()
+        content.Pages |> List.iter (fun page -> normalizedEntryPath page.SourcePath |> ignore)
+        match content.Assets |> List.countBy _.Path |> List.tryFind (fun (_, count) -> count > 1) with
+        | Some (path, _) -> invalidOp $"Release content artifact contains duplicate asset {path}."
+        | None -> ()
+        for asset in content.Assets do
+            normalizedEntryPath asset.Path |> ignore
+            if String.IsNullOrWhiteSpace asset.MediaType then invalidOp $"Release asset {asset.Path} has no media type."
+
     /// Creates a complete capsule without overwriting an existing release.
     let create path sourceRevision captureToolVersion (api: ApiModelArtifact) (semantic: SemanticDocumentationArtifact) site pages assets =
         let fullPath = Path.GetFullPath path
@@ -130,6 +172,9 @@ module ReleaseCapsule =
                     |> List.map (fun (path, bytes) -> { Path = path; MediaType = mediaType path; Sha256 = sha256Bytes bytes; Size = int64 bytes.LongLength })
                 Site = site
             }
+        validateApi api
+        validateSemantic semantic
+        validateContent content
         let contentBytes = serialize content
         let manifest =
             {
@@ -216,11 +261,22 @@ module ReleaseCapsule =
         if api.SchemaVersion <> History.ApiModelSchemaVersion then invalidOp $"Unsupported API model schema {api.SchemaVersion}; expected {History.ApiModelSchemaVersion}."
         if semantic.SchemaVersion <> History.SemanticSchemaVersion then invalidOp $"Unsupported semantic schema {semantic.SchemaVersion}; expected {History.SemanticSchemaVersion}."
         if content.SchemaVersion <> ContentSchemaVersion then invalidOp $"Unsupported content schema {content.SchemaVersion}; expected {ContentSchemaVersion}."
+        validateApi api
+        validateSemantic semantic
+        validateContent content
         if api.Package.Version <> manifest.ProductVersion then invalidOp "Release capsule product version does not match its API artifact."
         for asset in content.Assets do
             let bytes = required ("assets/" + normalizedEntryPath asset.Path) entries
             if int64 bytes.LongLength <> asset.Size || sha256Bytes bytes <> asset.Sha256 then
                 invalidOp $"Release asset integrity mismatch: {asset.Path}"
+        let expectedEntries =
+            [ "manifest.json"; manifest.Api.Path; manifest.Semantic.Path; manifest.Content.Path ]
+            @ (content.Assets |> List.map (fun asset -> "assets/" + normalizedEntryPath asset.Path))
+            |> Set.ofList
+        let unexpected = entries |> Map.toSeq |> Seq.map fst |> Seq.filter (expectedEntries.Contains >> not) |> Seq.tryHead
+        match unexpected with
+        | Some name -> invalidOp $"Release capsule contains undeclared entry: {name}"
+        | None -> ()
         manifest, api, semantic, content, entries
 
     /// Inspects and fully verifies a capsule without extracting it.

@@ -659,7 +659,7 @@ module Program =
         let actualOutputPath =
             if dryRun then Path.Combine(Path.GetTempPath(), "fslivedocs-dry-run-" + Guid.NewGuid().ToString("N") + ".zip")
             else outputPath
-        let report =
+        let created =
             ReleaseCapsule.create
                 actualOutputPath
                 (currentRevision ())
@@ -669,6 +669,8 @@ module Program =
                 (loadSiteConfig())
                 contentPages
                 (captureAssets "docs")
+        let report = ReleaseCapsule.inspect actualOutputPath
+        if report.Sha256 <> created.Sha256 then invalidOp "Release capsule checksum changed during post-write verification."
         let publicReport = { report with Path = Path.GetFullPath outputPath }
         if dryRun then
             File.Delete actualOutputPath
