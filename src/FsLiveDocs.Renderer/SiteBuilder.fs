@@ -62,8 +62,6 @@ module SiteBuilder =
     /// <param name="e">The entity to render.</param>
     /// <returns>The rendered HTML document as a string.</returns>
     let renderEntityPage (e: EntityModel) (context: SiteRenderContext) =
-        let e = Presentation.normalizeEntityReferenceLinks context.Package e
-
         let renderPackageBadges (ent: EntityModel) =
             let packageNames =
                 (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
@@ -80,13 +78,12 @@ module SiteBuilder =
                     yield! packageNames |> List.map (fun name -> span [ _class "badge badge-outline font-mono" ] [ str name ])
                 ]
 
-        let renderSummaryBlock (summaryHtml: string) =
-            if String.IsNullOrWhiteSpace summaryHtml then
+        let renderSummaryBlock summary =
+            if Documentation.isEmpty summary then
                 emptyText
             else
-                let cleanSummary = Regex.Replace(summaryHtml, "^<h1.*?>.*?<\/h1>", String.Empty, RegexOptions.Singleline).Trim()
-                if String.IsNullOrWhiteSpace cleanSummary then emptyText
-                else div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ rawText cleanSummary ]
+                let rendered = Presentation.renderDocumentationHtml context.Package summary
+                div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ rawText rendered ]
 
         let renderFieldTable (title: string) (items: MemberModel list) =
             if items.IsEmpty then emptyText
@@ -113,7 +110,7 @@ module SiteBuilder =
                                             span [ _class "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText m.Signature ]
                                         ]
                                         td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                            str (Presentation.synopsisFromHtml m.SummaryHtml)
+                                            str (Presentation.synopsis m.Summary)
                                         ]
                                     ]
                                 )
@@ -140,7 +137,7 @@ module SiteBuilder =
 
                 renderPackageBadges ent
 
-                renderSummaryBlock ent.SummaryHtml
+                renderSummaryBlock ent.Summary
 
                 if not ent.Entities.IsEmpty then
                     div [ _class "mb-16" ] [
@@ -212,7 +209,7 @@ module SiteBuilder =
                                                 span [ _class "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText m.Signature ]
                                             ]
                                             td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                                str (Presentation.synopsisFromHtml m.SummaryHtml)
+                                                str (Presentation.synopsis m.Summary)
                                             ]
                                         ]
                                     )
@@ -221,7 +218,7 @@ module SiteBuilder =
                         ]
                     ]
 
-                div [ _class "space-y-12" ] (ent.Members |> List.map (View.apiCard context.Config.RepoUrl))
+                div [ _class "space-y-12" ] (ent.Members |> List.map (View.apiCard context.Package context.Config.RepoUrl))
 
                 let examples = Presentation.entityExamples ent
                 if not examples.IsEmpty then
@@ -261,7 +258,7 @@ module SiteBuilder =
 
                 renderPackageBadges ent
 
-                renderSummaryBlock ent.SummaryHtml
+                renderSummaryBlock ent.Summary
                 renderFieldTable "Fields" ent.Members
 
                 let examples = Presentation.entityExamples ent
@@ -372,7 +369,7 @@ module SiteBuilder =
                             h3 [ _class "text-lg font-bold group-hover:text-primary transition-colors" ] [ str e.Name ]
                             span [ _class "badge badge-sm opacity-40" ] [ str (string e.Kind) ]
                         ]
-                        p [ _class "text-sm opacity-60 mt-2 line-clamp-2" ] [ str (Presentation.synopsisFromHtml e.SummaryHtml) ]
+                        p [ _class "text-sm opacity-60 mt-2 line-clamp-2" ] [ str (Presentation.synopsis e.Summary) ]
                     ]
 
                 let topLevel =

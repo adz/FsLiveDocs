@@ -474,10 +474,10 @@ module ContentProvider =
         if not (Directory.Exists(apiDocsDir)) then package
         else
             let allowedOutputs = collectAllowedOutputs docsDir package
-            let rec updateEntity (e: EntityModel) (docs: Map<string, string>) =
-                let summary = docs |> Map.tryFind e.Id |> Option.defaultValue e.SummaryHtml
+            let rec updateEntity (e: EntityModel) (docs: Map<string, DocumentationNode list>) =
+                let summary = docs |> Map.tryFind e.Id |> Option.defaultValue e.Summary
                 { e with 
-                    SummaryHtml = summary
+                    Summary = summary
                     Entities = e.Entities |> List.map (fun child -> updateEntity child docs) }
 
             let docFiles = Directory.GetFiles(apiDocsDir, "*.md")
@@ -485,20 +485,12 @@ module ContentProvider =
                 docFiles 
                 |> Array.map (fun f -> 
                     let id = Path.GetFileNameWithoutExtension(f)
-                    let page =
-                        loadMarkdownPage
-                            {
-                                DocsDir = docsDir
-                                SourceDir = sourceDir
-                                Package = package
-                                RootPath = ""
-                                CurrentOutputPath = $"api/{id}.html"
-                                AllowedOutputs = allowedOutputs
-                                SemanticCode = semanticCode
-                            }
-                            f
-                            $"api/{id}.html"
-                    id, page.ContentHtml)
+                    let raw = File.ReadAllText(f)
+                    let body = parseFrontMatter raw |> Option.map snd |> Option.defaultValue raw
+                    let expanded = resolveSnippets body sourceDir package ""
+                    let rewritten = rewriteLocalLinks $"api/{id}.html" allowedOutputs expanded
+                    validateLinks $"api/{id}.html" allowedOutputs rewritten
+                    id, [ Documentation.markdown rewritten ])
                 |> Map.ofArray
             
             { package with Entities = package.Entities |> List.map (fun e -> updateEntity e docsMap) }

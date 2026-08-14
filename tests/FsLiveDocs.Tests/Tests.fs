@@ -50,18 +50,41 @@ module HistoryTests =
         Assert.Contains("checksum mismatch", error.Message)
 
     [<Fact>]
-    let ``an artifact from an older additive schema still loads`` () =
-        // Schema growth has been additive, so a stored release from before a field existed must
-        // keep loading; only a schema this build cannot know about is rejected.
+    let ``API artifacts require an explicitly supported schema`` () =
         let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
         File.WriteAllText(path, """{"SchemaVersion":1,"Package":{"Version":"1.2.3","Entities":[],"Scenarios":[],"Packages":[]}}""")
 
-        let loaded = History.loadArtifact "1.2.3" (History.sha256 path) path
-        Assert.Equal("1.2.3", loaded.Version)
+        let older = Assert.Throws<InvalidOperationException>(fun () -> History.loadArtifact "1.2.3" (History.sha256 path) path |> ignore)
+        Assert.Contains("expected", older.Message)
 
         File.WriteAllText(path, """{"SchemaVersion":999,"Package":{"Version":"1.2.3","Entities":[],"Scenarios":[],"Packages":[]}}""")
         let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadArtifact "1.2.3" (History.sha256 path) path |> ignore)
-        Assert.Contains("supports up to", error.Message)
+        Assert.Contains("expected", error.Message)
+
+    [<Fact>]
+    let ``API artifact stores structured documentation without HTML fields`` () =
+        let summary =
+            [ {
+                  Kind = DocumentationNodeKind.Paragraph
+                  Text = None
+                  Target = None
+                  Language = None
+                  Children = [ Documentation.text "Use "; { Documentation.text "value" with Kind = DocumentationNodeKind.InlineCode } ]
+              } ]
+        let package : PackageModel =
+            {
+                Version = "1.2.3"
+                Entities = [ { Id = "Sample"; Name = "Sample"; Kind = EntityKind.Module; Summary = summary; Members = []; Examples = []; Entities = [] } ]
+                Scenarios = []
+                Packages = []
+            }
+        let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
+        let json = JsonConvert.SerializeObject(artifact, Formatting.Indented, Serialization.jsonSettings)
+
+        Assert.DoesNotContain("Html", json, StringComparison.OrdinalIgnoreCase)
+        Assert.DoesNotContain("<p>", json, StringComparison.OrdinalIgnoreCase)
+        let loaded = JsonConvert.DeserializeObject<ApiModelArtifact>(json, Serialization.jsonSettings)
+        Assert.Equal("Use value", Documentation.plainText loaded.Package.Entities.Head.Summary)
 
     [<Fact>]
     let ``loadManifest requires an entry for the current version`` () =
@@ -181,8 +204,8 @@ module SymbolListerTests =
 
     [<Fact>]
     let ``merge removes empty synthetic Default namespace`` () =
-        let child = { Id = "Default.Sample"; Name = "Sample"; Kind = EntityKind.Module; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
-        let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = EntityKind.Namespace; SummaryHtml = ""; Members = []; Examples = []; Entities = [ child ] }
+        let child = { Id = "Default.Sample"; Name = "Sample"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] }
+        let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = EntityKind.Namespace; Summary = []; Members = []; Examples = []; Entities = [ child ] }
         let package = SymbolLister.merge [ { Version = "1.0"; Entities = [ defaultNamespace; child ]; Scenarios = []; Packages = [ { Name = "Example.Package"; EntityIds = [ child.Id ] } ] } ]
 
         let onlyEntity = Assert.Single(package.Entities)
@@ -192,10 +215,10 @@ module SymbolListerTests =
 
     [<Fact>]
     let ``merge combines entities contributed to the same namespace by multiple packages`` () =
-        let coreChild = { Id = "Example.CoreFlow"; Name = "CoreFlow"; Kind = EntityKind.Module; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
-        let satelliteChild = { Id = "Example.Http"; Name = "Http"; Kind = EntityKind.Module; SummaryHtml = ""; Members = []; Examples = []; Entities = [] }
-        let coreRoot = { Id = "Example"; Name = "Example"; Kind = EntityKind.Namespace; SummaryHtml = ""; Members = []; Examples = []; Entities = [ coreChild ] }
-        let satelliteRoot = { Id = "Example"; Name = "Example"; Kind = EntityKind.Namespace; SummaryHtml = ""; Members = []; Examples = []; Entities = [ satelliteChild ] }
+        let coreChild = { Id = "Example.CoreFlow"; Name = "CoreFlow"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] }
+        let satelliteChild = { Id = "Example.Http"; Name = "Http"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] }
+        let coreRoot = { Id = "Example"; Name = "Example"; Kind = EntityKind.Namespace; Summary = []; Members = []; Examples = []; Entities = [ coreChild ] }
+        let satelliteRoot = { Id = "Example"; Name = "Example"; Kind = EntityKind.Namespace; Summary = []; Members = []; Examples = []; Entities = [ satelliteChild ] }
         let model name root child =
             { Version = "1.0"; Entities = [ root; child ]; Scenarios = []; Packages = [ { Name = name; EntityIds = [ root.Id; child.Id ] } ] }
 
@@ -260,8 +283,8 @@ module ContentProviderTests =
         Directory.CreateDirectory(root) |> ignore
         File.WriteAllText(Path.Combine(root, "Sample.fs"), "// <snippet:Partial>\nmissing ...\n// </snippet:Partial>")
         let example = ExampleModel.Create("Session", "> 1 + 1;;\nval it: int = 2", Some "val it: int = 2", None)
-        let memberModel = { Id = "M"; Name = "M"; Signature = ""; Parameters = []; ReturnType = ""; SummaryHtml = ""; RemarksHtml = ""; Examples = [ example ]; Location = { File = ""; Line = 1 } }
-        let entity = { Id = "E"; Name = "E"; Kind = EntityKind.Module; SummaryHtml = ""; Members = [ memberModel ]; Examples = []; Entities = [] }
+        let memberModel = { Id = "M"; Name = "M"; Signature = ""; Parameters = []; ReturnType = ""; Summary = []; Remarks = []; Examples = [ example ]; Location = { File = ""; Line = 1 } }
+        let entity = { Id = "E"; Name = "E"; Kind = EntityKind.Module; Summary = []; Members = [ memberModel ]; Examples = []; Entities = [] }
         let package = { emptyPackage with Entities = [ entity ] }
         let expanded =
             ContentProvider.resolveSnippets
@@ -498,7 +521,7 @@ module ContentProviderTests =
     let ``resolveSnippets handles transclusion and xrefs`` () =
         let package : PackageModel = { 
             Version = "1.0"
-            Entities = [ { Id = "M1"; Name = "add"; Kind = EntityKind.Module; SummaryHtml = ""; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; SummaryHtml = ""; RemarksHtml = ""; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None; IsSnapshotTest = false; NoCheckReason = None } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
+            Entities = [ { Id = "M1"; Name = "add"; Kind = EntityKind.Module; Summary = []; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; Summary = []; Remarks = []; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None; IsSnapshotTest = false; NoCheckReason = None } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
             Scenarios = []; Packages = []
         }
         let body = "Look at {{< example id=\"E1\" >}} and xref:M:M1.add"
@@ -565,7 +588,7 @@ module DocTestRunnerTests =
                             Id = "Test.Module"
                             Name = "Module"
                             Kind = EntityKind.Module
-                            SummaryHtml = ""
+                            Summary = []
                             Members = []
                             Examples =
                                 [
@@ -604,7 +627,7 @@ module DocTestRunnerTests =
                             Id = "Test.Module"
                             Name = "Module"
                             Kind = EntityKind.Module
-                            SummaryHtml = ""
+                            Summary = []
                             Members = []
                             Examples =
                                 [
@@ -662,7 +685,7 @@ module ViewTests =
                 Id = "FsLiveDocs.Core.ParameterModel"
                 Name = "ParameterModel"
                 Kind = EntityKind.Record
-                SummaryHtml = "<p>Represents a parameter of a function or method.</p>"
+                Summary = [ Documentation.text "Represents a parameter of a function or method." ]
                 Members =
                     [
                         {
@@ -671,8 +694,8 @@ module ViewTests =
                             Signature = "string"
                             Parameters = []
                             ReturnType = "string"
-                            SummaryHtml = "<p>The name of the parameter.</p>"
-                            RemarksHtml = ""
+                            Summary = [ Documentation.text "The name of the parameter." ]
+                            Remarks = []
                             Examples = []
                             Location = { File = ""; Line = 0 }
                         }
@@ -735,7 +758,7 @@ module SiteBuilderTests =
             Id = "Example.Exit`2"
             Name = "Exit<'value, 'error>"
             Kind = EntityKind.Union
-            SummaryHtml = ""
+            Summary = []
             Members = []
             Examples = []
             Entities = []
@@ -744,7 +767,16 @@ module SiteBuilderTests =
             Id = "Example.Deferred`2"
             Name = "Deferred<'error, 'value>"
             Kind = EntityKind.Union
-            SummaryHtml = "A handoff containing <a href=\"/reference/example-exit-2.html\">Exit</a>."
+            Summary =
+                [ Documentation.text "A handoff containing "
+                  {
+                      Kind = DocumentationNodeKind.SymbolReference
+                      Text = None
+                      Target = Some "T:Example.Exit`2"
+                      Language = None
+                      Children = [ Documentation.text "Exit" ]
+                  }
+                  Documentation.text "." ]
             Members = []
             Examples = []
             Entities = []
@@ -765,32 +797,41 @@ module SiteBuilderTests =
         Assert.DoesNotContain("/reference/", html)
 
     [<Fact>]
-    let ``build rejects missing generated API page links`` () =
+    let ``renderer leaves unresolved symbol references unlinked`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         let entity = {
             Id = "Example.Broken"
             Name = "Broken"
             Kind = EntityKind.Type
-            SummaryHtml = "See <a href=\"Example.Missing.html\">Missing</a>."
+            Summary =
+                [ Documentation.text "See "
+                  {
+                      Kind = DocumentationNodeKind.SymbolReference
+                      Text = None
+                      Target = Some "T:Example.Missing"
+                      Language = None
+                      Children = [ Documentation.text "Missing" ]
+                  }
+                  Documentation.text "." ]
             Members = []
             Examples = []
             Entities = []
         }
         let package : PackageModel = { Version = "1.0"; Entities = [ entity ]; Scenarios = []; Packages = [] }
 
-        let error =
-            Assert.Throws<InvalidOperationException>(fun () ->
-                SiteBuilder.build {
-                    Pages = []
-                    Package = package
-                    Config = defaultSiteConfig
-                    Versions = []
-                    Theme = "light"
-                    RootPath = ""
-                    OutputDir = outputDir
-                })
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
 
-        Assert.Contains("Broken generated API link", error.Message)
+        let html = File.ReadAllText(Path.Combine(outputDir, "api", "Example.Broken.html"))
+        Assert.Contains("See Missing.", html)
+        Assert.DoesNotContain("Example.Missing.html", html)
 
     [<Fact>]
     let ``generateLlmsTxt includes the expected heading`` () =
@@ -892,7 +933,7 @@ module SiteBuilderTests =
             Id = "Example.Widget"
             Name = "Widget"
             Kind = EntityKind.Record
-            SummaryHtml = "<p>A useful widget.</p>"
+            Summary = [ Documentation.text "A useful widget." ]
             Members = []
             Examples = []
             Entities = []
@@ -901,7 +942,7 @@ module SiteBuilderTests =
             Id = "Example"
             Name = "Example"
             Kind = EntityKind.Namespace
-            SummaryHtml = "<p>Example APIs.</p>"
+            Summary = [ Documentation.text "Example APIs." ]
             Members = []
             Examples = []
             Entities = [ child ]
@@ -933,7 +974,7 @@ module PresentationTests =
         Assert.Contains("<span class=\"text-secondary font-semibold\">list</span>", html)
 
     [<Fact>]
-    let ``synopsisFromHtml strips markup and returns the first sentence`` () =
-        let summary = Presentation.synopsisFromHtml "<p>Represents a parameter. Additional details follow.</p>"
+    let ``synopsis returns the first sentence from structured documentation`` () =
+        let summary = Presentation.synopsis [ Documentation.text "Represents a parameter. Additional details follow." ]
 
         Assert.Equal("Represents a parameter.", summary)

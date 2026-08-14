@@ -45,8 +45,8 @@ type ParameterModel = {
     Name: string
     /// <summary>The formatted F# type string.</summary>
     Type: string
-    /// <summary>The documentation description for this parameter.</summary>
-    DescriptionHtml: string
+    /// <summary>The renderer-neutral documentation for this parameter.</summary>
+    Description: DocumentationNode list
 }
 
 /// <summary>Represents a member (function, value, or method) of an F# entity.</summary>
@@ -61,10 +61,10 @@ type MemberModel = {
     Parameters: ParameterModel list
     /// <summary>The return type of the member.</summary>
     ReturnType: string
-    /// <summary>The HTML-formatted summary docstring.</summary>
-    SummaryHtml: string
-    /// <summary>The HTML-formatted remarks/long-form documentation.</summary>
-    RemarksHtml: string
+    /// <summary>The renderer-neutral summary docstring.</summary>
+    Summary: DocumentationNode list
+    /// <summary>The renderer-neutral remarks or long-form documentation.</summary>
+    Remarks: DocumentationNode list
     /// <summary>Executable examples associated with this member.</summary>
     Examples: ExampleModel list
     /// <summary>Source location of the member declaration.</summary>
@@ -94,8 +94,8 @@ type EntityModel = {
     Name: string
     /// <summary>The kind of entity (e.g., Module, Type).</summary>
     Kind: EntityKind
-    /// <summary>The HTML-formatted introduction for this entity.</summary>
-    SummaryHtml: string
+    /// <summary>The renderer-neutral introduction for this entity.</summary>
+    Summary: DocumentationNode list
     /// <summary>Members belonging to this entity.</summary>
     Members: MemberModel list
     /// <summary>Executable examples associated with this entity.</summary>

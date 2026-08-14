@@ -286,7 +286,7 @@ module View =
             ]
         ]
 
-    let apiCard (repoUrl: string option) (memberModel: MemberModel) =
+    let apiCard (package: PackageModel) (repoUrl: string option) (memberModel: MemberModel) =
         let sourceLink =
             sourceLinkHref repoUrl memberModel.Location
             |> Option.map (fun href ->
@@ -316,7 +316,7 @@ module View =
                 span [ _class "text-[10px] font-black uppercase opacity-30 tracking-widest" ] [ str "Member" ]
             ]
             div [ _class "p-4 md:p-5" ] [
-                div [ _class "prose prose-sm md:prose-base max-w-none mb-5 opacity-80 leading-relaxed" ] [ rawText memberModel.SummaryHtml ]
+                div [ _class "prose prose-sm md:prose-base max-w-none mb-5 opacity-80 leading-relaxed" ] [ rawText (Presentation.renderDocumentationHtml package memberModel.Summary) ]
 
                 (if not memberModel.Parameters.IsEmpty then
                     div [ _class "mb-8" ] [
@@ -336,7 +336,7 @@ module View =
                                     tr [] [
                                         td [ _class "font-bold font-mono text-sm text-primary"; attr "style" "padding-left: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ str p.Name ]
                                         td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ span [ _class "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText (Presentation.highlightSignatureHtml p.Type) ] ]
-                                        td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ rawText p.DescriptionHtml ]
+                                        td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ rawText (Presentation.renderDocumentationHtml package p.Description) ]
                                     ]
                                 ))
                              ]

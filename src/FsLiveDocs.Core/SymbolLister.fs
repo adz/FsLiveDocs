@@ -17,6 +17,84 @@ open System.Text.Json
 /// </example>
 module SymbolLister =
 
+    let private plainDisplay (html: string) =
+        html
+        |> fun value -> Regex.Replace(value, "<.*?>", String.Empty)
+        |> Net.WebUtility.HtmlDecode
+
+    let rec private documentationNodes (nodes: seq<XNode>) =
+        [ for node in nodes do
+            match node with
+            | :? XText as text when not (String.IsNullOrEmpty text.Value) ->
+                yield Documentation.text text.Value
+            | :? XElement as element ->
+                let name = element.Name.LocalName.ToLowerInvariant()
+                let children = documentationNodes (element.Nodes())
+                let value = element.Value
+                let create kind text target language nested = {
+                    Kind = kind
+                    Text = text
+                    Target = target
+                    Language = language
+                    Children = nested
+                }
+                match name with
+                | "para" -> yield create Paragraph None None None children
+                | "c" | "paramref" | "typeparamref" ->
+                    let text =
+                        if name = "c" then value
+                        else element.Attribute(XName.Get "name") |> Option.ofObj |> Option.map _.Value |> Option.defaultValue value
+                    yield create InlineCode (Some text) None None []
+                | "code" ->
+                    let language = element.Attribute(XName.Get "language") |> Option.ofObj |> Option.map _.Value
+                    yield create CodeBlock (Some value) None language []
+                | "see" | "seealso" ->
+                    let target =
+                        element.Attribute(XName.Get "cref")
+                        |> Option.ofObj
+                        |> Option.orElseWith (fun () -> element.Attribute(XName.Get "href") |> Option.ofObj)
+                        |> Option.map _.Value
+                    let kind =
+                        match element.Attribute(XName.Get "href") with
+                        | null -> SymbolReference
+                        | _ -> ExternalLink
+                    yield create kind None target None children
+                | "a" ->
+                    let target = element.Attribute(XName.Get "href") |> Option.ofObj |> Option.map _.Value
+                    yield create ExternalLink None target None children
+                | "list" ->
+                    let kind =
+                        match element.Attribute(XName.Get "type") |> Option.ofObj |> Option.map (_.Value.ToLowerInvariant()) with
+                        | Some "number" -> OrderedList
+                        | _ -> UnorderedList
+                    yield create kind None None None children
+                | "item" | "listheader" -> yield create ListItem None None None children
+                | "br" -> yield create LineBreak None None None []
+                | _ -> yield! children
+            | _ -> () ]
+
+    let private documentationSection name (comment: ApiDocComment) =
+        match comment.Xml with
+        | None -> []
+        | Some xml ->
+            xml.DescendantsAndSelf()
+            |> Seq.tryFind (fun element -> element.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
+            |> Option.map (fun element -> documentationNodes (element.Nodes()))
+            |> Option.defaultValue []
+
+    let private parameterDocumentation parameterName (comment: ApiDocComment) =
+        match comment.Xml with
+        | None -> []
+        | Some xml ->
+            xml.DescendantsAndSelf()
+            |> Seq.tryFind (fun element ->
+                element.Name.LocalName.Equals("param", StringComparison.OrdinalIgnoreCase)
+                && match element.Attribute(XName.Get "name") with
+                   | null -> false
+                   | attribute -> attribute.Value = parameterName)
+            |> Option.map (fun element -> documentationNodes (element.Nodes()))
+            |> Option.defaultValue []
+
     let private ancestors directory =
         let rec loop current =
             seq {
@@ -214,8 +292,8 @@ module SymbolLister =
                 fun _ ->
                     let replacement =
                         match replaceable |> List.tryItem next with
-                        | Some name when name.Contains(" ") -> "(" + Net.WebUtility.HtmlEncode name + ")"
-                        | Some name -> Net.WebUtility.HtmlEncode name
+                        | Some name when name.Contains(" ") -> "(" + name + ")"
+                        | Some name -> name
                         | None -> "arg" + string (next + 1)
                     next <- next + 1
                     replacement)
@@ -231,7 +309,7 @@ module SymbolLister =
                 | None -> Some name)
             |> List.choose id
 
-        m.UsageHtml.HtmlText |> reconcileUsageSignature unnamedDisplayNames
+        m.UsageHtml.HtmlText |> reconcileUsageSignature unnamedDisplayNames |> plainDisplay
 
     let mapMember (m: ApiDocMember) : MemberModel =
         let location =
@@ -260,12 +338,12 @@ module SymbolLister =
                 m.Parameters
                 |> List.mapi (fun index p -> {
                     Name = displayNames |> List.tryItem index |> Option.defaultValue p.ParameterNameText
-                    Type = p.ParameterType.HtmlText
-                    DescriptionHtml = p.ParameterDocs |> Option.map (fun d -> d.HtmlText) |> Option.defaultValue ""
+                    Type = p.ParameterType.HtmlText |> plainDisplay
+                    Description = parameterDocumentation p.ParameterNameText m.Comment
                 })
-            ReturnType = m.ReturnInfo.ReturnType |> Option.map (fun (_, h) -> h.HtmlText) |> Option.defaultValue "unit"
-            SummaryHtml = m.Comment.Summary.HtmlText
-            RemarksHtml = m.Comment.Remarks |> Option.map (fun r -> r.HtmlText) |> Option.defaultValue ""
+            ReturnType = m.ReturnInfo.ReturnType |> Option.map (fun (_, h) -> plainDisplay h.HtmlText) |> Option.defaultValue "unit"
+            Summary = documentationSection "summary" m.Comment
+            Remarks = documentationSection "remarks" m.Comment
             Examples = m.Comment |> rawXml |> extractExamples
             Location = location
         }
@@ -288,7 +366,7 @@ module SymbolLister =
                 elif e.Symbol.IsFSharpRecord then EntityKind.Record
                 elif e.Symbol.IsFSharpUnion then EntityKind.Union
                 else EntityKind.Type
-            SummaryHtml = e.Comment.Summary.HtmlText
+            Summary = documentationSection "summary" e.Comment
             Members = members
             Examples = e.Comment |> rawXml |> extractExamples
             Entities = nested
@@ -368,7 +446,7 @@ module SymbolLister =
     let private isSyntheticDefaultNamespace (e: EntityModel) =
         e.Kind = EntityKind.Namespace
         && e.Name.Equals("Default", StringComparison.OrdinalIgnoreCase)
-        && String.IsNullOrWhiteSpace e.SummaryHtml
+        && Documentation.isEmpty e.Summary
         && e.Members.IsEmpty
 
     let rec private pruneSyntheticDefaults (entities: EntityModel list) =
@@ -502,7 +580,7 @@ module SymbolLister =
                         Id = fullId
                         Name = name
                         Kind = EntityKind.Namespace
-                        SummaryHtml = ""
+                        Summary = []
                         Members = []
                         Examples = []
                         Entities = children 
@@ -517,12 +595,12 @@ module SymbolLister =
                     Id = id
                     Name = first.Name
                     Kind = first.Kind
-                    SummaryHtml = 
-                        group 
-                        |> List.map (fun e -> e.SummaryHtml) 
-                        |> List.filter (not << String.IsNullOrWhiteSpace) 
+                    Summary =
+                        group
+                        |> List.map (fun e -> e.Summary)
+                        |> List.filter (Documentation.isEmpty >> not)
                         |> List.tryHead 
-                        |> Option.defaultValue ""
+                        |> Option.defaultValue []
                     Members = group |> List.collect (fun e -> e.Members) |> List.distinctBy (fun m -> m.Id)
                     Examples = group |> List.collect entityExamples |> List.distinctBy (fun ex -> ex.Name)
                     Entities = mergeEntities (group |> List.collect (fun e -> e.Entities))

@@ -9,7 +9,7 @@ open Newtonsoft.Json
 module History =
 
     [<Literal>]
-    let ApiModelSchemaVersion = 2
+    let ApiModelSchemaVersion = 3
 
     [<Literal>]
     let SemanticSchemaVersion = 2
@@ -33,11 +33,8 @@ module History =
             invalidOp $"History API model checksum mismatch for {expectedVersion}: expected {expectedSha256}, got {actualSha256}."
         let artifact = deserialize<ApiModelArtifact> path
         if isNull (box artifact) then invalidOp $"History API model is empty: {path}"
-        // Schema growth has been additive: a field absent from an older artifact deserializes to
-        // its empty value. Older artifacts therefore stay readable, and only a newer one — written
-        // by a version of the tool that knows fields this one does not — is rejected.
-        if artifact.SchemaVersion > ApiModelSchemaVersion then
-            invalidOp $"Unsupported API model schema {artifact.SchemaVersion} in {path}; this build supports up to {ApiModelSchemaVersion}."
+        if artifact.SchemaVersion <> ApiModelSchemaVersion then
+            invalidOp $"Unsupported API model schema {artifact.SchemaVersion} in {path}; expected {ApiModelSchemaVersion}."
         if artifact.Package.Version <> expectedVersion then
             invalidOp $"History API model version mismatch in {path}: expected {expectedVersion}, got {artifact.Package.Version}."
         artifact.Package
