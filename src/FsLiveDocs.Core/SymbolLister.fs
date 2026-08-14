@@ -342,7 +342,6 @@ module SymbolLister =
                     else $"The parameters at positions {which} are"
                 Some {
                     Code = "unnamed-parameter"
-                    Severity = ApiDiagnosticSeverity.Warning
                     Symbol = m.Symbol.FullName
                     Location = locationOf m
                     Message = $"{subject} shown under a generated name, because no name could be read from the declaration."
@@ -356,7 +355,6 @@ module SymbolLister =
                 let listed = String.concat ", " placeholders
                 Some {
                     Code = "signature-name-mismatch"
-                    Severity = ApiDiagnosticSeverity.Warning
                     Symbol = m.Symbol.FullName
                     Location = locationOf m
                     Message = $"The rendered signature shows {listed}, which the parameter table names differently."

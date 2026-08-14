@@ -7,8 +7,7 @@
 | Shared page walk | `65fc2d3` — audit, build and generated tests share `documentationPages` |
 | A — split `Models.fs` | `e7b2c01` — seven files, verified as a pure move |
 | B — retire legacy verifier | `ba7a3d8` — `verifyExamples` deleted, `test` re-based on the current path |
-| C — verify examples by default | `4e8d327`, `621a07c`, `000f3aa`, `4621842` — steps 1-3 |
-| C step 4 — failures are errors | done ahead of schedule; see below |
+| C — verify examples by default | `4e8d327`, `621a07c`, `000f3aa`, `4621842` — steps 1-3; step 4 declined |
 
 Deviations from the plan as written are noted in the relevant sections below.
 
@@ -193,19 +192,26 @@ The markdown model, applied to XML examples:
 3. **Add the escape hatch**: `data-livedocs="no-check" reason="…"` on an example, with the
    same non-empty-reason enforcement markdown already applies. Without this, step 4 has no
    legitimate way to describe a fragment that cannot compile standalone.
-4. **Flip the default** so a compile failure is an error rather than a warning.
+4. ~~**Flip the default** so a compile failure is an error.~~ **Declined.** Implemented and
+   reverted after seeing it run.
 
-   Planned for a major version, **done immediately instead**: the staging existed to give
-   released users time to react, and nothing has been released. Deferring would have shipped a
-   known-weak default as the first one anyone ever saw.
+   Every finding stays a warning; failing the build is opt-in through `--warn-as-error`. The
+   argument for flipping was that nothing had been released, so there was no migration to
+   stage. What that argument missed is what the strict default does on contact with a real
+   codebase: Axial went from a building site with 19 warnings to no site at all, because 13 of
+   its examples are one-line illustrations that hit F# value restriction. Refusing to render
+   any documentation over that is a worse failure than rendering it with warnings attached.
+
+   The tool cannot tell an incomplete example from a deliberately partial one, so the
+   repository owner decides. `--warn-as-error` is there for those who want the strict rule, and
+   it costs them one flag.
 
 ### Risk
 
-Step 4 is breaking by construction, which is why it was planned last. With no release to
-migrate, the only cost is to repositories already building against this working tree: Axial has
-19 examples that do not compile standalone and its build now fails until they are fixed or
-excluded. Steps 1-3 still had to land first, since the escape hatch has to exist before the
-default can be strict.
+Step 4 was breaking by construction, which is why it was planned last and ultimately declined:
+a default that stops a project publishing documentation is not a safe first experience, however
+correct the underlying finding. Steps 1-3 are what make the strict rule *available*; choosing it
+is the repository's call.
 
 ### Sequencing
 
