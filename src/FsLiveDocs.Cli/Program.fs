@@ -59,6 +59,8 @@ type Arguments =
     | [<Inherit>] Ignore of string
     /// <summary>Fails the run when the documented API produces quality warnings.</summary>
     | [<Inherit; AltCommandLine("--warnaserror")>] Warn_As_Error
+    /// <summary>Validates capture and reports its expected result without publishing the requested output.</summary>
+    | [<Inherit>] Dry_Run
     interface IArgParserTemplate with
         member s.Usage =
             match s with
@@ -84,6 +86,7 @@ type Arguments =
             | Port _ -> "Set the preview port (default: 5000)."
             | Ignore _ -> "Add a comma-separated list of directory names the watcher ignores. Repeatable."
             | Warn_As_Error -> "Fail the run when the documented API produces quality warnings (default: warn only)."
+            | Dry_Run -> "Validate capture and report expected output without writing the requested capsule."
 
 /// <summary>Watches source and documentation files so the preview server rebuilds after an edit.</summary>
 module internal PreviewWatcher =
@@ -629,7 +632,7 @@ module Program =
                     GeneratedVerification.runCase references case |> Async.RunSynchronously
                 | CompileUnit _ -> ()
 
-    let captureAction warnAsError projectPaths version output =
+    let captureAction warnAsError dryRun projectPaths version output =
         let extracted, apiDiagnostics, projectFingerprint = getUnifiedPackageCached projectPaths
         let package = { extracted with Version = version |> Option.defaultValue extracted.Version }
         let analysis = analyzeDocumentation projectPaths projectFingerprint package
@@ -653,9 +656,12 @@ module Program =
             |> List.map (fun page -> { SourcePath = page.Relative; Metadata = page.Metadata; Markdown = page.Expanded })
         let outputPath = output |> Option.defaultValue $".livedocs/releases/{package.Version}.livedocs.zip"
         let toolVersion = Reflection.Assembly.GetExecutingAssembly().GetName().Version |> string
+        let actualOutputPath =
+            if dryRun then Path.Combine(Path.GetTempPath(), "fslivedocs-dry-run-" + Guid.NewGuid().ToString("N") + ".zip")
+            else outputPath
         let report =
             ReleaseCapsule.create
-                outputPath
+                actualOutputPath
                 (currentRevision ())
                 toolVersion
                 api
@@ -663,10 +669,22 @@ module Program =
                 (loadSiteConfig())
                 contentPages
                 (captureAssets "docs")
-        AnsiConsole.MarkupLine($"[green]✔ Release capsule:[/] {Markup.Escape report.Path}")
-        AnsiConsole.MarkupLine($"  Version: [blue]{Markup.Escape report.Manifest.ProductVersion}[/]")
-        AnsiConsole.MarkupLine($"  Size: {report.CompressedSize:N0} bytes")
-        AnsiConsole.MarkupLine($"  SHA-256: {report.Sha256}")
+        let publicReport = { report with Path = Path.GetFullPath outputPath }
+        if dryRun then
+            File.Delete actualOutputPath
+            AnsiConsole.MarkupLine("[green]✔ Release capture dry run complete.[/]")
+            AnsiConsole.MarkupLine($"  Planned output: {Markup.Escape publicReport.Path}")
+        else
+            let reportPath = outputPath + ".report.json"
+            File.WriteAllText(reportPath, Newtonsoft.Json.JsonConvert.SerializeObject(publicReport, Newtonsoft.Json.Formatting.Indented, Serialization.jsonSettings))
+            AnsiConsole.MarkupLine($"[green]✔ Release capsule:[/] {Markup.Escape publicReport.Path}")
+            AnsiConsole.MarkupLine($"  Report: {Markup.Escape(Path.GetFullPath reportPath)}")
+        AnsiConsole.MarkupLine($"  Version: [blue]{Markup.Escape publicReport.Manifest.ProductVersion}[/]")
+        AnsiConsole.MarkupLine($"  API: {publicReport.Manifest.Api.Size:N0} bytes")
+        AnsiConsole.MarkupLine($"  Semantic: {publicReport.Manifest.Semantic.Size:N0} bytes")
+        AnsiConsole.MarkupLine($"  Content: {publicReport.Manifest.Content.Size:N0} bytes")
+        AnsiConsole.MarkupLine($"  Compressed: {publicReport.CompressedSize:N0} bytes")
+        AnsiConsole.MarkupLine($"  SHA-256: {publicReport.Sha256}")
         0
 
     let historyAddAction indexPath version capsulePath capsuleUrl checksum =
@@ -1003,9 +1021,25 @@ module Program =
                 if results.Contains Init then
                     printBanner()
                     AnsiConsole.MarkupLine("[blue]Scaffolding new project...[/]")
-                    if not (Directory.Exists(".livedocs/history")) then Directory.CreateDirectory(".livedocs/history") |> ignore
                     if not (Directory.Exists(".livedocs")) then Directory.CreateDirectory(".livedocs") |> ignore
                     if not (File.Exists(".livedocs/config.json")) then File.WriteAllText(".livedocs/config.json", "{}")
+                    if not (File.Exists(".livedocs/history.json")) then
+                        let historyStarter = """{
+  "SchemaVersion": 1,
+  "CurrentVersion": "0.0.0",
+  "Entries": []
+}
+"""
+                        File.WriteAllText(".livedocs/history.json", historyStarter)
+                    let ignorePath = ".gitignore"
+                    let ignored =
+                        if File.Exists ignorePath then File.ReadAllText(ignorePath).Replace("\r\n", "\n")
+                        else ""
+                    let requiredIgnores = [ ".livedocs/cache/"; ".livedocs/releases/" ]
+                    let missingIgnores = requiredIgnores |> List.filter (fun item -> ignored.Split('\n') |> Array.contains item |> not)
+                    if not missingIgnores.IsEmpty then
+                        let prefix = if String.IsNullOrEmpty ignored || ignored.EndsWith("\n") then ignored else ignored + "\n"
+                        File.WriteAllText(ignorePath, prefix + String.concat "\n" missingIgnores + "\n")
                     if not (Directory.Exists("docs")) then Directory.CreateDirectory("docs") |> ignore
                     if not (File.Exists("docs/index.md")) then
                         let starter = """---
@@ -1013,12 +1047,11 @@ title: Home
 weight: 1
 ---
 
-# Your verified F# documentation
+# Document your F# library
 
-FsLiveDocs builds API reference pages from your compiled project and checks F# guide examples against the same
-compiler context. Readers get inferred-type and XML-documentation hovers without running a compiler in the browser.
+FsLiveDocs generates API reference pages and verifies F# examples with your project's compiler settings.
 
-## First useful build
+## Build the documentation
 
 Replace the project path below, then run from your repository root:
 
@@ -1033,8 +1066,11 @@ Add an ordinary `fsharp` fence to a guide for compile-only verification. Use `ru
 `transcript` for FSI input/output, `isolated` for standalone code, `prepare` for hidden setup, or
 `no-check reason="..."` for deliberate pseudocode.
 
-Next: add XML `summary` and `example` elements to public APIs, then generate stable xUnit cases with
-`livedocs generate-tests src/YourLibrary/YourLibrary.fsproj`.
+To capture a release after verification succeeds, run:
+
+```bash
+livedocs capture src/YourLibrary/YourLibrary.fsproj --version 1.0.0
+```
 """
                         File.WriteAllText("docs/index.md", starter)
                     AnsiConsole.MarkupLine("[green]✔ Done![/]")
@@ -1050,6 +1086,9 @@ on:
   pull_request:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -1070,6 +1109,22 @@ jobs:
           dotnet livedocs generate-tests "${projects[@]}"
           dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj --nologo
           dotnet livedocs build "${projects[@]}"
+      - name: Capture release documentation
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mapfile -t projects < <(find src -name '*.fsproj' -type f | sort)
+          version="${GITHUB_REF_NAME#v}"
+          dotnet livedocs capture "${projects[@]}" --version "$version" --output "artifacts/livedocs-$version.zip"
+      - name: Publish immutable release capsule
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" \
+            "artifacts/livedocs-$version.zip" \
+            "artifacts/livedocs-$version.zip.report.json" \
+            --verify-tag --generate-notes
       - uses: actions/upload-pages-artifact@v3
         with:
           path: output
@@ -1087,7 +1142,7 @@ jobs:
                     let projectPaths = results.GetResult Capture
                     let version = results.TryGetResult Version
                     let output = results.TryGetResult Output
-                    captureAction (results.Contains Warn_As_Error) projectPaths version output
+                    captureAction (results.Contains Warn_As_Error) (results.Contains Dry_Run) projectPaths version output
 
                 elif results.Contains Inspect then
                     let path = results.GetResult Inspect
