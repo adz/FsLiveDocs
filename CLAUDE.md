@@ -7,5 +7,4 @@ generated verification, or rendering, read and follow
 Those rules define FsLiveDocs' 1.0 compatibility boundary. In particular, persisted release
 artifacts contain renderer-neutral meaning rather than generated HTML or formatter-owned types.
 
-Planned work that is required to complete that contract is tracked in
-[`dev-docs/release-assistance.md`](dev-docs/release-assistance.md).
+Treat changes to those models as compatibility work. Update schemas, fixtures, migrations, release guidance, and capsule-only tests together.

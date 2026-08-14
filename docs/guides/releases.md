@@ -108,3 +108,11 @@ FsLiveDocs still reads the earlier local manifest format with separate API, sema
 Capture each maintained release into a capsule, add it with `history-add`, and switch `build-history` to `.livedocs/history.json`.
 
 Keep old manifests only while you need the compatibility path. Capsules remove the historical source-tree dependency.
+
+## Plan storage capacity
+
+Axial provides a representative large project. On 2026-08-14, its inputs contained 82 Markdown files (317,151 bytes), 8 assets (1,490,449 bytes), 942,360 bytes of API JSON, and 1,302,483 bytes of semantic JSON.
+
+The structured inputs compressed to about 264 KB. Assets therefore dominate an estimated 1.75 MB capsule. Axial's release capture was not published because its dirty source and existing build outputs left 9 of 313 blocks uncompilable.
+
+Treat that refusal as the release gate working correctly. Build a clean release commit before using its final report for retention planning.
