@@ -20,8 +20,10 @@
     <Compile Include="HistoryModel.fs" />
     <Compile Include="RunnerModel.fs" />
     <Compile Include="SiteModel.fs" />
+    <Compile Include="ReleaseModel.fs" />
     <Compile Include="Serialization.fs" />
     <Compile Include="History.fs" />
+    <Compile Include="ReleaseCapsule.fs" />
     <Compile Include="SourceParameters.fs" />
     <Compile Include="SymbolLister.fs" />
     <Compile Include="DocumentationDiscovery.fs" />

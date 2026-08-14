@@ -73,7 +73,7 @@ module ContentProvider =
                 if not (Directory.Exists(destinationDirectory)) then Directory.CreateDirectory(destinationDirectory) |> ignore
                 File.Copy(source, destination, true))
 
-    let private defaultTitle (filePath: string) =
+    let defaultTitle (filePath: string) =
         let stem = Path.GetFileNameWithoutExtension(filePath) |> stripOrderingPrefix
         if stem.Equals("index", System.StringComparison.OrdinalIgnoreCase)
            || stem.Equals("_index", System.StringComparison.OrdinalIgnoreCase) then
@@ -267,11 +267,10 @@ module ContentProvider =
         let apiOutputs = collectEntityIds package.Entities |> List.map (fun id -> $"api/{id}.html")
         Set.ofList (guideOutputs @ apiOutputs @ [ "index.html"; "api.html" ])
 
-    /// <summary>Resolves shortcodes (snippets, examples) and semantic links (xrefs) in Markdown content.</summary>
-    let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
+    /// <summary>Expands source and XML-example transclusions while preserving semantic cross-references.</summary>
+    let expandTransclusions (body: string) (sourceDir: string) (package: PackageModel) =
         let snippetPattern = @"{{<\s*snippet\s+(?<args>[^>]+)>}}"
         let examplePattern = exampleShortcodePattern
-        let xrefPattern = @"xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
 
         withProtectedCodeSegments body "FSLIVEDOCS_CODE" (fun protectedBody ->
             // 1. Resolve {{< snippet id="X" >}}
@@ -328,10 +327,14 @@ module ContentProvider =
                     | None -> invalidOp $"Example '{id}' was not found."
                 )
 
+            body2)
+
+    /// <summary>Resolves semantic cross-references during rendering, after canonical content capture.</summary>
+    let private resolveCrossReferences (body: string) (package: PackageModel) (rootPath: string) =
+        let xrefPattern = @"xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
+        withProtectedCodeSegments body "FSLIVEDOCS_XREF" (fun protectedBody ->
             // <snippet:XrefResolution>
-            // 3. Resolve xref: with relative rootPath
-            let body3 =
-                System.Text.RegularExpressions.Regex.Replace(body2, xrefPattern, fun (m: System.Text.RegularExpressions.Match) ->
+            System.Text.RegularExpressions.Regex.Replace(protectedBody, xrefPattern, fun (m: System.Text.RegularExpressions.Match) ->
                     let id = m.Groups.["id"].Value
                     match findMember id package, findEntity id package with
                     | Some mem, _ ->
@@ -350,8 +353,12 @@ module ContentProvider =
                     | None, None -> invalidOp $"Cross-reference '{id}' was not found."
                 )
             // </snippet:XrefResolution>
-            body3
         )
+
+    /// <summary>Resolves transclusions and semantic links for a current render.</summary>
+    let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
+        expandTransclusions body sourceDir package
+        |> fun expanded -> resolveCrossReferences expanded package rootPath
 
     type private MarkdownContext = {
         DocsDir: string

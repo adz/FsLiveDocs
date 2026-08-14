@@ -121,6 +121,95 @@ module HistoryTests =
         Assert.Equal(None, entry.SemanticPath)
         Assert.Equal(None, entry.SemanticSha256)
 
+module ReleaseCapsuleTests =
+
+    let private site : SiteConfig =
+        {
+            RepoUrl = None
+            SiteName = Some "Sample"
+            LogoText = None
+            LogoPath = None
+            LogoDarkPath = None
+            ShowSiteName = Some true
+            Stylesheet = None
+            Themes = None
+            Navigation = None
+            FSharpPrelude = None
+        }
+
+    let private inputs () =
+        let package : PackageModel = { Version = "1.2.3"; Entities = []; Scenarios = []; Packages = [] }
+        let api : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
+        let semantic : SemanticDocumentationArtifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [] }
+        let metadata : ContentMetadata = { Title = "Home"; Type = None; Project = None; TargetFramework = None; Platform = None }
+        api, semantic, [ { SourcePath = "index.md"; Metadata = metadata; Markdown = "# Home\n" } ]
+
+    [<Fact>]
+    let ``release capsule is deterministic verified and self-contained`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let first = Path.Combine(root, "first.zip")
+        let second = Path.Combine(root, "second.zip")
+        let api, semantic, pages = inputs ()
+        let assets = [ "images/logo.txt", Text.Encoding.UTF8.GetBytes("logo") ]
+
+        let firstReport = ReleaseCapsule.create first "abc123" "0.1.0" api semantic site pages assets
+        let secondReport = ReleaseCapsule.create second "abc123" "0.1.0" api semantic site pages assets
+        Assert.Equal(firstReport.Sha256, secondReport.Sha256)
+
+        let inspected = ReleaseCapsule.inspect first
+        Assert.Equal("1.2.3", inspected.Manifest.ProductVersion)
+        Assert.Equal("abc123", inspected.Manifest.SourceRevision)
+
+        let docsDir = Path.Combine(root, "materialized")
+        let package, loadedSemantic, loadedSite = ReleaseCapsule.materializeContent first docsDir
+        Assert.Equal("1.2.3", package.Version)
+        Assert.Equal(History.SemanticSchemaVersion, loadedSemantic.SchemaVersion)
+        Assert.Equal(Some "Sample", loadedSite.SiteName)
+        Assert.Contains("# Home", File.ReadAllText(Path.Combine(docsDir, "index.md")))
+        Assert.Equal("logo", File.ReadAllText(Path.Combine(docsDir, "images", "logo.txt")))
+
+        let outputDir = Path.Combine(root, "site")
+        let options = { SemanticCode.defaults with Artifact = Some loadedSemantic; Prelude = loadedSemantic.Prelude }
+        let pages = ContentProvider.scanDocsWithOptions docsDir docsDir package "" options
+        SiteBuilder.build {
+            Pages = pages
+            Package = package
+            Config = loadedSite
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+        ContentProvider.copyStaticFiles docsDir outputDir
+        Assert.Contains(">Home</h1>", File.ReadAllText(Path.Combine(outputDir, "index.html")))
+        Assert.Equal("logo", File.ReadAllText(Path.Combine(outputDir, "images", "logo.txt")))
+
+    [<Fact>]
+    let ``release capsule rejects overwrite and unsafe asset paths`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let path = Path.Combine(root, "release.zip")
+        let api, semantic, pages = inputs ()
+        ReleaseCapsule.create path "abc123" "0.1.0" api semantic site pages [] |> ignore
+
+        let overwrite = Assert.Throws<InvalidOperationException>(fun () -> ReleaseCapsule.create path "abc123" "0.1.0" api semantic site pages [] |> ignore)
+        Assert.Contains("already exists", overwrite.Message)
+        let unsafePath = Path.Combine(root, "unsafe.zip")
+        let unsafeAsset = Assert.Throws<InvalidOperationException>(fun () -> ReleaseCapsule.create unsafePath "abc123" "0.1.0" api semantic site pages [ "../secret", [| 1uy |] ] |> ignore)
+        Assert.Contains("Unsafe", unsafeAsset.Message)
+
+    [<Fact>]
+    let ``release history index requires unique entries and a current release`` () =
+        let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
+        File.WriteAllText(path, """{"SchemaVersion":1,"CurrentVersion":"2.0.0","Entries":[{"Version":"1.0.0","CapsulePath":"one.zip","CapsuleSha256":"hash"}]}""")
+        let missing = Assert.Throws<InvalidOperationException>(fun () -> ReleaseCapsule.loadHistoryIndex path |> ignore)
+        Assert.Contains("has no capsule entry", missing.Message)
+
+        File.WriteAllText(path, """{"SchemaVersion":1,"CurrentVersion":"1.0.0","Entries":[{"Version":"1.0.0","CapsulePath":"one.zip","CapsuleSha256":"hash"},{"Version":"1.0.0","CapsulePath":"two.zip","CapsuleSha256":"hash"}]}""")
+        let duplicate = Assert.Throws<InvalidOperationException>(fun () -> ReleaseCapsule.loadHistoryIndex path |> ignore)
+        Assert.Contains("duplicate versions", duplicate.Message)
+
 module SymbolListerTests =
 
     [<Fact>]

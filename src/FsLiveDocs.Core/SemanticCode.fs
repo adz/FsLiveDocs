@@ -111,15 +111,16 @@ module SemanticCode =
     let private renderPrelude (prelude: string) =
         $"<details class=\"livedocs-shared-setup livedocs-repository-setup not-prose\"><summary>Repository F# setup</summary>{renderLexicalSource prelude}</details>"
 
-    let private formatFromArtifact options sourcePath markdown artifact =
-        let blocks = DocumentationDiscovery.discoverMarkdown sourcePath None markdown
-        let page = artifact.Pages |> List.tryFind (fun page -> page.SourcePath = sourcePath.Replace('\\', '/'))
-        let persistedById = page |> Option.map (fun value -> value.Blocks |> List.map (fun block -> block.Id, block) |> Map.ofList) |> Option.defaultValue Map.empty
+    let private formatFromArtifact options sourcePath markdown (artifact: SemanticDocumentationArtifact) =
+        let blocks : DocumentationBlock list = DocumentationDiscovery.discoverMarkdown sourcePath None markdown
+        let page : SemanticPage option = artifact.Pages |> List.tryFind (fun page -> page.SourcePath = sourcePath.Replace('\\', '/'))
+        let persistedById : Map<string, SemanticCodeBlock> =
+            page |> Option.map (fun value -> value.Blocks |> List.map (fun block -> block.Id, block) |> Map.ofList) |> Option.defaultValue Map.empty
         let pageContextBlocks = blocks |> List.filter (fun block -> block.Mode <> Isolated && (match block.Mode with NoCheck _ | Transcript -> false | _ -> true))
         let pageContextHash = DocumentationDiscovery.contextHash options.Prelude pageContextBlocks
         let mutable ordinal = 0
         fencePattern.Replace(markdown, fun matched ->
-            let block = blocks.[ordinal]
+            let block : DocumentationBlock = blocks.[ordinal]
             ordinal <- ordinal + 1
             match block.Mode with
             | Prepare ->

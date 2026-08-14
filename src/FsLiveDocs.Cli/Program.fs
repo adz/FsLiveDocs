@@ -23,6 +23,10 @@ type Arguments =
     | [<CliPrefix(CliPrefix.None); AltCommandLine("generate-tests")>] GenerateTests of projectPaths:string list
     /// <summary>Extracts symbol metadata from projects into JSON snapshots.</summary>
     | [<CliPrefix(CliPrefix.None)>] Extract of projectPaths:string list
+    /// <summary>Captures a self-contained, renderer-neutral documentation release.</summary>
+    | [<CliPrefix(CliPrefix.None)>] Capture of projectPaths:string list
+    /// <summary>Verifies and describes a release capsule.</summary>
+    | [<CliPrefix(CliPrefix.None)>] Inspect of capsulePath:string
     /// <summary>Runs verified code examples found in docstrings.</summary>
     | [<CliPrefix(CliPrefix.None)>] Test of projectPaths:string list
     /// <summary>Audits coverage and compiler-checks every expanded F# documentation block.</summary>
@@ -54,6 +58,8 @@ type Arguments =
             | CI -> "Generate CI/CD templates (GitHub Actions)."
             | GenerateTests _ -> "Generate a Verify-based snapshot test project for the given projects."
             | Extract _ -> "Extract symbols from one or more projects into a JSON blob."
+            | Capture _ -> "Verify and capture a self-contained documentation release capsule."
+            | Inspect _ -> "Verify and describe a documentation release capsule."
             | Test _ -> "Verify documentation without generating a test project: audits every F# block, then runs each snapshot-selected example."
             | Audit _ -> "Audit coverage, modes, and compilation for every expanded F# documentation block."
             | Build _ -> "Render the final static site for the given projects."
@@ -247,6 +253,8 @@ module Program =
         Expanded: string
         /// <summary>F# blocks discovered in the expanded body.</summary>
         Blocks: DocumentationBlock list
+        /// <summary>Renderer-neutral page metadata retained in release content.</summary>
+        Metadata: ContentMetadata
         /// <summary>Target framework this page pins, if any.</summary>
         TargetFramework: string option
     }
@@ -389,6 +397,16 @@ module Program =
                 let raw = File.ReadAllText(path)
                 let frontMatter = ContentProvider.parseFrontMatter raw
                 let body = frontMatter |> Option.map snd |> Option.defaultValue raw
+                let metadata =
+                    frontMatter
+                    |> Option.map fst
+                    |> Option.defaultValue {
+                        Title = ContentProvider.defaultTitle path
+                        Type = None
+                        Project = None
+                        TargetFramework = None
+                        Platform = None
+                    }
                 let selectedProject =
                     match frontMatter |> Option.bind (fun (metadata, _) -> metadata.Project) with
                     | None -> defaultProject
@@ -408,7 +426,7 @@ module Program =
                         $"Documentation page {relative} selects {describe selectedProject}, but that project was not passed to livedocs.\n\
                           Projects passed:\n{passed}\n\
                           Add the selected project to the command, or change the 'project:' front matter on that page."
-                let expanded = ContentProvider.resolveSnippets body sourceDir package ""
+                let expanded = ContentProvider.expandTransclusions body sourceDir package
                 let blocks = DocumentationDiscovery.discoverMarkdown relative (Some selectedProject) expanded
                 DocumentationDiscovery.validateCoverage blocks
                 let platform = frontMatter |> Option.bind (fun (metadata, _) -> metadata.Platform) |> Option.map _.ToLowerInvariant()
@@ -423,6 +441,7 @@ module Program =
                     SelectedProject = selectedProject
                     Expanded = expanded
                     Blocks = blocks
+                    Metadata = metadata
                     TargetFramework = targetFramework
                 } ]
 
@@ -459,8 +478,19 @@ module Program =
             match cachedArtifact with
             | Some _ -> []
             | None ->
-                let evaluated = resolvedProjects |> List.map (fun path -> path, DocumentationCompiler.evaluateProject path)
-                let aggregateReferences = evaluated |> List.collect (snd >> _.References) |> List.distinct
+                // Only page-selected projects need compiler evaluation. Evaluating every project
+                // leaks solution composition into documentation checking and can make an unrelated
+                // project-reference graph fail capture. Other documented projects contribute their
+                // already-built assemblies to the aggregate reference context.
+                let selectedProjects = pages |> List.map _.SelectedProject |> List.distinct
+                let evaluated = selectedProjects |> List.map (fun path -> path, DocumentationCompiler.evaluateProject path)
+                let builtAssemblies =
+                    resolvedProjects
+                    |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+                    |> List.filter (String.IsNullOrWhiteSpace >> not)
+                let aggregateReferences =
+                    (evaluated |> List.collect (snd >> _.References)) @ builtAssemblies
+                    |> List.distinct
                 let evaluatedProjects = evaluated |> List.map (fun (path, project) -> path, { project with References = aggregateReferences }) |> Map.ofList
                 pages
                 |> List.map (fun page ->
@@ -542,6 +572,90 @@ module Program =
         if analysis.CachedArtifact.IsNone then
             writeCurrentCache analysis.CachePath "*.semantic.json" (Newtonsoft.Json.JsonConvert.SerializeObject(artifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
         artifact, analysis.Prelude
+
+    let private currentRevision () =
+        let startInfo = Diagnostics.ProcessStartInfo("git", "rev-parse HEAD")
+        startInfo.RedirectStandardOutput <- true
+        startInfo.RedirectStandardError <- true
+        startInfo.UseShellExecute <- false
+        use gitProcess = Diagnostics.Process.Start(startInfo)
+        let revision = gitProcess.StandardOutput.ReadToEnd().Trim()
+        gitProcess.WaitForExit()
+        if gitProcess.ExitCode <> 0 || String.IsNullOrWhiteSpace revision then
+            invalidOp "Release capture requires a Git commit so the capsule can record source provenance."
+        revision
+
+    let private captureAssets docsDir =
+        Directory.GetFiles(docsDir, "*", SearchOption.AllDirectories)
+        |> Array.filter (fun path -> not (path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)))
+        |> Array.map (fun path -> Path.GetRelativePath(docsDir, path).Replace('\\', '/'), File.ReadAllBytes path)
+        |> Array.toList
+
+    let private verifyExplicitReleaseCases projectPaths package (pages: DocumentationPage list) references =
+        for projectPath in projectPaths do
+            let projectPackage = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
+            for name in DocTestRunner.snapshotExampleNames projectPackage do
+                let snapshot = DocTestRunner.collectSnapshotByName projectPackage projectPath references name |> Async.RunSynchronously
+                match snapshot.Status with
+                | ExampleStatus.Verified | ExampleStatus.FirstCut -> ()
+                | ExampleStatus.Mismatch ->
+                    invalidOp $"XML example {name} output did not match its expected release output."
+                | ExampleStatus.Error ->
+                    invalidOp $"XML example {name} failed during release capture: {snapshot.ActualOutput}"
+
+        for page in pages do
+            let externallyExecuted =
+                page.Blocks
+                |> List.choose (fun block ->
+                    match block.Mode, block.Origin with
+                    | (Run | Transcript), XmlExample -> Some block.Id
+                    | _ -> None)
+                |> Set.ofList
+            for case in DocumentationDiscovery.generatedCases page.SelectedProject "" page.Relative page.Expanded externallyExecuted do
+                match case.Action with
+                | ExecuteBlock _ | ExecuteTranscriptBlock _ ->
+                    GeneratedVerification.runCase references case |> Async.RunSynchronously
+                | CompileUnit _ -> ()
+
+    let captureAction warnAsError projectPaths version output =
+        let extracted, apiDiagnostics, projectFingerprint = getUnifiedPackageCached projectPaths
+        let package = { extracted with Version = version |> Option.defaultValue extracted.Version }
+        let analysis = analyzeDocumentation projectPaths projectFingerprint package
+        if printAudit analysis <> 0 then
+            invalidOp "Documentation contains uncovered or non-compiling F# blocks. Fix the mapped audit failures before capture."
+        if printApiDiagnostics warnAsError apiDiagnostics <> 0 then
+            invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
+
+        let pages = documentationPages projectPaths package
+        let references =
+            projectPaths
+            |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+            |> List.filter (String.IsNullOrWhiteSpace >> not)
+            |> List.distinct
+        verifyExplicitReleaseCases projectPaths package pages references
+
+        let semantic = analysis.CachedArtifact |> Option.defaultWith (fun () -> SemanticExtractor.artifact analysis.Results)
+        let api : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
+        let contentPages =
+            pages
+            |> List.map (fun page -> { SourcePath = page.Relative; Metadata = page.Metadata; Markdown = page.Expanded })
+        let outputPath = output |> Option.defaultValue $".livedocs/releases/{package.Version}.livedocs.zip"
+        let toolVersion = Reflection.Assembly.GetExecutingAssembly().GetName().Version |> string
+        let report =
+            ReleaseCapsule.create
+                outputPath
+                (currentRevision ())
+                toolVersion
+                api
+                semantic
+                (loadSiteConfig())
+                contentPages
+                (captureAssets "docs")
+        AnsiConsole.MarkupLine($"[green]✔ Release capsule:[/] {Markup.Escape report.Path}")
+        AnsiConsole.MarkupLine($"  Version: [blue]{Markup.Escape report.Manifest.ProductVersion}[/]")
+        AnsiConsole.MarkupLine($"  Size: {report.CompressedSize:N0} bytes")
+        AnsiConsole.MarkupLine($"  SHA-256: {report.Sha256}")
+        0
 
     let private generateSnapshotTests (projectPaths: string list) =
         printBanner()
@@ -761,28 +875,61 @@ module Program =
         AnsiConsole.MarkupLine("[green]✔ Build complete:[/] output/")
 
     let buildHistoryAction manifestPath theme =
-        let manifest, entries = History.loadManifest manifestPath
-        let config = loadSiteConfig()
-        let sites =
-            entries
-            |> List.map (fun (entry, modelPath, docsDir) ->
-                if not (Directory.Exists(docsDir)) then
-                    invalidOp $"History docs tree is missing for {entry.Version}: {docsDir}"
-                let packageRaw = History.loadArtifact entry.Version entry.ModelSha256 modelPath
-                let sourceDir = Path.GetDirectoryName(docsDir)
-                let semanticCode =
-                    match entry.SemanticPath, entry.SemanticSha256 with
-                    | Some semanticPath, Some checksum ->
-                        let manifestRoot = Path.GetDirectoryName(Path.GetFullPath(manifestPath))
-                        let artifact = History.loadSemanticArtifact checksum (Path.GetFullPath(Path.Combine(manifestRoot, semanticPath)))
-                        { SemanticCode.defaults with Artifact = Some artifact; Prelude = artifact.Prelude }
-                    | _ -> SemanticCode.disabled
-                let package = ContentProvider.applyApiDocsWithOptions docsDir sourceDir packageRaw semanticCode
-                let rootPath = if entry.Version = manifest.CurrentVersion then "" else "../../"
-                let pages = ContentProvider.scanDocsWithOptions docsDir sourceDir package rootPath semanticCode
-                entry.Version, package, pages, docsDir)
+        let raw = File.ReadAllText manifestPath
+        let isCapsuleIndex = raw.Contains("\"CapsulePath\"", StringComparison.OrdinalIgnoreCase)
+        if isCapsuleIndex then
+            let index = ReleaseCapsule.loadHistoryIndex manifestPath
+            let indexRoot = Path.GetDirectoryName(Path.GetFullPath manifestPath)
+            let temporaryRoot = Path.Combine(Path.GetTempPath(), "fslivedocs-history-" + Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory temporaryRoot |> ignore
+            try
+                let loaded =
+                    index.Entries
+                    |> List.map (fun entry ->
+                        let capsulePath = Path.GetFullPath(Path.Combine(indexRoot, entry.CapsulePath))
+                        let actual = History.sha256 capsulePath
+                        if not (actual.Equals(entry.CapsuleSha256, StringComparison.OrdinalIgnoreCase)) then
+                            invalidOp $"Release capsule checksum mismatch for {entry.Version}: expected {entry.CapsuleSha256}, got {actual}."
+                        let docsDir = Path.Combine(temporaryRoot, entry.Version, "docs")
+                        let packageRaw, semanticArtifact, site = ReleaseCapsule.materializeContent capsulePath docsDir
+                        if packageRaw.Version <> entry.Version then
+                            invalidOp $"Release capsule version mismatch: expected {entry.Version}, got {packageRaw.Version}."
+                        let semanticCode = { SemanticCode.defaults with Artifact = Some semanticArtifact; Prelude = semanticArtifact.Prelude }
+                        let package = ContentProvider.applyApiDocsWithOptions docsDir docsDir packageRaw semanticCode
+                        let rootPath = if entry.Version = index.CurrentVersion then "" else "../../"
+                        let pages = ContentProvider.scanDocsWithOptions docsDir docsDir package rootPath semanticCode
+                        entry.Version, package, pages, docsDir, site)
+                let config =
+                    loaded
+                    |> List.find (fun (version, _, _, _, _) -> version = index.CurrentVersion)
+                    |> fun (_, _, _, _, site) -> site
+                let sites = loaded |> List.map (fun (version, package, pages, docsDir, _) -> version, package, pages, docsDir)
+                SiteBuilder.buildHistory index.CurrentVersion sites config theme "output"
+            finally
+                if Directory.Exists temporaryRoot then Directory.Delete(temporaryRoot, true)
+        else
+            let manifest, entries = History.loadManifest manifestPath
+            let config = loadSiteConfig()
+            let sites =
+                entries
+                |> List.map (fun (entry, modelPath, docsDir) ->
+                    if not (Directory.Exists(docsDir)) then
+                        invalidOp $"History docs tree is missing for {entry.Version}: {docsDir}"
+                    let packageRaw = History.loadArtifact entry.Version entry.ModelSha256 modelPath
+                    let sourceDir = Path.GetDirectoryName(docsDir)
+                    let semanticCode =
+                        match entry.SemanticPath, entry.SemanticSha256 with
+                        | Some semanticPath, Some checksum ->
+                            let manifestRoot = Path.GetDirectoryName(Path.GetFullPath(manifestPath))
+                            let artifact = History.loadSemanticArtifact checksum (Path.GetFullPath(Path.Combine(manifestRoot, semanticPath)))
+                            { SemanticCode.defaults with Artifact = Some artifact; Prelude = artifact.Prelude }
+                        | _ -> SemanticCode.disabled
+                    let package = ContentProvider.applyApiDocsWithOptions docsDir sourceDir packageRaw semanticCode
+                    let rootPath = if entry.Version = manifest.CurrentVersion then "" else "../../"
+                    let pages = ContentProvider.scanDocsWithOptions docsDir sourceDir package rootPath semanticCode
+                    entry.Version, package, pages, docsDir)
 
-        SiteBuilder.buildHistory manifest.CurrentVersion sites config theme "output"
+            SiteBuilder.buildHistory manifest.CurrentVersion sites config theme "output"
 
         let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
         psi.UseShellExecute <- false
@@ -890,6 +1037,26 @@ jobs:
                 elif results.Contains GenerateTests then
                     let projectPaths = results.GetResult GenerateTests
                     generateSnapshotTests projectPaths
+
+                elif results.Contains Capture then
+                    printBanner()
+                    let projectPaths = results.GetResult Capture
+                    let version = results.TryGetResult Version
+                    let output = results.TryGetResult Output
+                    captureAction (results.Contains Warn_As_Error) projectPaths version output
+
+                elif results.Contains Inspect then
+                    let path = results.GetResult Inspect
+                    let report = ReleaseCapsule.inspect path
+                    AnsiConsole.MarkupLine($"[green]✔ Valid release capsule:[/] {Markup.Escape report.Path}")
+                    AnsiConsole.MarkupLine($"  Version: [blue]{Markup.Escape report.Manifest.ProductVersion}[/]")
+                    AnsiConsole.MarkupLine($"  Revision: {Markup.Escape report.Manifest.SourceRevision}")
+                    AnsiConsole.MarkupLine($"  API schema: {report.Manifest.Api.SchemaVersion} ({report.Manifest.Api.Size:N0} bytes)")
+                    AnsiConsole.MarkupLine($"  Semantic schema: {report.Manifest.Semantic.SchemaVersion} ({report.Manifest.Semantic.Size:N0} bytes)")
+                    AnsiConsole.MarkupLine($"  Content schema: {report.Manifest.Content.SchemaVersion} ({report.Manifest.Content.Size:N0} bytes)")
+                    AnsiConsole.MarkupLine($"  Capsule: {report.CompressedSize:N0} bytes")
+                    AnsiConsole.MarkupLine($"  SHA-256: {report.Sha256}")
+                    0
 
                 elif results.Contains Extract then
                     printBanner()
