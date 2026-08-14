@@ -209,6 +209,20 @@ module Program =
                 Directory.CreateDirectory(dir) |> ignore
             File.WriteAllText(path, normalized)
 
+    /// <summary>One documentation page, resolved against the projects passed to livedocs.</summary>
+    type private DocumentationPage = {
+        /// <summary>Path of the page relative to the documentation directory.</summary>
+        Relative: string
+        /// <summary>The project this page's F# blocks are compiled against.</summary>
+        SelectedProject: string
+        /// <summary>Page body after snippet and example transclusion.</summary>
+        Expanded: string
+        /// <summary>F# blocks discovered in the expanded body.</summary>
+        Blocks: DocumentationBlock list
+        /// <summary>Target framework this page pins, if any.</summary>
+        TargetFramework: string option
+    }
+
     type private DocumentationAnalysis = {
         Blocks: DocumentationBlock list
         Results: CheckedCompilationUnit list
@@ -317,16 +331,23 @@ module Program =
                 AnsiConsole.MarkupLine($"\n[yellow]⚠ {count} API documentation {noun}.[/] [grey]Documentation still rendered; pass --warn-as-error to fail on these.[/]")
                 0
 
-    let private analyzeDocumentation (projectPaths: string list) (projectFingerprint: string) (package: PackageModel) =
+    /// <summary>
+    /// Walks the documentation directory once, resolving every page against the projects passed to
+    /// livedocs.
+    /// </summary>
+    /// <remarks>
+    /// Audit, build and generated tests all need the same page set resolved the same way. When
+    /// they each walked the directory themselves the copies drifted, and the copy behind
+    /// generated tests silently omitted the check that a selected project was actually passed.
+    /// </remarks>
+    let private documentationPages (projectPaths: string list) (package: PackageModel) =
         if List.isEmpty projectPaths then invalidOp "Documentation analysis requires at least one project path."
         let docsDir = Path.GetFullPath("docs")
         if not (Directory.Exists docsDir) then invalidOp $"Documentation directory is missing: {docsDir}"
         let sourceDir = Directory.GetCurrentDirectory()
         let resolvedProjects = projectPaths |> List.map Path.GetFullPath
         let defaultProject = List.head resolvedProjects
-        let prelude = loadSiteConfig().FSharpPrelude |> Option.defaultValue ""
-        let pages =
-            [ for path in Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories) |> Array.sort do
+        [ for path in Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories) |> Array.sort do
                 let relative = Path.GetRelativePath(docsDir, path).Replace('\\', '/')
                 let raw = File.ReadAllText(path)
                 let frontMatter = ContentProvider.parseFrontMatter raw
@@ -360,8 +381,19 @@ module Program =
                 | Some value when value <> "dotnet" && value <> "fable" -> invalidOp $"Documentation page {relative} declares unsupported platform '{value}'."
                 | _ -> ()
                 let targetFramework = frontMatter |> Option.bind (fun (metadata, _) -> metadata.TargetFramework)
-                yield blocks, selectedProject, targetFramework ]
-        let blocks = pages |> List.collect (fun (blocks, _, _) -> blocks)
+                yield {
+                    Relative = relative
+                    SelectedProject = selectedProject
+                    Expanded = expanded
+                    Blocks = blocks
+                    TargetFramework = targetFramework
+                } ]
+
+    let private analyzeDocumentation (projectPaths: string list) (projectFingerprint: string) (package: PackageModel) =
+        let prelude = loadSiteConfig().FSharpPrelude |> Option.defaultValue ""
+        let pages = documentationPages projectPaths package
+        let resolvedProjects = projectPaths |> List.map Path.GetFullPath
+        let blocks = pages |> List.collect _.Blocks
         let packageFingerprint = Newtonsoft.Json.JsonConvert.SerializeObject(package, FsLiveDocs.Core.Serialization.jsonSettings)
         let contextFingerprint =
             [ yield $"semantic-schema:{History.SemanticSchemaVersion}"
@@ -369,10 +401,10 @@ module Program =
               yield $"project-inputs:{projectFingerprint}"
               yield $"prelude:{prelude}"
               yield packageFingerprint
-              for blocks, project, targetFramework in pages do
-                  let framework = targetFramework |> Option.defaultValue "<default>"
-                  yield $"project:{project}|framework:{framework}"
-                  for block in blocks do yield $"block:{block.Id}|{block.SourceHash}" ]
+              for page in pages do
+                  let framework = page.TargetFramework |> Option.defaultValue "<default>"
+                  yield $"project:{page.SelectedProject}|framework:{framework}"
+                  for block in page.Blocks do yield $"block:{block.Id}|{block.SourceHash}" ]
             |> String.concat "\n"
         let cacheDirectory = Path.Combine(".livedocs", "cache")
         let cachePath = Path.Combine(cacheDirectory, sha256Text contextFingerprint + ".semantic.json") |> Path.GetFullPath
@@ -389,15 +421,15 @@ module Program =
                 let aggregateReferences = evaluated |> List.collect (snd >> _.References) |> List.distinct
                 let evaluatedProjects = evaluated |> List.map (fun (path, project) -> path, { project with References = aggregateReferences }) |> Map.ofList
                 pages
-                |> List.map (fun (blocks, selectedProject, targetFramework) ->
+                |> List.map (fun page ->
                     let selectedEvaluation =
-                        match targetFramework with
-                        | None -> evaluatedProjects.[selectedProject]
+                        match page.TargetFramework with
+                        | None -> evaluatedProjects.[page.SelectedProject]
                         | Some _ ->
-                            let selected = DocumentationCompiler.evaluateProjectFor targetFramework selectedProject
+                            let selected = DocumentationCompiler.evaluateProjectFor page.TargetFramework page.SelectedProject
                             let references = selected.References @ aggregateReferences |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
                             { selected with References = references }
-                    DocumentationCompiler.checkBlocksWithProject selectedEvaluation prelude blocks)
+                    DocumentationCompiler.checkBlocksWithProject selectedEvaluation prelude page.Blocks)
                 |> fun checks -> Async.Parallel(checks, maxDegreeOfParallelism = max 1 Environment.ProcessorCount)
                 |> Async.RunSynchronously
                 |> Array.toList
@@ -567,33 +599,16 @@ module Program =
                 |> String.concat (eol + eol)
 
             let package, _ = getUnifiedPackage resolvedProjects |> Async.RunSynchronously
-            let docsDir = Path.GetFullPath("docs")
-            let sourceDir = Directory.GetCurrentDirectory()
-            let defaultProject = List.head resolvedProjects
             let documentationCases =
-                [ for path in Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories) |> Array.sort do
-                    let relative = Path.GetRelativePath(docsDir, path).Replace('\\', '/')
-                    let raw = File.ReadAllText(path)
-                    let frontMatter = ContentProvider.parseFrontMatter raw
-                    let body = frontMatter |> Option.map snd |> Option.defaultValue raw
-                    let selectedProject =
-                        match frontMatter |> Option.bind (fun (metadata, _) -> metadata.Project) with
-                        | None -> defaultProject
-                        | Some configured ->
-                            [ Path.GetFullPath(configured, sourceDir); Path.GetFullPath(configured, docsDir) ]
-                            |> List.tryFind File.Exists
-                            |> Option.defaultWith (fun () -> invalidOp $"Documentation project in {relative} does not exist: {configured}")
-                    let expanded = ContentProvider.resolveSnippets body sourceDir package ""
-                    let encoded = Convert.ToBase64String(Text.Encoding.UTF8.GetBytes expanded)
-                    let blocks = DocumentationDiscovery.discoverMarkdown relative (Some selectedProject) expanded
-                    DocumentationDiscovery.validateCoverage blocks
-                    yield "coverage", relative + "#coverage", selectedProject, relative, encoded
-                    for unit in DocumentationDiscovery.compilationUnits selectedProject "" blocks do
-                        yield "compile", unit.Id, selectedProject, relative, encoded
-                    for block in blocks do
+                [ for page in documentationPages resolvedProjects package do
+                    let encoded = Convert.ToBase64String(Text.Encoding.UTF8.GetBytes page.Expanded)
+                    yield "coverage", page.Relative + "#coverage", page.SelectedProject, page.Relative, encoded
+                    for unit in DocumentationDiscovery.compilationUnits page.SelectedProject "" page.Blocks do
+                        yield "compile", unit.Id, page.SelectedProject, page.Relative, encoded
+                    for block in page.Blocks do
                         match block.Mode, block.Origin with
                         | (Run | Transcript), XmlExample -> () // The existing named XML snapshot case owns this execution.
-                        | (Run | Transcript), _ -> yield "execute", block.Id, selectedProject, relative, encoded
+                        | (Run | Transcript), _ -> yield "execute", block.Id, page.SelectedProject, page.Relative, encoded
                         | _ -> () ]
 
             let documentationTestBodies =
