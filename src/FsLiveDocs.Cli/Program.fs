@@ -173,6 +173,17 @@ module Program =
         AnsiConsole.Write(figlet)
         AnsiConsole.MarkupLine("[grey]Verified Documentation for F#[/]\n")
 
+    let loadSiteConfig () =
+        let configPath = Path.Combine(".livedocs", "config.json")
+        if File.Exists(configPath) then
+            try
+                let config = Newtonsoft.Json.JsonConvert.DeserializeObject<SiteConfig>(File.ReadAllText(configPath), FsLiveDocs.Core.Serialization.jsonSettings)
+                if isNull (box config) then defaultSiteConfig else config
+            with _ ->
+                defaultSiteConfig
+        else
+            defaultSiteConfig
+
     /// <summary>Names of every XML example some documentation page transcludes.</summary>
     /// <remarks>
     /// A raw scan of the shortcodes, so it needs no package and can run before extraction. An
@@ -193,27 +204,24 @@ module Program =
         let packages = ResizeArray()
         let diagnostics = ResizeArray()
         let covered = transcludedExamples ()
+        // The same prelude a page block is compiled with. Without it an example referencing the
+        // library by its own namespace fails for want of an open, not for anything wrong with it.
+        let prelude = loadSiteConfig().FSharpPrelude |> Option.defaultValue ""
+        let builtAssemblies =
+            projectPaths
+            |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+            |> List.filter (String.IsNullOrWhiteSpace >> not)
+            |> List.distinct
         for projectPath in projectPaths do
             let! package, projectDiagnostics = SymbolLister.extractFromProjectWithDiagnostics projectPath
             packages.Add(package)
             diagnostics.AddRange(projectDiagnostics)
             // Every example not covered elsewhere is compiled against the project that declares it,
             // so "the documented code compiles" holds for XML examples as it does for fences.
-            let! exampleDiagnostics = GeneratedVerification.compileUncoveredExamples projectPath covered package
+            let! exampleDiagnostics = GeneratedVerification.compileUncoveredExamples projectPath prelude builtAssemblies covered package
             diagnostics.AddRange(exampleDiagnostics)
         return SymbolLister.merge (Seq.toList packages), List.ofSeq diagnostics
     }
-
-    let loadSiteConfig () =
-        let configPath = Path.Combine(".livedocs", "config.json")
-        if File.Exists(configPath) then
-            try
-                let config = Newtonsoft.Json.JsonConvert.DeserializeObject<SiteConfig>(File.ReadAllText(configPath), FsLiveDocs.Core.Serialization.jsonSettings)
-                if isNull (box config) then defaultSiteConfig else config
-            with _ ->
-                defaultSiteConfig
-        else
-            defaultSiteConfig
 
     let private writeIfChanged (path: string) (content: string) =
         let normalized = content.Replace("\r\n", "\n").TrimEnd() + "\n"
@@ -292,7 +300,16 @@ module Program =
     let private getUnifiedPackageCached (projectPaths: string list) =
         let inputHash = projectInputFingerprint projectPaths
         let cacheDirectory = Path.GetFullPath(Path.Combine(".livedocs", "cache"))
-        let cacheKey = sha256Text $"api-schema:{History.ApiModelSchemaVersion}|extractor:{typeof<PackageModel>.Assembly.ManifestModule.ModuleVersionId}|{inputHash}"
+        // The key covers every assembly whose code shapes what is cached. Keying on Core alone
+        // silently replayed stale diagnostics whenever the Runner or the CLI changed, which is
+        // indistinguishable from a fix having no effect.
+        let extractorVersions =
+            [ typeof<PackageModel>.Assembly
+              typeof<FsiTranscriptRunner.DocTestExecutionContext>.Assembly
+              Reflection.Assembly.GetExecutingAssembly() ]
+            |> List.map (fun assembly -> string assembly.ManifestModule.ModuleVersionId)
+            |> String.concat ","
+        let cacheKey = sha256Text $"api-schema:{History.ApiModelSchemaVersion}|extractor:{extractorVersions}|{inputHash}"
         let cachePath = Path.Combine(cacheDirectory, cacheKey + ".package.json")
         // Diagnostics describe the run, not the snapshot, so they live beside the cached package
         // rather than inside it — otherwise a warning would be reported once and never again.
@@ -411,6 +428,11 @@ module Program =
 
     let private analyzeDocumentation (projectPaths: string list) (projectFingerprint: string) (package: PackageModel) =
         let prelude = loadSiteConfig().FSharpPrelude |> Option.defaultValue ""
+        let builtAssemblies =
+            projectPaths
+            |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+            |> List.filter (String.IsNullOrWhiteSpace >> not)
+            |> List.distinct
         let pages = documentationPages projectPaths package
         let resolvedProjects = projectPaths |> List.map Path.GetFullPath
         let blocks = pages |> List.collect _.Blocks
@@ -918,6 +940,24 @@ jobs:
                                 AnsiConsole.MarkupLine($"  [red]fail[/] {Markup.Escape(snapshot.Name)}")
                                 AnsiConsole.MarkupLine($"       [grey]{Markup.Escape(snapshot.ActualOutput)}[/]")
                                 allPassed <- false
+                    // Executable markdown blocks are compiled by the audit above but only run by
+                    // the generated cases; running them here is what makes this command a real
+                    // alternative to generating a test project rather than a subset of one.
+                    let package, _ = getUnifiedPackage projectPaths |> Async.RunSynchronously
+                    for page in documentationPages projectPaths package do
+                        for block in page.Blocks do
+                            match block.Mode with
+                            | Run | Transcript ->
+                                try
+                                    GeneratedVerification.executeBlock
+                                        page.SelectedProject references page.Relative page.Expanded block.Id
+                                    AnsiConsole.MarkupLine($"  [green]pass[/] {Markup.Escape(block.Id)}")
+                                with error ->
+                                    AnsiConsole.MarkupLine($"  [red]fail[/] {Markup.Escape(block.Id)}")
+                                    AnsiConsole.MarkupLine($"       [grey]{Markup.Escape(error.Message)}[/]")
+                                    allPassed <- false
+                            | _ -> ()
+
                     if allPassed then 
                         AnsiConsole.MarkupLine("\n[bold green]✔ All doc-tests passed successfully![/]")
                         0 

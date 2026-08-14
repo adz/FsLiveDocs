@@ -1,11 +1,15 @@
 # Refactor plan: model split and legacy verification retirement
 
-Two pieces of structural work, independent of each other. The first is mechanical and safe;
-the second needs a behavioural decision before any code moves.
+**Status: implemented.** Kept as the record of why each change was made.
 
-A third item from the same review — audit, build and generated tests each reconstructing
-documentation projects — is already done (`65fc2d3`). All three now share
-`Program.documentationPages`.
+| Part | Outcome |
+|---|---|
+| Shared page walk | `65fc2d3` — audit, build and generated tests share `documentationPages` |
+| A — split `Models.fs` | `e7b2c01` — seven files, verified as a pure move |
+| B — retire legacy verifier | `ba7a3d8` — `verifyExamples` deleted, `test` re-based on the current path |
+| C — verify examples by default | `4e8d327`, `621a07c`, `000f3aa` — steps 1-3; step 4 stays deferred |
+
+Deviations from the plan as written are noted in the relevant sections below.
 
 ---
 
@@ -59,8 +63,9 @@ stay together, and serialization must follow `SemanticModel.fs`. Nothing else cr
 
 ### Sequence
 
-One commit per file, each building green, in the order above, moving types out of `Models.fs`
-until it is empty and can be deleted.
+Planned as one commit per file. **Done as a single commit instead**: the split is atomic — the
+files only make sense once `Models.fs` is gone — and the verification below is stronger than
+per-commit builds, comparing the exact multiset of lines before and after.
 
 ### Verification
 
@@ -128,10 +133,13 @@ that justifies the command's existence.
 
 ### Risks
 
-- The two paths may genuinely disagree today: `verifyExamples` runs only
-  `IsSnapshotTest` examples, while the generated cases also cover `coverage` and `compile`
-  units. Step 1 will expose that. Decide deliberately whether `Test` gains that coverage —
-  it probably should, but it is a behaviour change and belongs in its own commit.
+- The two paths may genuinely disagree today. **They did, worse than expected**: `test` exited
+  1 on this repository because `verifyExamples` was called with no references, so any example
+  touching another project failed for want of a reference. The generated case for the same
+  example passed. Retiring the path removed a false failure, not just a duplicate.
+- `Test` gained execution of markdown `run`/`transcript` blocks, which only the generated cases
+  ran before. That is a deliberate widening: without it the command is a subset of
+  `generate-tests` rather than an alternative to it.
 - `Test` currently calls `auditAction` first and folds the result into its exit code. Preserve
   that, or the change silently narrows what a green `test` run means.
 

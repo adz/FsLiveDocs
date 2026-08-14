@@ -70,7 +70,7 @@ module GeneratedVerification =
     /// covered elsewhere. Failures are returned rather than raised, so the caller decides whether
     /// they warn or fail the run.
     /// </remarks>
-    let compileUncoveredExamples (projectPath: string) (covered: Set<string>) (package: PackageModel) = async {
+    let compileUncoveredExamples (projectPath: string) (prelude: string) (references: string list) (covered: Set<string>) (package: PackageModel) = async {
         let examples =
             let rec walk (entity: EntityModel) =
                 [ let entityExamples = if isNull (box entity.Examples) then [] else entity.Examples
@@ -105,7 +105,12 @@ module GeneratedVerification =
                     Project = Some projectPath
                 })
 
-            let! results = DocumentationCompiler.checkBlocks projectPath "" blocks
+            // An example demonstrates the library that declares it, so that library's own
+            // assembly has to be on the compilation's reference list. Evaluating the project
+            // alone yields its dependencies but never its own output.
+            let evaluated = DocumentationCompiler.evaluateProject projectPath
+            let project = { evaluated with References = List.distinct (evaluated.References @ references) }
+            let! results = DocumentationCompiler.checkBlocksWithProject project prelude blocks
             let locations =
                 examples
                 |> List.map (fun (owner, location, example) -> $"{owner}#example-{example.Name}", (owner, location))
