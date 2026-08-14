@@ -13,7 +13,13 @@
 
   <ItemGroup>
     <Compile Include="Transcript.fs" />
-    <Compile Include="Models.fs" />
+    <Compile Include="ApiModel.fs" />
+    <Compile Include="ApiDiagnostic.fs" />
+    <Compile Include="SemanticModel.fs" />
+    <Compile Include="HistoryModel.fs" />
+    <Compile Include="RunnerModel.fs" />
+    <Compile Include="SiteModel.fs" />
+    <Compile Include="Serialization.fs" />
     <Compile Include="History.fs" />
     <Compile Include="SourceParameters.fs" />
     <Compile Include="SymbolLister.fs" />
