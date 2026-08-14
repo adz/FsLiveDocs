@@ -54,7 +54,7 @@ type Arguments =
             | CI -> "Generate CI/CD templates (GitHub Actions)."
             | GenerateTests _ -> "Generate a Verify-based snapshot test project for the given projects."
             | Extract _ -> "Extract symbols from one or more projects into a JSON blob."
-            | Test _ -> "Run the legacy direct docstring verifier for the given projects."
+            | Test _ -> "Verify documentation without generating a test project: audits every F# block, then runs each snapshot-selected example."
             | Audit _ -> "Audit coverage, modes, and compilation for every expanded F# documentation block."
             | Build _ -> "Render the final static site for the given projects."
             | BuildHistory _ -> "Render all versions from a verified local history manifest."
@@ -886,19 +886,37 @@ jobs:
                     printBanner()
                     let projectPaths = results.GetResult Test
                     let mutable allPassed = auditAction (results.Contains Warn_As_Error) projectPaths = 0
+                    // The same references the generated cases receive. Passing none, as the retired
+                    // path did, made any example touching another project fail for want of a
+                    // reference rather than for anything wrong with the example.
+                    let references =
+                        projectPaths
+                        |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+                        |> List.filter (String.IsNullOrWhiteSpace >> not)
+                        |> List.distinct
                     for projectPath in projectPaths do
                         AnsiConsole.MarkupLine($"[bold blue]➜ Testing:[/] {projectPath}")
-                        let results = 
+                        let snapshots =
                             AnsiConsole.Status().Start($"Running doc-tests...", fun ctx ->
                                 let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
-                                DocTestRunner.verifyExamples package projectPath [] |> Async.RunSynchronously
-                            )
-                        
-                        for (name, success, output) in results do
-                            if success then AnsiConsole.MarkupLine($"  [green]pass[/] {Markup.Escape(name)}")
-                            else 
-                                AnsiConsole.MarkupLine($"  [red]fail[/] {Markup.Escape(name)}")
-                                AnsiConsole.MarkupLine($"       [grey]{Markup.Escape(output)}[/]")
+                                DocTestRunner.snapshotExampleNames package
+                                |> List.map (fun name ->
+                                    DocTestRunner.collectSnapshotByName package projectPath references name
+                                    |> Async.RunSynchronously))
+
+                        for snapshot in snapshots do
+                            match snapshot.Status with
+                            | ExampleStatus.Verified | ExampleStatus.FirstCut ->
+                                AnsiConsole.MarkupLine($"  [green]pass[/] {Markup.Escape(snapshot.Name)}")
+                            | ExampleStatus.Mismatch ->
+                                AnsiConsole.MarkupLine($"  [red]fail[/] {Markup.Escape(snapshot.Name)}")
+                                let expected = snapshot.ExpectedOutput |> Option.defaultValue ""
+                                AnsiConsole.MarkupLine($"       [grey]Expected:[/] {Markup.Escape(expected)}")
+                                AnsiConsole.MarkupLine($"       [grey]Actual:[/] {Markup.Escape(snapshot.ActualOutput)}")
+                                allPassed <- false
+                            | ExampleStatus.Error ->
+                                AnsiConsole.MarkupLine($"  [red]fail[/] {Markup.Escape(snapshot.Name)}")
+                                AnsiConsole.MarkupLine($"       [grey]{Markup.Escape(snapshot.ActualOutput)}[/]")
                                 allPassed <- false
                     if allPassed then 
                         AnsiConsole.MarkupLine("\n[bold green]✔ All doc-tests passed successfully![/]")

@@ -537,7 +537,7 @@ module DocTestRunnerTests =
         Assert.Equal(Some "val it: ExampleModel = { Name = \"Basic Usage\"; Content = \"1+1\"; ExpectedOutput = Some \"2\"; Scenario = None; IsSnapshotTest = false; NoCheckReason = None }", parsed.ExpectedOutput)
 
     [<Fact>]
-    let ``verifyExamples executes transcript style examples`` () =
+    let ``a transcript example runs and matches its documented output`` () =
         let package : PackageModel =
             {
                 Version = "1.0"
@@ -572,9 +572,8 @@ module DocTestRunnerTests =
             }
 
         let projectPath = Path.GetFullPath("src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj")
-        let results = DocTestRunner.verifyExamples package projectPath [] |> Async.RunSynchronously
-        let (_, passed, output) = Assert.Single(results)
-        Assert.True(passed, output)
+        let snapshot = DocTestRunner.collectSnapshotByName package projectPath [] "SessionExample" |> Async.RunSynchronously
+        Assert.Equal(ExampleStatus.Verified, snapshot.Status)
 
     [<Fact>]
     let ``collectSnapshots returns structured snapshot payload`` () =

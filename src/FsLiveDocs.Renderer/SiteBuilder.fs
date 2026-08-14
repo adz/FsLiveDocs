@@ -298,7 +298,15 @@ module SiteBuilder =
     /// <returns>A plaintext `llms.txt` document.</returns>
     /// <example name="GenerateLlmsTxtExample" data-livedocs="snapshot">
     /// > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
+    /// val package: PackageModel = { Version = "1.0"
+    ///   Entities = []
+    ///   Scenarios = []
+    ///   Packages = [] }
+    ///
     /// > let summary = SiteBuilder.generateLlmsTxt package;;
+    /// val summary: string = "# API Reference for LLMs
+    /// "
+    ///
     /// > summary.Split('\n').[0];;
     /// val it: string = "# API Reference for LLMs"
     /// </example>

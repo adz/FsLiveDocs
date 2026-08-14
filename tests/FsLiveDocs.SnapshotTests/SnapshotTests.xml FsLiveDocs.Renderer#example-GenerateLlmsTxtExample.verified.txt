@@ -2,7 +2,15 @@
   Name: GenerateLlmsTxtExample,
   Source:
 > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
+val package: PackageModel = { Version = "1.0"
+  Entities = []
+  Scenarios = []
+  Packages = [] }
+
 > let summary = SiteBuilder.generateLlmsTxt package;;
+val summary: string = "# API Reference for LLMs
+"
+
 > summary.Split('\n').[0];;
 val it: string = "# API Reference for LLMs",
   ExpectedOutput: {},
