@@ -36,29 +36,31 @@ No `open` needs touching in Runner, Renderer, Cli or the tests.
 
 ### Target files, in compile order
 
-1. `Serialization.fs` — the three converters and `module Serialization`. First, because it
-   depends on no model type. Consumers: `Program.fs` (11 uses), `Tests.fs` (6),
-   `SiteBuilder.fs`, `History.fs`, `ContentProvider.fs`.
-2. `ApiModel.fs` — release artifacts, plus the `ExampleModel` augmentation.
-3. `ApiDiagnostic.fs` — run diagnostics. Deliberately separate from `ApiModel.fs`: a
+1. `ApiModel.fs` — release artifacts, plus the `ExampleModel` augmentation. Carries the
+   `ProjectStructure` and `ExampleModel` snippet markers, which `docs/index.md` transcludes;
+   snippets are located by scanning sources for the marker, so they may move file but must
+   stay wrapped around the same types.
+2. `ApiDiagnostic.fs` — run diagnostics. Deliberately separate from `ApiModel.fs`: a
    diagnostic describes one extraction run, an artifact describes the documented snapshot.
    Keeping them apart is what stops diagnostics drifting back into `PackageModel` and forcing
    an `ApiModelSchemaVersion` bump.
-4. `SemanticModel.fs` — semantic tokens through `SemanticDocumentationArtifact`.
-5. `HistoryModel.fs` — `HistoryEntry`, `HistoryManifest`. Consider folding these into the
-   existing `History.fs`, which is their only consumer; keep separate only if that file's
-   validation logic would obscure them.
-6. `RunnerModel.fs` — `ExampleStatus`, `ExampleSnapshotModel`, `ProjectSnapshotModel`.
-7. `SiteModel.fs` — `NavigationItem`, `SiteConfig`, `ContentMetadata`, `ContentPage`,
+3. `SemanticModel.fs` — semantic tokens through `SemanticDocumentationArtifact`.
+4. `HistoryModel.fs` — `HistoryEntry`, `HistoryManifest`.
+5. `RunnerModel.fs` — `ExampleStatus`, `ExampleSnapshotModel`, `ProjectSnapshotModel`.
+   `ExampleStatus` currently sits among the API types but is only used by the runner.
+6. `SiteModel.fs` — `NavigationItem`, `SiteConfig`, `ContentMetadata`, `ContentPage`,
    `ResolvedProject`.
+7. `Serialization.fs` — the three converters and `module Serialization`. **Last, not first.**
+   `FSharpUnionConverter` falls back to `SemanticTokenKind.PlainText` for an unknown union
+   case, so serialization depends on the semantic model rather than being free of models.
 
-Only ordering constraint inside the models: `SiteConfig` references `NavigationItem`, so they
-stay in one file. Nothing else cross-references.
+Ordering constraints inside the models: `SiteConfig` references `NavigationItem`, so those
+stay together, and serialization must follow `SemanticModel.fs`. Nothing else cross-references.
 
 ### Sequence
 
-One commit per file, each building green, in the order above. Moving `Serialization.fs` first
-proves the approach on the piece with the most consumers and the fewest dependencies.
+One commit per file, each building green, in the order above, moving types out of `Models.fs`
+until it is empty and can be deleted.
 
 ### Verification
 
@@ -138,3 +140,61 @@ that justifies the command's existence.
 Independent. Part A touches only `FsLiveDocs.Core` file layout; Part B touches
 `FsLiveDocs.Runner` and the CLI. Do Part A first anyway — it is mechanical, and a smaller
 `Models.fs` makes the Part B diffs easier to read.
+
+---
+
+## Part C — verify XML examples by default
+
+### The inconsistency
+
+The same content — F# shown to a reader — has opposite defaults depending on where it lives.
+
+| | Default | Escape hatch |
+|---|---|---|
+| Markdown fence | compiled (`Page`) | `no-check` **with a required reason** |
+| XML `<example>` | nothing | n/a — verification is opt-in |
+
+A markdown block is compiled unless excluded in writing (`DocumentationDiscovery.fs:113`, and
+the reason is enforced twice, at `:121` and `:160`). An XML example is verified only if it
+carries an FSI transcript or `data-livedocs="snapshot"`.
+
+Demonstrated: an example whose body is `let broken : int = "this does not compile"`, neither
+marked nor transcluded, passes `livedocs audit` clean and produces no generated case. It is
+rendered to readers unverified, and nothing reports it.
+
+### The rule to adopt
+
+The markdown model, applied to XML examples:
+
+- **compile every example by default** — the claim "documented code compiles" must not
+  silently exclude whatever was not annotated;
+- **execute only on request** — execution has side effects and needs an expected output to
+  compare against, which is why markdown already requires explicit `run`/`transcript`;
+- **exclude only with a written reason**, enforced like `no-check`.
+
+### Steps
+
+1. **Report before enforcing.** Emit an `ApiDiagnostic` (`unverified-example`) for every XML
+   example that is neither compiled nor executed. Warning by default, so no existing project
+   breaks; `--warn-as-error` lets a project opt in immediately. This reuses the channel and
+   display built for `unnamed-parameter`.
+2. **Give examples a compilation context.** A page block gets page scope plus the configured
+   prelude; an XML example has only its declaring project. Compile each example as an isolated
+   unit against that project, through the existing `DocumentationCompiler` path.
+3. **Add the escape hatch**: `data-livedocs="no-check" reason="…"` on an example, with the
+   same non-empty-reason enforcement markdown already applies. Without this, step 4 has no
+   legitimate way to describe a fragment that cannot compile standalone.
+4. **Flip the default** in a major version: unverified examples become compiled examples, and
+   a compile failure is an error. The warning from step 1 is what makes this a migration
+   rather than a surprise.
+
+### Risk
+
+Step 4 is breaking by construction. Examples that were never checked will start failing, which
+is the point, but it means steps 1–3 must ship and be lived with first. Do not collapse them.
+
+### Sequencing
+
+After Part A (mechanical, makes diffs readable). Independent of Part B, but note that Part C
+changes what verification covers, so if Part B's golden files are captured first they will
+need retaking.
