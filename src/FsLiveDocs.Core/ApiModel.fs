@@ -20,7 +20,8 @@ type SourceLink = {
 ///   Content = "1+1"
 ///   ExpectedOutput = Some "2"
 ///   Scenario = None
-///   IsSnapshotTest = false }
+///   IsSnapshotTest = false
+///   NoCheckReason = None }
 /// </example>
 type ExampleModel = {
     /// <summary>The unique name of the example, used for transclusion.</summary>
@@ -33,6 +34,8 @@ type ExampleModel = {
     Scenario: string option
     /// <summary>Whether this example should be picked up by the generated snapshot test project.</summary>
     IsSnapshotTest: bool
+    /// <summary>Why this example is deliberately excluded from verification, if it is.</summary>
+    NoCheckReason: string option
 }
 // </snippet:ExampleModel>
 
@@ -134,11 +137,12 @@ type ApiModelArtifact = { SchemaVersion: int; Package: PackageModel }
 
 type ExampleModel with
     /// <summary>Create an example record from its individual fields.</summary>
-    static member Create(name: string, content: string, expectedOutput: string option, scenario: string option, ?isSnapshotTest: bool) =
+    static member Create(name: string, content: string, expectedOutput: string option, scenario: string option, ?isSnapshotTest: bool, ?noCheckReason: string) =
         {
             Name = name
             Content = content
             ExpectedOutput = expectedOutput
             Scenario = scenario
             IsSnapshotTest = defaultArg isSnapshotTest false
+            NoCheckReason = noCheckReason
         }

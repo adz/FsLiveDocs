@@ -315,6 +315,11 @@ module ContentProvider =
                     match findExample id package with
                     | Some ex ->
                         let info =
+                            // An example excluded at its declaration stays excluded once transcluded,
+                            // carrying the author's reason onto the fence.
+                            match ex.NoCheckReason with
+                            | Some reason -> $"fsharp no-check reason=\"{reason}\""
+                            | None ->
                             if ex.Content.Replace("\r\n", "\n").Split('\n') |> Array.exists (fun line -> line.TrimStart().StartsWith("> ")) then
                                 "fsharp transcript"
                             elif ex.IsSnapshotTest then "fsharp run"

@@ -409,7 +409,9 @@ module Program =
         let examplesOf (owner: string) (location: SourceLink) (examples: ExampleModel list) =
             examples
             |> List.filter (fun example ->
-                not example.IsSnapshotTest && not (transcluded.Contains example.Name))
+                example.NoCheckReason.IsNone
+                && not example.IsSnapshotTest
+                && not (transcluded.Contains example.Name))
             |> List.map (fun example -> {
                 Code = "unverified-example"
                 Symbol = $"{owner}#{example.Name}"

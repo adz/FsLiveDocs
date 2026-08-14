@@ -50,6 +50,20 @@ module HistoryTests =
         Assert.Contains("checksum mismatch", error.Message)
 
     [<Fact>]
+    let ``an artifact from an older additive schema still loads`` () =
+        // Schema growth has been additive, so a stored release from before a field existed must
+        // keep loading; only a schema this build cannot know about is rejected.
+        let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
+        File.WriteAllText(path, """{"SchemaVersion":1,"Package":{"Version":"1.2.3","Entities":[],"Scenarios":[],"Packages":[]}}""")
+
+        let loaded = History.loadArtifact "1.2.3" (History.sha256 path) path
+        Assert.Equal("1.2.3", loaded.Version)
+
+        File.WriteAllText(path, """{"SchemaVersion":999,"Package":{"Version":"1.2.3","Entities":[],"Scenarios":[],"Packages":[]}}""")
+        let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadArtifact "1.2.3" (History.sha256 path) path |> ignore)
+        Assert.Contains("supports up to", error.Message)
+
+    [<Fact>]
     let ``loadManifest requires an entry for the current version`` () =
         let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
         let manifest : HistoryManifest = {
@@ -125,6 +139,29 @@ module SymbolListerTests =
         let example = SymbolLister.extractExamples xml |> Assert.Single
 
         Assert.Equal("flow {\n    return 42\n}", example.Content.Trim())
+
+    [<Fact>]
+    let ``extractExamples reads a no-check exclusion and its reason`` () =
+        let xml =
+            """
+            <example name="Fragment" data-livedocs="no-check" reason="Illustrative fragment">
+            let partial =
+            </example>
+            """
+
+        let example = SymbolLister.extractExamples xml |> Assert.Single
+
+        Assert.Equal(Some "Illustrative fragment", example.NoCheckReason)
+
+    [<Fact>]
+    let ``extractExamples rejects a no-check exclusion without a reason`` () =
+        // An exclusion nobody has to justify is indistinguishable from an oversight, which is why
+        // the markdown no-check fence demands the same.
+        let xml = """<example name="Fragment" data-livedocs="no-check">let partial =</example>"""
+
+        let error = Assert.Throws<InvalidOperationException>(fun () -> SymbolLister.extractExamples xml |> ignore)
+
+        Assert.Contains("without a non-empty reason", error.Message)
 
     [<Fact>]
     let ``reconcileUsageSignature replaces placeholders in order, not by their number`` () =
@@ -443,7 +480,7 @@ module ContentProviderTests =
     let ``resolveSnippets handles transclusion and xrefs`` () =
         let package : PackageModel = { 
             Version = "1.0"
-            Entities = [ { Id = "M1"; Name = "add"; Kind = EntityKind.Module; SummaryHtml = ""; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; SummaryHtml = ""; RemarksHtml = ""; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None; IsSnapshotTest = false } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
+            Entities = [ { Id = "M1"; Name = "add"; Kind = EntityKind.Module; SummaryHtml = ""; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; SummaryHtml = ""; RemarksHtml = ""; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None; IsSnapshotTest = false; NoCheckReason = None } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
             Scenarios = []; Packages = []
         }
         let body = "Look at {{< example id=\"E1\" >}} and xref:M:M1.add"
@@ -493,11 +530,11 @@ module DocTestRunnerTests =
             ExampleTranscript.parse
                 """
                 > ExampleModel.Create("Basic Usage", "1+1", Some "2", None);;
-                val it: ExampleModel = { Name = "Basic Usage"; Content = "1+1"; ExpectedOutput = Some "2"; Scenario = None; IsSnapshotTest = false }
+                val it: ExampleModel = { Name = "Basic Usage"; Content = "1+1"; ExpectedOutput = Some "2"; Scenario = None; IsSnapshotTest = false; NoCheckReason = None }
                 """
 
         Assert.Contains("ExampleModel.Create(\"Basic Usage\"", parsed.Script)
-        Assert.Equal(Some "val it: ExampleModel = { Name = \"Basic Usage\"; Content = \"1+1\"; ExpectedOutput = Some \"2\"; Scenario = None; IsSnapshotTest = false }", parsed.ExpectedOutput)
+        Assert.Equal(Some "val it: ExampleModel = { Name = \"Basic Usage\"; Content = \"1+1\"; ExpectedOutput = Some \"2\"; Scenario = None; IsSnapshotTest = false; NoCheckReason = None }", parsed.ExpectedOutput)
 
     [<Fact>]
     let ``verifyExamples executes transcript style examples`` () =
@@ -525,7 +562,7 @@ module DocTestRunnerTests =
                                             """
                                         ExpectedOutput = Some "val x: int = 1\nval it: int = 3"
                                         Scenario = None
-                                        IsSnapshotTest = true
+                                        IsSnapshotTest = true; NoCheckReason = None
                                     }
                                 ]
                             Entities = []
@@ -565,7 +602,7 @@ module DocTestRunnerTests =
                                             """
                                         ExpectedOutput = Some "val x: int = 1\nval it: int = 3"
                                         Scenario = None
-                                        IsSnapshotTest = true
+                                        IsSnapshotTest = true; NoCheckReason = None
                                     }
                                 ]
                             Entities = []

@@ -46,6 +46,24 @@ module SymbolLister =
             | Some value when value.Equals("true", StringComparison.OrdinalIgnoreCase) -> true
             | _ -> false
 
+    /// <summary>
+    /// Reads a deliberate exclusion from verification, mirroring the markdown <c>no-check</c> fence.
+    /// </summary>
+    /// <remarks>
+    /// A reason is required for the same purpose it is required on a fence: an exclusion that
+    /// nobody has to justify is indistinguishable from an oversight.
+    /// </remarks>
+    let private noCheckReason (name: string) (attrs: string) =
+        let marker =
+            tryGetAttribute "data-livedocs" attrs
+            |> Option.filter (fun value -> value.Equals("no-check", StringComparison.OrdinalIgnoreCase))
+        match marker with
+        | None -> None
+        | Some _ ->
+            match tryGetAttribute "reason" attrs with
+            | Some reason when not (String.IsNullOrWhiteSpace reason) -> Some reason
+            | _ -> invalidOp $"Example '{name}' uses data-livedocs=\"no-check\" without a non-empty reason=\"...\"."
+
     /// <summary>Extracts &lt;example&gt; tags from XML documentation for verification and transclusion.</summary>
     let extractExamples (xmlDoc: string) =
         let pattern = @"<(?<tag>example|code)(?<attrs>[^>]*)>(?<code>.*?)</\k<tag>>"
@@ -79,11 +97,12 @@ module SymbolLister =
             let transcriptMarker =
                 tag.Equals("example", StringComparison.OrdinalIgnoreCase)
                 && (rawCode.Contains("> ") || rawCode.Contains("- "))
-            yield { 
-                Name =
-                    match tryGetAttribute "name" attrs with
-                    | Some value when not (String.IsNullOrWhiteSpace value) -> value
-                    | _ -> "Example"
+            let exampleName =
+                match tryGetAttribute "name" attrs with
+                | Some value when not (String.IsNullOrWhiteSpace value) -> value
+                | _ -> "Example"
+            yield {
+                Name = exampleName
                 Content = parsed.DisplayText
                 ExpectedOutput = parsed.ExpectedOutput
                 Scenario =
@@ -94,6 +113,7 @@ module SymbolLister =
                     transcriptMarker
                     || (tag.Equals("example", StringComparison.OrdinalIgnoreCase) && explicitSnapshot)
                     || (tag.Equals("code", StringComparison.OrdinalIgnoreCase) && explicitSnapshot && isFSharpCode)
+                NoCheckReason = noCheckReason exampleName attrs
             }
         ]
 

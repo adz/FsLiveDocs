@@ -6,13 +6,15 @@ val it: ExampleModel = { Name = "Basic Usage"
   Content = "1+1"
   ExpectedOutput = Some "2"
   Scenario = None
-  IsSnapshotTest = false },
+  IsSnapshotTest = false
+  NoCheckReason = None },
   ExpectedOutput: {},
   ActualOutput:
 val it: ExampleModel = { Name = "Basic Usage"
   Content = "1+1"
   ExpectedOutput = Some "2"
   Scenario = None
-  IsSnapshotTest = false },
+  IsSnapshotTest = false
+  NoCheckReason = None },
   Status: {}
 }
