@@ -1,56 +1,77 @@
 ---
-title: Dogfooding FsLiveDocs
-weight: 4
-type: explanation
+title: Dogfood FsLiveDocs
 ---
 
-# Dogfooding FsLiveDocs
+# Dogfood FsLiveDocs
 
-This project uses its own engine to generate the documentation you are reading right now. This page explains exactly how we setup the documentation for this solution.
+FsLiveDocs documents and releases itself. Use this workflow before publishing version `0.1.0`.
 
-## 🛠 Project Configuration
+## Build the repository
 
-The solution is split into 4 main projects under `./src`:
-- `FsLiveDocs.Core`
-- `FsLiveDocs.Runner`
-- `FsLiveDocs.Renderer`
-- `FsLiveDocs.Cli`
-
-All of these are passed to the `build` command to create a unified API reference.
-
-## 🧬 Every API is Documented
-
-We follow a strict rule: **Every public member must have an XML docstring.**
-
-Example from `ContentProvider.resolveSnippets`:
-
-{{< example id="ResolveSnippetExample" >}}
-
-## 🧪 Verified Examples
-
-The examples above are not just text. When we run `./scripts/preview.sh`, the following happens:
-1. `livedocs generate-tests` can scaffold a Verify-based snapshot test project for the doc examples.
-2. The selected `<example>` and `<code>` blocks are extracted from XML doc comments.
-3. It resolves the compiled project assembly and scenario setup functions.
-4. It executes the code as an FSI-style transcript and snapshots the evaluated result so changes are reviewed explicitly.
-
-## 🔗 Live Transclusion
-
-This very guide uses live code snippets from our source. For example, the `ExampleModel` record definition is pulled directly from `Models.fs`:
-
-{{< snippet id="ExampleModel" >}}
-
-## 🎨 Professional Layout
-
-We use the built-in **Tailwind CSS + DaisyUI** renderer with a 3-column layout:
-- **Left Sidebar**: Navigation for Guides and API (grouped by namespace).
-- **Center**: Prose content with full-width typography.
-- **Right Sidebar**: Dynamic "On This Page" table of contents.
-
-## 🚀 One-Click Preview
-
-To see the latest docs, we simply run:
 ```bash
-./scripts/preview.sh
+dotnet build FsLiveDocs.sln
 ```
-This script handles the build, verification, and starts the hot-reloading dev server.
+
+## Run both test suites
+
+```bash
+dotnet test tests/FsLiveDocs.Tests/FsLiveDocs.Tests.fsproj
+dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj
+```
+
+## Audit every documentation project
+
+The deep reference selects the sample project. Include it with the four product projects:
+
+```bash
+projects=(
+  src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj
+  src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj
+  src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj
+  src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj
+  samples/DeepReference/Acme.Docs/Acme.Docs.fsproj
+)
+
+dotnet livedocs audit "${projects[@]}"
+```
+
+## Rehearse capture
+
+```bash
+dotnet livedocs capture "${projects[@]}" \
+  --version 0.1.0 \
+  --output artifacts/fslivedocs-0.1.0.zip \
+  --dry-run
+```
+
+Review the API, semantic, content, and compressed sizes.
+
+## Capture the release
+
+Run capture from the exact tagged commit:
+
+```bash
+dotnet livedocs capture "${projects[@]}" \
+  --version 0.1.0 \
+  --output artifacts/fslivedocs-0.1.0.zip
+```
+
+Inspect the result:
+
+```bash
+dotnet livedocs inspect artifacts/fslivedocs-0.1.0.zip
+```
+
+## Rebuild from the capsule
+
+Add the capsule to a temporary or release history index:
+
+```bash
+dotnet livedocs history-add 0.1.0 \
+  --capsule artifacts/fslivedocs-0.1.0.zip \
+  --output .livedocs/history.json
+
+dotnet livedocs build-history .livedocs/history.json
+```
+
+This final build must use only the capsule for historical content and semantics. It must not compile an old project.

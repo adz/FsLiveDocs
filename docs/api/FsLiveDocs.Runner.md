@@ -1,25 +1,7 @@
-# 🏃 FsLiveDocs.Runner
+# FsLiveDocs.Runner
 
-The verification engine. This namespace is responsible for turning your documentation into a living test suite.
+`FsLiveDocs.Runner` owns compiler and execution behavior.
 
-## Key Modules
+It evaluates project settings through MSBuild, creates compiler inputs, maps diagnostics, extracts semantic tokens, runs FSI examples, and executes generated cases.
 
-- **DocTestRunner**: Extracts, compiles, and executes examples from XML docstrings.
-
-## Transcript Style
-
-The runner is designed around FSI transcripts, so the examples in this project are written the way you would type them into F# Interactive and read them back:
-
-> `let x = 1;;`
-> `x;;`
-> `val x: int = 1`
-
-That same shape is used in the source docs for a scenario-backed example:
-
-{{< example id="UserGreeting" >}}
-
-The runner reads the transcript, loads the scenario, and captures the evaluated result for a generated Verify snapshot test project. The older direct verifier still exists, but the recommended path is to scaffold tests with `livedocs generate-tests` and accept the resulting snapshots explicitly.
-
-## Why Verification Matters?
-
-Documentation that is out of date is worse than no documentation at all. By treating every code example as a test case, `FsLiveDocs.Runner` guarantees that your users always see code that actually works with the current version of your library.
+Keep discovery and persisted models in Core. Keep HTML generation in Renderer.

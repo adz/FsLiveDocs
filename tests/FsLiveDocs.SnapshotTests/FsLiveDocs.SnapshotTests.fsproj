@@ -23,8 +23,8 @@
     <ProjectReference Include="../../src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj" />
     <ProjectReference Include="../../src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj" />
     <ProjectReference Include="../../samples/DeepReference/Acme.Docs/Acme.Docs.fsproj" />
-    <Reference Include="FsLiveDocs.Core"><HintPath>/home/adam/projects/FsLiveDocs/main/artifacts/FsLiveDocs.Core.dll</HintPath></Reference>
-    <Reference Include="FsLiveDocs.Runner"><HintPath>/home/adam/projects/FsLiveDocs/main/artifacts/FsLiveDocs.Runner.dll</HintPath></Reference>
+    <Reference Include="FsLiveDocs.Core"><HintPath>/home/adam/projects/FsLiveDocs/main/artifacts/bin/FsLiveDocs.Cli/debug/FsLiveDocs.Core.dll</HintPath></Reference>
+    <Reference Include="FsLiveDocs.Runner"><HintPath>/home/adam/projects/FsLiveDocs/main/artifacts/bin/FsLiveDocs.Cli/debug/FsLiveDocs.Runner.dll</HintPath></Reference>
   </ItemGroup>
 
 </Project>

@@ -1,97 +1,104 @@
 ---
-title: Introduction
-weight: 0
-type: tutorial
+title: Get started
+weight: 2
 ---
 
-# Build Your First Verified Docs Site
+# Get started
 
-This tutorial walks through a minimal FsLiveDocs workflow from a blank class library to a verified documentation site.
+This guide creates a local documentation site for one F# project.
 
-The goal is simple:
+## Before you begin
 
-1. write code and document it in the same file,
-2. add an executable example,
-3. build the site,
-4. verify the example fails if the code changes.
+You need:
 
-## 1. Create a project
+- the .NET SDK used by your project;
+- a successful project build;
+- FsLiveDocs installed as a local or global .NET tool.
 
-Start with a normal class library:
+## Install the tool
 
-```bash
-dotnet new classlib -lang F# -n MyLibrary
-cd MyLibrary
-```
-
-Add FsLiveDocs to the solution or install the local tool you use for the repo.
+Create a tool manifest and install FsLiveDocs:
 
 ```bash
-dotnet tool restore
+dotnet new tool-manifest
+dotnet tool install FsLiveDocs --version 0.1.0
 ```
 
-## 2. Write documented code
+## Initialize the repository
 
-Document the API directly in your source file:
-
-```fsharp
-namespace MyLibrary
-
-module Math =
-    /// <summary>Adds two numbers and returns the result.</summary>
-    /// <example name="BasicAdd">
-    /// > Math.add 10 20;;
-    /// val it: int = 30
-    /// </example>
-    let add x y = x + y
-```
-
-The `summary` becomes the reference text on the API page. The `example` becomes a real test.
-
-## 3. Scaffold the docs site
-
-Use the CLI to create the default docs layout:
+Run this command from the repository root:
 
 ```bash
-livedocs init
+dotnet livedocs init
 ```
 
-This creates the `.livedocs/` history folder and a starter `docs/index.md` file.
+The command creates:
 
-## 4. Build and preview
+- `.livedocs/config.json` for site configuration;
+- `.livedocs/history.json` for release capsules;
+- `docs/index.md` as a starter page;
+- cache and release-download entries in `.gitignore`.
 
-Build the site from your project:
+The command does not replace existing files.
 
-```bash
-livedocs build src/MyLibrary/MyLibrary.fsproj
-```
+## Add a guide page
 
-If you want the full local workflow, run the preview script used by this repo:
+Create `docs/getting-started.md`:
 
-```bash
-./scripts/preview.sh
-```
+````markdown
+---
+title: Getting started
+---
 
-That pipeline compiles your code, extracts symbols, renders the static site, and runs the example verification pass.
-
-## 5. Check the failure mode
-
-Change the implementation so the example is wrong:
+# Getting started
 
 ```fsharp isolated
-let add x y = x * y
+let greeting name = $"Hello, {name}!"
+greeting "Ada"
+```
+````
+
+The `isolated` mode checks the block independently. Use an ordinary `fsharp` fence when later blocks depend on earlier blocks on the same page.
+
+## Audit the documentation
+
+Build your project, then audit every F# block:
+
+```bash
+dotnet build
+dotnet livedocs audit src/YourLibrary/YourLibrary.fsproj
 ```
 
-Build again. The verification step now fails because the documented output no longer matches the executable example.
+Fix compilation failures or mark deliberate pseudocode with a reason:
 
-That is the core FsLiveDocs loop: docs are only published if they still run.
+````markdown
+```fsharp no-check reason="The omitted branch is application-specific"
+match result with
+| Ok value -> save value
+| Error _ -> ...
+```
+````
 
-## 6. What to add next
+## Build the site
 
-Once the tutorial works, expand the site with:
+```bash
+dotnet livedocs build src/YourLibrary/YourLibrary.fsproj
+```
 
-1. API reference pages for each module and type.
-2. Examples that cover edge cases and error paths.
-3. A guide for when to use doc-tests and when to use ordinary tests.
+The generated site is in `output/`.
 
-Next, read the [Verified Examples guide](guides/verified-examples.html) for a task-oriented walkthrough of scenarios and setup functions.
+## Preview changes
+
+```bash
+dotnet livedocs watch src/YourLibrary/YourLibrary.fsproj \
+  --host 127.0.0.1 \
+  --port 5000
+```
+
+The watcher rebuilds after source, project, configuration, or documentation changes.
+
+## Continue
+
+- [Verify examples](guides/verified-examples.md).
+- [Configure navigation](guides/navigation.md).
+- [Capture a release](guides/releases.md).

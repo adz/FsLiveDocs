@@ -1,26 +1,9 @@
-# 🏗️ FsLiveDocs.Renderer.SiteBuilder
+# SiteBuilder
 
-The assembly line for your documentation. It takes the `PackageModel` and `ContentPage` list and transforms them into a beautiful, static HTML site.
+`SiteBuilder` renders guide pages, API pages, the API index, version navigation, and `llms.txt`.
 
-## Design Philosophy
+Use `build` for one resolved site. Use `buildHistory` for a set of verified release sites.
 
-The `SiteBuilder` uses **Giraffe.ViewEngine** for fast, type-safe HTML generation. It prioritizes:
-- **Performance**: Static site generation means instant load times.
-- **Aesthetics**: Built-in support for DaisyUI and TailwindCSS.
-- **Searchability**: Automatically indexes content using Pagefind.
+`buildHistory` renders the current version at the output root and older versions below `history/<version>/`.
 
-## Key Functions
-
-- `build`: Renders the entire site, including guides, API pages, and the search index.
-- `renderEntityPage`: Generates the detailed view for a specific module or type.
-- `generateLlmsTxt`: Produces an `llms.txt` file for AI-assisted development.
-
-{{< example id="GenerateLlmsTxtExample" >}}
-
-## Customization
-
-You can control the look and feel of your site by passing a `theme` parameter (e.g., `emerald`, `dark`, `retro`).
-
-```fsharp no-check reason="Abbreviated invocation; package, pages, and versions come from the build context"
-SiteBuilder.build package pages versions "emerald" "" "output"
-```
+Callers provide renderer-neutral package and content models. `SiteBuilder` owns final HTML and generated-link validation.

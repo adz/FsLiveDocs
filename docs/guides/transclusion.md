@@ -1,15 +1,14 @@
 ---
-title: Snippet Transclusion
-weight: 2
-type: how-to
+title: Transclude source and examples
 ---
-# Snippet Transclusion
 
-You can pull live code directly from your source files into your documentation. This ensures that when your implementation changes, your docs update automatically.
+# Transclude source and examples
 
-## How it works
+Transclude compiled source or verified XML examples instead of copying code into a guide.
 
-Mark your code with snippet tags:
+## Mark a source snippet
+
+Add markers around the source:
 
 ```fsharp isolated
 // <snippet:ProjectStructure>
@@ -20,12 +19,26 @@ type SourceLink = {
 // </snippet:ProjectStructure>
 ```
 
-Then reference it in your markdown docs:
+Reference the snippet from Markdown:
 
-```
-\{{snippet id="ProjectStructure" }}
-```
-
-Here it's actually pulling from the snippet: xref:T:FsLiveDocs.Core.SourceLink
-
+```text
 {{< snippet id="ProjectStructure" mode="isolated" >}}
+```
+
+Supported modes are `prepare`, `isolated`, `run`, and `no-check`. A `no-check` snippet also requires `reason="..."`.
+
+## Transclude an XML example
+
+Reference a named XML example:
+
+```text
+{{< example id="CreateExample" >}}
+```
+
+FsLiveDocs preserves the example's execution or exclusion contract when it creates the canonical fenced block.
+
+## Understand release capture
+
+Capture expands transclusions before it stores canonical Markdown. A later history render does not need the original source file or shortcode implementation.
+
+Cross-references remain semantic until render time so the current renderer can create current page URLs.

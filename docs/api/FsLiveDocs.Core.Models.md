@@ -1,16 +1,13 @@
-# 🏛️ FsLiveDocs.Core.Models
+# FsLiveDocs.Core models
 
-The blueprint of the documentation engine. This module defines the domain models used to represent symbols, members, examples, and the overall package structure.
+Core models separate release data from diagnostics, runner results, and rendered site state.
 
-## Key Types
+`ApiModelArtifact` stores the public API graph and `DocumentationNode` values.
 
-- `PackageModel`: The root container for a documentation version.
-- `EntityModel`: Represents a Module, Type, Union, or Record.
-- `MemberModel`: Represents a function, method, or property.
-- `ExampleModel`: Represents an executable code snippet.
+`SemanticDocumentationArtifact` stores compiler-derived code meaning.
 
-## Serialization
+`ReleaseContentArtifact` stores canonical Markdown, metadata, assets, and site configuration.
 
-The models are designed to be serialized to JSON, allowing them to be stored in the `.livedocs/history` directory and used for versioned documentation.
+`ReleaseCapsuleManifest` binds components to a product version, source revision, sizes, and checksums.
 
-{{< example id="CreateExample" >}}
+Each persisted component owns its schema version.

@@ -1,104 +1,49 @@
 ---
-title: Frontmatter Reference
-type: reference
+title: Configure pages with front matter
 ---
 
-# Frontmatter Reference
+# Configure pages with front matter
 
-Frontmatter is the YAML block at the top of a Markdown file, wrapped in `---` lines.
-FsLiveDocs reads it before rendering the page and uses it for the page title and advisory metadata.
-
-## Basic shape
+Add YAML front matter at the start of a Markdown page.
 
 ```yaml
 ---
-title: Verified Examples
-type: how-to
+title: HTTP client
+type: guide
+project: src/Example.Http/Example.Http.fsproj
+targetFramework: net10.0
+platform: dotnet
 ---
 ```
 
-Anything below the closing `---` is normal Markdown content.
+## Set the page title
 
-## Supported fields
+Use `title` to set the browser title, heading metadata, and navigation label.
 
-| Field | Type | Required | What it does |
-| :--- | :--- | :--- | :--- |
-| `title` | string | Yes, when frontmatter is present | Sets the page title shown in navigation and the browser title. |
-| `type` | string | No | Advisory metadata for the page itself. It is not used to build the sidebar. |
+When you omit `title`, FsLiveDocs derives one from the file name.
 
-## How FsLiveDocs uses it
+## Select a project
 
-FsLiveDocs currently uses frontmatter for two things:
+Use `project` to select the compiler context for F# blocks on this page.
 
-1. `title` controls how the page appears in the sidebar and in the browser title.
-2. `type` describes the kind of page you are writing, but it does not drive sidebar grouping.
+Resolve the path from the repository root or documentation root. Pass the selected project to every audit, build, test-generation, and capture command.
 
-The sidebar itself is derived from the `docs/` folder structure, not from `type`.
+## Select a target framework
 
-## Practical examples
-
-### Tutorial page
+Use `targetFramework` when the selected project targets more than one framework:
 
 ```yaml
----
-title: Introduction
-type: tutorial
----
+targetFramework: net10.0
 ```
 
-Use this for a first-time walkthrough that teaches a reader how to get started.
+The framework must appear in the project. FsLiveDocs fails before compilation when it does not.
 
-### How-to page
+## Declare a platform
 
-```yaml
----
-title: Verified Examples
-type: how-to
----
-```
+Use `platform: dotnet` for .NET compiler verification.
 
-Use this for a task-focused guide that solves a specific problem.
+Fable compiler verification is not available yet. Pages marked `platform: fable` must exclude each F# block with a specific `no-check` reason.
 
-### Explanation page
+## Use stable paths
 
-```yaml
----
-title: Navigation and Ordering
-type: explanation
----
-```
-
-Use this when the page explains concepts, trade-offs, or structure.
-
-### Reference page
-
-```yaml
----
-title: Cheat Sheet
-type: reference
----
-```
-
-Use this for concise lookup material.
-
-## Ordering rules
-
-Files and folders in the same directory are ordered together by a numeric prefix such as `01-`, `02-`, or `03-`.
-The prefix is omitted from generated URLs and fallback titles. Items without a prefix follow numbered items and are
-ordered by title.
-
-## Defaults and omissions
-
-If a Markdown file has no frontmatter, FsLiveDocs falls back to the file name as the title.
-
-Use numeric file and folder prefixes to keep the sidebar stable and predictable.
-
-## What to avoid
-
-1. Do not use `type` to try to force a sidebar section.
-2. Do not omit numeric prefixes if you care about the final sidebar position.
-3. Do not leave titles vague if the page name alone will not make sense in the sidebar.
-
-## When to use frontmatter
-
-Use frontmatter when a page needs a clearer title or content type than its filename conveys.
+Page paths become stable block identities and release-content paths. Rename a released page only in a new release capsule.

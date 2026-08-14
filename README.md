@@ -1,97 +1,143 @@
 # FsLiveDocs
 
-FsLiveDocs is a "verified documentation" engine for F#. It treats your documentation as a first-class citizen of your codebase, ensuring every example compiles and runs exactly as shown.
+FsLiveDocs builds verified, semantic, versioned documentation for F# libraries.
 
-Start with the short tutorial, then use the [complete consumer deep reference](docs/deep-reference.md) for a copyable
-repository layout covering setup, every code-block contract, snippets, XML examples, generated tests, configuration,
-CI, releases, semantic artifacts, and history builds.
+Use FsLiveDocs to:
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
-[![Target](https://img.shields.io/badge/.NET-10.0-blue)](#)
+- generate API reference pages from compiled projects;
+- compile every F# guide example with the selected project settings;
+- run examples only when you mark them for execution;
+- add compiler-derived types and documentation tooltips to code blocks;
+- capture immutable, renderer-neutral release capsules;
+- rebuild historical sites without restoring or compiling old projects.
 
-## Key Features
+## Install FsLiveDocs
 
-- **Verified Docstrings**: Code in `/// <example>` tags is extracted and run against your actual project.
-- **Verified Guide Code**: Expanded F# fences have stable identities and explicit page, isolated, run, transcript, or exclusion contracts.
-- **Semantic Hovers**: Compiler-derived types and XML documentation are generated at build time; the browser never compiles F#.
-- **Snippet Transclusion**: Use `{{< snippet id="Name" >}}` to pull live code from `.fs` files.
-- **Semantic Cross-References**: Link to API members using `xref:M:Namespace.Type.Method`.
-- **Version History**: Rebuild complete historical sites from checksum-verified API models and tagged documentation trees.
-- **Modern Search**: Integrated **Pagefind** for lightning-fast, zero-config static search.
-- **🤖 LLM Ready**: Automatically generates `llms.txt` to help AI assistants understand your API.
-- **⚡ Hot Reload**: Use `livedocs watch` for a live-rebuilding dev server.
+Add FsLiveDocs to a tool manifest:
 
-## 🛠 Installation & Usage
-
-1. **Setup Environment and pin the tool**:
-   Ensure you have the .NET 10 SDK and Node.js installed. We recommend using `mise`.
-   ```bash
-   mise use dotnet@10.0
-   mise use node@22
-   dotnet new tool-manifest
-   dotnet tool install FsLiveDocs
-   dotnet tool restore
-   ```
-
-   Invoke a manifest-installed tool as `dotnet livedocs`; the shorter `livedocs` used below is equivalent when the
-   tool is installed globally or on `PATH`.
-
-2. **Initialize**:
-   ```bash
-   livedocs init
-   ```
-
-3. **Audit and verify examples**:
-   ```bash
-   livedocs audit path/to/your/project.fsproj
-   livedocs test path/to/your/project.fsproj
-   ```
-
-   The same compiler-backed audit is enforced by `test` and production `build`. Ordinary `fsharp` guide blocks
-   compile in page scope but do not run. Add `run` only for intentional execution,
-   `isolated` for standalone blocks, `prepare` for hidden setup, or `no-check reason="…"` for deliberate pseudocode.
-
-4. **Build Static Site**:
-   ```bash
-   livedocs build path/to/your/project.fsproj
-   ```
-
-   Preview on the default `0.0.0.0:5000` listener, or choose the interface and port:
-   ```bash
-   livedocs watch path/to/your/project.fsproj --host 0.0.0.0 --port 8080
-   ```
-
-   Consumer branding can be configured in `.livedocs/config.json`:
-   ```json
-   {
-     "siteName": "Example Library",
-     "logoText": "EL",
-     "logoPath": "content/logo-light.svg",
-     "logoDarkPath": "content/logo-dark.svg",
-     "showSiteName": true,
-     "stylesheet": "content/site.css",
-     "themes": ["light", "dark"]
-   }
-   ```
-   Image paths may be root-relative site paths or absolute URLs. `logoText` remains the fallback when `logoPath` is
-   absent. Files below the consumer's `docs/` tree are copied into the generated site, so a path such as
-   `content/logo-light.svg` can be sourced from `docs/content/logo-light.svg`.
-
-5. **Build release history**:
-   ```bash
-   livedocs extract path/to/your/project.fsproj --version 1.2.0 --output model.json
-   livedocs build-history path/to/local-history-manifest.json
-   ```
-
-`extract` writes a schema-versioned API artifact. `build-history` verifies every artifact against the SHA-256 and
-version declared by its local manifest, then renders each version from its own Markdown/assets using the currently
-installed FsLiveDocs templates. Release automation is responsible for downloading immutable models and checking out
-the matching tagged documentation trees before invoking the build.
-
-## 📜 Publishing
-
-Use the provided publish script to generate a production-ready artifact:
 ```bash
-./scripts/publish.sh
+dotnet new tool-manifest
+dotnet tool install FsLiveDocs --version 0.1.0
 ```
-The output will be located in `./artifacts/livedocs`.
+
+Restore the tool in CI:
+
+```bash
+dotnet tool restore
+```
+
+## Create a documentation site
+
+Initialize the repository:
+
+```bash
+dotnet livedocs init
+```
+
+Build your project before FsLiveDocs reads its API:
+
+```bash
+dotnet build
+```
+
+Audit and build the documentation:
+
+```bash
+dotnet livedocs audit src/YourLibrary/YourLibrary.fsproj
+dotnet livedocs build src/YourLibrary/YourLibrary.fsproj
+```
+
+Open a local preview while you edit:
+
+```bash
+dotnet livedocs watch src/YourLibrary/YourLibrary.fsproj \
+  --host 127.0.0.1 \
+  --port 5000
+```
+
+The generated site is in `output/`.
+
+## Verify examples in tests
+
+Generate stable xUnit cases from the same discovery result used by the build:
+
+```bash
+dotnet livedocs generate-tests src/YourLibrary/YourLibrary.fsproj
+dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj
+```
+
+Generated tests call one FsLiveDocs runner interface. They don't reproduce coverage, compilation, or execution policy.
+
+## Capture a release
+
+Create a self-contained release capsule after verification succeeds:
+
+```bash
+dotnet livedocs capture src/YourLibrary/YourLibrary.fsproj \
+  --version 1.4.0 \
+  --output artifacts/your-library-livedocs-1.4.0.zip
+```
+
+Capture writes the capsule and a machine-readable `.report.json` file. It prints component sizes, inventory counts, compressed and uncompressed sizes, and the capsule SHA-256.
+
+Validate the process without writing the requested output:
+
+```bash
+dotnet livedocs capture src/YourLibrary/YourLibrary.fsproj \
+  --version 1.4.0 \
+  --output artifacts/your-library-livedocs-1.4.0.zip \
+  --dry-run
+```
+
+Inspect an existing capsule:
+
+```bash
+dotnet livedocs inspect artifacts/your-library-livedocs-1.4.0.zip
+```
+
+The capsule stores API meaning, canonical Markdown and assets, and compiler-derived code semantics. It does not store generated HTML.
+
+## Build version history
+
+Add a local capsule to the history index:
+
+```bash
+dotnet livedocs history-add 1.4.0 \
+  --capsule artifacts/your-library-livedocs-1.4.0.zip
+```
+
+Add a remote capsule with its expected checksum:
+
+```bash
+dotnet livedocs history-add 1.4.0 \
+  --url https://github.com/example/your-library/releases/download/v1.4.0/your-library-livedocs-1.4.0.zip \
+  --sha256 <sha256>
+```
+
+Render every indexed version:
+
+```bash
+dotnet livedocs build-history .livedocs/history.json
+```
+
+FsLiveDocs verifies and caches remote capsules under `.livedocs/releases/`. Historical rendering does not compile the historical project.
+
+## Learn more
+
+- [Get started](docs/introduction.md)
+- [Author and verify examples](docs/guides/verified-examples.md)
+- [Capture and publish releases](docs/guides/releases.md)
+- [Configure semantic code](docs/guides/semantic-code.md)
+- [Use the command reference](docs/cheat-sheet.md)
+- [Read the complete reference](docs/deep-reference.md)
+
+## Develop FsLiveDocs
+
+Build and test the repository:
+
+```bash
+dotnet build FsLiveDocs.sln
+dotnet test FsLiveDocs.sln
+```
+
+See [Dogfood FsLiveDocs](docs/dogfooding.md) for the self-hosting workflow.

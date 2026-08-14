@@ -1,114 +1,82 @@
 ---
-title: Advanced Guide
-weight: 5
-type: explanation
+title: Advanced authoring
 ---
 
-# 🧬 Advanced Guide: Under the Hood
+# Advanced authoring
 
-This guide covers the advanced architecture of FsLiveDocs and how it builds upon existing F# tooling rather than replacing it.
+Use these features after you can build and audit a basic site.
 
-## 🤝 Relationship with fsdocs
+## Document multiple projects
 
-If you are coming from `fsdocs`, you'll find FsLiveDocs familiar but more opinionated about **verification**. While `fsdocs` is a great general-purpose tool, FsLiveDocs focuses on the **execution lifecycle** of your examples.
-
-We use `FSharp.Compiler.Service` just like `fsdocs`, but we treat the resulting symbol tree as a **verified knowledge graph**.
-
-## Semantic F# code hovers
-
-During a normal `livedocs build`, every `fsharp` fence in a guide or API enrichment page is checked against the
-assemblies passed to the build command. The generated page shows compiler-derived types and XML documentation when a
-reader hovers over, or focuses, an identifier. The browser displays metadata generated at build time; it does not run
-the F# compiler.
-
-Mark an intentionally incomplete fragment with `no-check` to keep ordinary syntax highlighting without semantic
-tooltips:
-
-````markdown
-```fsharp no-check reason="Intentionally incomplete declaration"
-let unfinished =
-```
-````
-
-Use `transcript` for code that includes FSI prompts or output:
-
-````markdown
-```fsharp transcript
-> 40 + 2;;
-val it: int = 42
-```
-````
-
-The complete authoring model—including page scope, hidden preparation, isolated examples, explicit execution, audit,
-and immutable history data—is covered in [Semantic and Verified Code Blocks](guides/semantic-code.html).
-
-## 🔍 Accessing Symbols & Modules
-
-FsLiveDocs makes it easy to access the underlying API metadata via the `PackageModel`. You can use the `extract` command to get a full JSON dump of your project's documented symbols:
+Pass every documented project to each command:
 
 ```bash
-livedocs extract MyProject.fsproj --version 1.2.0 --output model.json
+dotnet livedocs build \
+  src/Example.Core/Example.Core.fsproj \
+  src/Example.Http/Example.Http.fsproj
 ```
 
-This generates a schema-versioned API model. Use it as an immutable release asset rather than committing generated
-HTML or treating a Pages branch as history.
+FsLiveDocs merges the public API graphs and records package provenance. Select a page compiler context with front matter when needed.
 
-A local history build consumes a materialized manifest:
+## Treat API warnings as errors
+
+Extraction reports unnamed parameters, inconsistent signature names, and related API quality issues as warnings.
+
+Fail on those warnings after your project adopts the policy:
+
+```bash
+dotnet livedocs build src/Example/Example.fsproj --warn-as-error
+```
+
+## Add repository-wide F# setup
+
+Set a prelude in `.livedocs/config.json`:
 
 ```json
 {
-  "schemaVersion": 1,
-  "currentVersion": "1.2.0",
-  "entries": [
-    {
-      "version": "1.2.0",
-      "modelPath": "models/1.2.0.json",
-      "modelSha256": "<lowercase sha256>",
-      "semanticPath": "models/1.2.0.semantic.json",
-      "semanticSha256": "<lowercase sha256>",
-      "docsPath": "sources/1.2.0/docs"
-    }
+  "fSharpPrelude": "open System\nopen Example"
+}
+```
+
+Use page-local `prepare` blocks when setup applies to one guide only.
+
+## Customize the site
+
+Configure branding and navigation:
+
+```json
+{
+  "siteName": "Example",
+  "repoUrl": "https://github.com/example/example",
+  "logoPath": "content/logo.svg",
+  "logoDarkPath": "content/logo-dark.svg",
+  "stylesheet": "content/site.css",
+  "themes": ["light", "dark"],
+  "navigation": [
+    { "label": "Guides", "href": "index.html" },
+    { "label": "Source", "href": "https://github.com/example/example" }
   ]
 }
 ```
 
-```bash
-livedocs build-history .livedocs/build-history/manifest.json
-```
+Place referenced files under `docs/`. FsLiveDocs captures them as immutable release assets.
 
-FsLiveDocs fails when an artifact is absent, its checksum differs, its schema is unsupported, or its embedded version
-does not match the manifest. It then renders current docs at the site root and older versions under
-`history/{version}/`.
-
-You can use the API model to:
-1.  **Generate custom UIs**: Build your own documentation frontend using the verified metadata.
-2.  **AI Training**: Feed the JSON into an LLM to help it understand your API signatures.
-3.  **Diffing**: Compare two versions of your API to find breaking changes.
-
-## 🛠 Multi-Project Merging
-
-One of the most powerful features is the ability to document an entire solution as a single unit. When you pass multiple `.fsproj` files to the `build` command, FsLiveDocs merges them:
+## Capture several projects
 
 ```bash
-livedocs build src/Core.fsproj src/Plugin.fsproj src/CLI.fsproj
+dotnet livedocs capture \
+  src/Example.Core/Example.Core.fsproj \
+  src/Example.Http/Example.Http.fsproj \
+  --version 2.0.0 \
+  --output artifacts/example-livedocs-2.0.0.zip
 ```
 
-The `SymbolLister.merge` function handles deduplication and provides a unified functional area view in the sidebar.
+Only page-selected projects require compiler evaluation. Other documented projects contribute their built assemblies to the shared reference context.
 
-## 📜 Long-Form Module Introductions
+## Keep compatibility explicit
 
-XML docstrings can sometimes feel cramped for large modules. FsLiveDocs lets you produce high-quality module introductions with standalone Markdown files because they can be longer, more structured, and easier to scan than a single docstring.
+API, semantic, content, capsule-manifest, and history-index schemas evolve independently.
 
-Simply create a file in `docs/api/{Namespace.Module}.md`. The engine will automatically transclude this file's content as the high-level summary for that module in the generated API reference.
+Loaders accept explicitly supported versions and reject unknown versions. Published capsules are immutable.
 
-## 🧪 Custom Scenarios
-
-If your code examples require a specific state, use the `[<DocScenario>]` attribute. This lets you define a setup function in source and connect it to examples by name. The generated snapshot project uses that link to run the setup before evaluating the transcript.
-
-{{< example id="DocScenarioUsage" >}}
-
-For the full selection and acceptance workflow, see the [Verified Examples](guides/verified-examples.html) guide.
-
----
-
-*For more information, check the [Cheat Sheet](cheat-sheet.html).*
+See [Capture and publish releases](guides/releases.md) for the complete workflow.

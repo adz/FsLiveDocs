@@ -1,18 +1,9 @@
-# 💻 FsLiveDocs.Cli
+# FsLiveDocs.Cli
 
-The command-line interface for FsLiveDocs. This project provides the `livedocs` tool used to scaffold, build, and test your documentation.
+`FsLiveDocs.Cli` provides the `livedocs` .NET tool.
 
-## Commands
+Use it to initialize repositories, audit examples, generate tests, build sites, capture capsules, inspect releases, maintain history indexes, and render history.
 
-- `init`: Scaffolds a new project.
-- `build`: Generates the static documentation site.
-- `generate-tests`: Generates a Verify-based snapshot test project for selected examples.
-- `test`: Runs the legacy direct docstring verifier.
-- `watch`: Starts a dev server with hot-reloading.
-- `extract`: Dumps the `PackageModel` to JSON.
+For command syntax, see the [command reference](../cheat-sheet.md).
 
-## Usage
-
-```bash
-livedocs build MyProject.fsproj --theme emerald
-```
+For release procedures, see [Capture and publish releases](../guides/releases.md).

@@ -1,36 +1,7 @@
-# 🧪 FsLiveDocs.Runner.DocTestRunner
+# DocTestRunner
 
-Ensures your documentation never lies. The `DocTestRunner` extracts code examples from your XML docstrings and prepares snapshot payloads that a generated Verify project can verify.
+`DocTestRunner` supports named XML documentation snapshots.
 
-## How it Works
+Use `snapshotExampleNames` to enumerate explicitly selected examples. Use `collectSnapshotByName` to execute one example and return its owned snapshot result.
 
-1.  **Extraction**: It finds transcript-style `<example>` tags in your source code, plus explicit snapshot examples marked with `data-livedocs="snapshot"`.
-2.  **Preparation**: It loads the built project assembly, any setup scenarios, and the example metadata that will be written into the Verify project.
-3.  **Execution**: It runs each selected example as a transcript-style FSI session and records the evaluated result for snapshot verification.
-
-## Examples
-
-If you have a function like this:
-
-```fsharp
-/// <example>
-/// > let add x y = x + y;;
-/// > add 1 1;;
-/// val it: int = 2
-/// </example>
-let add x y = x + y
-```
-
-The `DocTestRunner` will capture that example in the generated snapshot project and verify that it still produces `val it: int = 2`.
-
-## Scenarios
-
-For more complex examples that require setup (like a database connection), you can use `[<DocScenario>]`.
-
-{{< example id="DocScenarioUsage" >}}
-
-## Key Functions
-
-- `collectSnapshots`: Returns the snapshot payload used by the generated Verify project.
-- `verifyExamples`: The legacy direct verifier for transcript-style examples.
-- `resolveAssemblyPath`: Locates the built assembly used by the transcript runner.
+Generated Markdown verification does not call `DocTestRunner` directly. It uses stable `GeneratedVerificationCase` values and `GeneratedVerification.runCase`.

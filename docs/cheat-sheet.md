@@ -1,78 +1,68 @@
 ---
-title: Cheat Sheet
-weight: 9
-type: reference
+title: Command reference
 ---
 
-# FsLiveDocs Cheat Sheet
+# Command reference
 
-## 🛠 Project Structure
+Run commands from the repository root. Build documented projects before commands that extract or verify APIs.
 
-- `./src/`: Core, Runner, Renderer, and CLI projects.
-- `./tests/`: xUnit test suite.
-- `./artifacts/`: Build outputs (managed by .NET 10).
-- `./scripts/`: Automation scripts (`publish.sh`).
+## Repository setup
 
-## 🚀 CLI Commands
+| Command | Result |
+| --- | --- |
+| `livedocs init` | Create starter configuration, history, docs, and ignore entries. |
+| `livedocs ci` | Create a GitHub Actions verification and release workflow. |
 
-| Command | Description |
-| :--- | :--- |
-| `livedocs init` | Scaffold a new project structure (`docs/` folder). |
-| `livedocs ci` | Generate GitHub Actions workflow. |
-| `livedocs generate-tests <fsproj...>` | Generate a Verify-based snapshot test project. |
-| `livedocs test <fsproj>` | Run the legacy direct docstring verifier. |
-| `livedocs audit <fsproj...>` | MSBuild-evaluate and compile all expanded F# blocks; report mapped modes, exclusions, and failures. |
-| `livedocs build <fsproj>` | Generate the static documentation site. |
-| `livedocs watch <fsproj>` | Start dev server with live rebuilds. |
-| `livedocs theme <name>` | Set DaisyUI theme (e.g., `dark`, `cupcake`). |
+## Authoring and verification
 
-## 🧪 Verifying Docstrings
+| Command | Result |
+| --- | --- |
+| `livedocs audit <projects...>` | Validate modes, coverage, and compilation. |
+| `livedocs test <projects...>` | Audit and run explicitly executable examples. |
+| `livedocs generate-tests <projects...>` | Generate stable xUnit and Verify cases. |
+| `livedocs build <projects...>` | Verify and render the current site to `output/`. |
+| `livedocs watch <projects...>` | Rebuild and serve the site after changes. |
 
-Add examples directly to your function documentation. Transcript-style examples are picked up automatically; if you want to be explicit, add `data-livedocs="snapshot"`:
+## Releases and history
 
-```fsharp
-/// <summary>Adds two integers.</summary>
-/// <example name="AddTest" data-livedocs="snapshot">
-/// > Math.add 1 2;;
-/// val it: int = 3
-/// </example>
-let add x y = x + y
-```
+| Command | Result |
+| --- | --- |
+| `livedocs capture <projects...> --version <v> --output <zip>` | Verify and create an immutable capsule. |
+| `livedocs capture ... --dry-run` | Validate capture and report expected sizes. |
+| `livedocs inspect <zip>` | Verify and describe a capsule. |
+| `livedocs history-add <v> --capsule <zip>` | Add a local capsule and calculated checksum. |
+| `livedocs history-add <v> --url <https-url> --sha256 <hash>` | Add a remote immutable capsule. |
+| `livedocs build-history <index>` | Verify and render every indexed release. |
+| `livedocs extract <projects...>` | Write legacy loose API and semantic artifacts. |
 
-## 🔗 Shortcodes
+## Common options
 
-| Shortcode | Description |
-| :--- | :--- |
-| `{{< snippet id="X" >}}` | Pull code from source file marked with `<snippet:X>`. |
-| `{{< example id="X" >}}` | Pull verified example with name `X`. |
-| `xref:M:Namespace.Func` | Create a semantic link to an API member. |
+| Option | Use |
+| --- | --- |
+| `--version <v>` | Set the captured or rendered product version. |
+| `--output <path>` | Set an artifact or index output path. |
+| `--theme <name>` | Select the initial site theme. |
+| `--warn-as-error` | Fail on API documentation quality warnings. |
+| `--host <address>` | Set the preview bind address. |
+| `--port <number>` | Set the preview port. |
+| `--ignore <names>` | Add watcher directory names to ignore. |
 
-## F# Fence Contracts
+## Fence modes
 
-| Fence info | Meaning |
-| :--- | :--- |
-| `fsharp` | Compile in the shared page context; do not execute. |
-| `fsharp prepare` | Hidden setup for later page blocks. |
-| `fsharp isolated` | Compile alone. |
-| `fsharp run` | Compile, then explicitly execute. |
-| `fsharp transcript` | Verify an FSI transcript. |
-| `fsharp no-check reason="…"` | Display deliberate pseudocode with an audit reason. |
+| Mode | Compilation | Execution | Display |
+| --- | --- | --- | --- |
+| `fsharp` | Page unit | No | Yes |
+| `fsharp prepare` | Page unit | No | Shared setup |
+| `fsharp isolated` | Separate unit | No | Yes |
+| `fsharp run` | Page unit | Yes | Yes |
+| `fsharp transcript` | Transcript runner | Yes | Yes |
+| `fsharp no-check reason="..."` | No | No | Syntax only |
 
-## 🎨 DaisyUI Themes
+## Shortcodes and references
 
-Available themes include: `light`, `dark`, `cupcake`, `bumblebee`, `emerald`, `corporate`, `synthwave`, `retro`, `cyberpunk`, `valentine`, `halloween`, `garden`, `forest`, `aqua`, `lofi`, `pastel`, `fantasy`, `wireframe`, `black`, `luxury`, `dracula`, `cmyk`, `autumn`, `business`, `acid`, `lemonade`, `night`, `coffee`, `winter`.
-
----
-
-## 🏗 Build & Publish
-
-```bash
-# Full build and test
-mise x -- dotnet test
-
-# Build production binary
-./scripts/publish.sh
-
-# Run production binary
-./artifacts/livedocs --help
-```
+| Syntax | Result |
+| --- | --- |
+| `{{< snippet id="Name" >}}` | Transclude a marked F# source region. |
+| `{{< example id="Name" >}}` | Transclude an XML documentation example. |
+| `xref:T:Namespace.Type` | Link to a documented entity. |
+| `xref:M:Namespace.Module.member` | Link to a documented member. |

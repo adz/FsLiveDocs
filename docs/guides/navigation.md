@@ -1,39 +1,45 @@
 ---
-title: Navigation and Ordering
-type: explanation
+title: Configure navigation and branding
 ---
 
-# Sidebar Ordering and Sections
+# Configure navigation and branding
 
-FsLiveDocs groups the left sidebar automatically from the `docs/` folder structure so the navigation stays predictable as the site grows.
+Edit `.livedocs/config.json` to configure the generated site.
 
-## How ordering works
+```json
+{
+  "siteName": "Example Library",
+  "repoUrl": "https://github.com/example/library",
+  "logoText": "EX",
+  "logoPath": "content/logo.svg",
+  "logoDarkPath": "content/logo-dark.svg",
+  "showSiteName": true,
+  "stylesheet": "content/site.css",
+  "themes": ["light", "dark"],
+  "navigation": [
+    { "label": "Guides", "href": "index.html" },
+    { "label": "API", "href": "api.html" },
+    { "label": "Source", "href": "https://github.com/example/library" }
+  ]
+}
+```
 
-1. Pages in the `docs/` root appear in the Overview section.
-2. Pages in `docs/guides/` appear in the Guides section.
-3. Pages in `docs/api/` appear in the API Docs section.
-4. Generated API reference pages appear in the API Reference section.
+## Add local assets
 
-Subfolders become nested, collapsible groups at any depth. A subfolder's `_index.md` supplies its displayed title;
-otherwise FsLiveDocs derives the title from the folder name. Each group starts closed unless it contains the current
-page. Files and child folders participate in one ordering, using their numeric filename prefixes. FsLiveDocs removes
-those prefixes from generated URLs and fallback titles.
+Place logos, stylesheets, images, and downloads under `docs/`.
 
-For example, `01-overview.md`, `02-tutorials/`, and `03-reference.md` appear in that order. Inside `02-tutorials/`,
-use the same convention (`01-first-steps.md`, `02-next-steps.md`, and so on).
+Use site-root-relative paths in configuration. FsLiveDocs copies these files into current output and captures them in release capsules.
 
-## Why this matters
+## Add navigation links
 
-We use the Diátaxis structure to decide what kind of content belongs in the docs:
+Use generated site paths for internal links and absolute HTTPS URLs for external links.
 
-1. tutorials for first-time setup,
-2. how-to guides for repeatable tasks,
-3. explanations for architecture and trade-offs,
-4. API reference for the generated code model.
+FsLiveDocs adjusts internal navigation for nested guide and history pages.
 
-That structure informs the content. The sidebar still follows the `docs/` folder layout so it remains automatic and easy to predict.
+## Configure themes
 
-If you add a page or folder, place it in the right directory and give it a numeric prefix for its position. The `type`
-frontmatter is advisory metadata for the page itself, not the sidebar.
+Set `themes` to the names exposed by the theme picker. The first configured or command-selected theme becomes the initial theme.
 
-For a field-by-field reference, see [Frontmatter Reference](frontmatter.html).
+## Add source links
+
+Set `repoUrl` to a GitHub repository URL. API members with source locations link to the corresponding file and line on the `main` branch.
