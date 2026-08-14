@@ -331,42 +331,47 @@ module Program =
             package, diagnostics, inputHash
 
     /// <summary>
-    /// Reports API-quality warnings, grouped by the file that declares them.
+    /// Reports documented-API findings, grouped by the file that declares them, and returns the
+    /// number that must fail the run.
     /// </summary>
     /// <remarks>
-    /// These never block a build by default. The documentation still renders correctly, and the
-    /// author may not be free to change the API being documented, so a first run must not fail on
-    /// them. <c>--warn-as-error</c> is for projects that have chosen to hold the line.
+    /// Errors always fail: documented code that does not compile is the defect this tool exists to
+    /// catch, and letting it through would make a green run meaningless. Warnings describe
+    /// documentation that is still correct but reads worse, so they fail only under
+    /// <c>--warn-as-error</c> — the author may not be free to change the API being documented.
     /// </remarks>
     let private printApiDiagnostics (warnAsError: bool) (diagnostics: ApiDiagnostic list) =
         if diagnostics.IsEmpty then
             0
         else
-            let label = if warnAsError then "[red]error[/]" else "[yellow]warning[/]"
             let root = Directory.GetCurrentDirectory()
             let relative (path: string) =
                 if String.IsNullOrWhiteSpace path then "(unknown source)"
                 elif Path.IsPathRooted path then Path.GetRelativePath(root, path).Replace('\\', '/')
                 else path.Replace('\\', '/')
 
+            let isFailure (diagnostic: ApiDiagnostic) =
+                diagnostic.Severity = ApiDiagnosticSeverity.Error || warnAsError
+
             AnsiConsole.MarkupLine("")
             for file, items in diagnostics |> List.groupBy (fun d -> relative d.Location.File) do
                 AnsiConsole.MarkupLine($"[bold]{Markup.Escape file}[/]")
                 for item in items |> List.sortBy (fun d -> d.Location.Line) do
+                    let label = if isFailure item then "[red]error[/]" else "[yellow]warning[/]"
                     let symbol = Markup.Escape item.Symbol
                     AnsiConsole.MarkupLine($"  {label} [grey]{item.Location.Line}[/] {symbol} [grey]({Markup.Escape item.Code})[/]")
                     AnsiConsole.MarkupLine($"        {Markup.Escape item.Message}")
                     AnsiConsole.MarkupLine($"        [grey]{Markup.Escape item.Remedy}[/]")
 
-            let count = diagnostics.Length
-            let noun = if count = 1 then "warning" else "warnings"
-            if warnAsError then
-                let verb = if count = 1 then "treated as an error" else "treated as errors"
-                AnsiConsole.MarkupLine($"\n[red]✖ {count} API documentation {noun} {verb} (--warn-as-error).[/]")
-                count
+            let failures = diagnostics |> List.filter isFailure |> List.length
+            let warnings = diagnostics.Length - failures
+            if failures = 0 then
+                let noun = if warnings = 1 then "warning" else "warnings"
+                AnsiConsole.MarkupLine($"\n[yellow]⚠ {warnings} API documentation {noun}.[/] [grey]Documentation still rendered; pass --warn-as-error to fail on these.[/]")
             else
-                AnsiConsole.MarkupLine($"\n[yellow]⚠ {count} API documentation {noun}.[/] [grey]Documentation still rendered; pass --warn-as-error to fail on these.[/]")
-                0
+                let noun = if failures = 1 then "error" else "errors"
+                AnsiConsole.MarkupLine($"\n[red]✖ {failures} API documentation {noun}.[/]")
+            failures
 
     /// <summary>
     /// Walks the documentation directory once, resolving every page against the projects passed to
@@ -713,7 +718,7 @@ module Program =
         if printAudit analysis <> 0 then
             invalidOp "Documentation contains uncovered or non-compiling F# blocks. Fix the mapped audit failures before building."
         if printApiDiagnostics warnAsError apiDiagnostics <> 0 then
-            invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
+            invalidOp "The documented API has errors. Fix them, or exclude an example with data-livedocs=\"no-check\" reason=\"...\"."
         AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
             .Start("[blue]Building documentation site...[/]", fun ctx ->

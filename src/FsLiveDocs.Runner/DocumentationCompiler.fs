@@ -176,7 +176,9 @@ module DocumentationCompiler =
         {
             BlockId = owning |> Option.map _.Block.Id
             SourcePath = sourcePath
-            Severity = if diagnostic.Severity = FSharpDiagnosticSeverity.Error then Error else Warning
+            Severity =
+                if diagnostic.Severity = FSharpDiagnosticSeverity.Error then SemanticDiagnosticSeverity.Error
+                else SemanticDiagnosticSeverity.Warning
             Message = diagnostic.Message
             StartLine = owning |> Option.map (relativeLine diagnostic.StartLine) |> Option.defaultValue diagnostic.StartLine
             StartColumn = diagnostic.StartColumn

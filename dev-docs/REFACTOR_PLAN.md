@@ -7,7 +7,8 @@
 | Shared page walk | `65fc2d3` — audit, build and generated tests share `documentationPages` |
 | A — split `Models.fs` | `e7b2c01` — seven files, verified as a pure move |
 | B — retire legacy verifier | `ba7a3d8` — `verifyExamples` deleted, `test` re-based on the current path |
-| C — verify examples by default | `4e8d327`, `621a07c`, `000f3aa` — steps 1-3; step 4 stays deferred |
+| C — verify examples by default | `4e8d327`, `621a07c`, `000f3aa`, `4621842` — steps 1-3 |
+| C step 4 — failures are errors | done ahead of schedule; see below |
 
 Deviations from the plan as written are noted in the relevant sections below.
 
@@ -192,14 +193,19 @@ The markdown model, applied to XML examples:
 3. **Add the escape hatch**: `data-livedocs="no-check" reason="…"` on an example, with the
    same non-empty-reason enforcement markdown already applies. Without this, step 4 has no
    legitimate way to describe a fragment that cannot compile standalone.
-4. **Flip the default** in a major version: unverified examples become compiled examples, and
-   a compile failure is an error. The warning from step 1 is what makes this a migration
-   rather than a surprise.
+4. **Flip the default** so a compile failure is an error rather than a warning.
+
+   Planned for a major version, **done immediately instead**: the staging existed to give
+   released users time to react, and nothing has been released. Deferring would have shipped a
+   known-weak default as the first one anyone ever saw.
 
 ### Risk
 
-Step 4 is breaking by construction. Examples that were never checked will start failing, which
-is the point, but it means steps 1–3 must ship and be lived with first. Do not collapse them.
+Step 4 is breaking by construction, which is why it was planned last. With no release to
+migrate, the only cost is to repositories already building against this working tree: Axial has
+19 examples that do not compile standalone and its build now fails until they are fixed or
+excluded. Steps 1-3 still had to land first, since the escape hatch has to exist before the
+default can be strict.
 
 ### Sequencing
 

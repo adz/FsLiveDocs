@@ -127,6 +127,9 @@ module GeneratedVerification =
                             locations |> Map.tryFind result.Unit.Id |> Option.defaultValue (result.Unit.Id, { File = ""; Line = 0 })
                         {
                             Code = "example-does-not-compile"
+                            // Documented code that does not compile is the defect this tool exists
+                            // to catch, so it fails the run rather than warning.
+                            Severity = ApiDiagnosticSeverity.Error
                             Symbol = result.Unit.Id
                             Location = location
                             Message = $"This example does not compile: {diagnostic.Message}"
