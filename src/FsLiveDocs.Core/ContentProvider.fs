@@ -21,6 +21,19 @@ module ContentProvider =
 
     let private siteOutputRoot = Path.GetFullPath("output")
 
+    /// <summary>Matches the shortcode that transcludes an XML example into a page.</summary>
+    /// <remarks>
+    /// Shared so that callers can discover which examples a page pulls in without expanding it,
+    /// which is how an example that no page transcludes is identified as unverified.
+    /// </remarks>
+    let exampleShortcodePattern = @"{{<\s*example\s+id=""(?<id>[^""]+)""\s*>}}"
+
+    /// <summary>Names of the XML examples a page body transcludes.</summary>
+    let transcludedExampleNames (body: string) =
+        Regex.Matches(body, exampleShortcodePattern)
+        |> Seq.map (fun m -> m.Groups.["id"].Value)
+        |> Set.ofSeq
+
     let private stripOrderingPrefix (value: string) =
         Regex.Replace(value, @"^\d+[\s._-]*", "")
 
@@ -257,7 +270,7 @@ module ContentProvider =
     /// <summary>Resolves shortcodes (snippets, examples) and semantic links (xrefs) in Markdown content.</summary>
     let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
         let snippetPattern = @"{{<\s*snippet\s+(?<args>[^>]+)>}}"
-        let examplePattern = @"{{<\s*example\s+id=""(?<id>[^""]+)""\s*>}}"
+        let examplePattern = exampleShortcodePattern
         let xrefPattern = @"xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
 
         withProtectedCodeSegments body "FSLIVEDOCS_CODE" (fun protectedBody ->

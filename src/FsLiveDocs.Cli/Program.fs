@@ -221,6 +221,8 @@ module Program =
         Blocks: DocumentationBlock list
         /// <summary>Target framework this page pins, if any.</summary>
         TargetFramework: string option
+        /// <summary>XML examples this page transcludes, and therefore compiles.</summary>
+        TranscludedExamples: Set<string>
     }
 
     type private DocumentationAnalysis = {
@@ -229,6 +231,8 @@ module Program =
         Prelude: string
         CachedArtifact: SemanticDocumentationArtifact option
         CachePath: string
+        /// <summary>API-quality findings that need the resolved pages to determine.</summary>
+        ApiDiagnostics: ApiDiagnostic list
     }
 
     let private sha256Text (value: string) =
@@ -371,6 +375,7 @@ module Program =
                         $"Documentation page {relative} selects {describe selectedProject}, but that project was not passed to livedocs.\n\
                           Projects passed:\n{passed}\n\
                           Add the selected project to the command, or change the 'project:' front matter on that page."
+                let transcluded = ContentProvider.transcludedExampleNames body
                 let expanded = ContentProvider.resolveSnippets body sourceDir package ""
                 let blocks = DocumentationDiscovery.discoverMarkdown relative (Some selectedProject) expanded
                 DocumentationDiscovery.validateCoverage blocks
@@ -387,7 +392,40 @@ module Program =
                     Expanded = expanded
                     Blocks = blocks
                     TargetFramework = targetFramework
+                    TranscludedExamples = transcluded
                 } ]
+
+    /// <summary>
+    /// Reports XML examples that nothing verifies.
+    /// </summary>
+    /// <remarks>
+    /// A markdown fence is compiled unless it is excluded in writing, but an XML example is
+    /// verified only if it carries a transcript, is marked as a snapshot, or is transcluded into
+    /// a page. An example in none of those categories is rendered to readers having never been
+    /// compiled or run, and until now nothing said so.
+    /// </remarks>
+    let private unverifiedExampleDiagnostics (package: PackageModel) (pages: DocumentationPage list) =
+        let transcluded = pages |> List.map _.TranscludedExamples |> Set.unionMany
+        let examplesOf (owner: string) (location: SourceLink) (examples: ExampleModel list) =
+            examples
+            |> List.filter (fun example ->
+                not example.IsSnapshotTest && not (transcluded.Contains example.Name))
+            |> List.map (fun example -> {
+                Code = "unverified-example"
+                Symbol = $"{owner}#{example.Name}"
+                Location = location
+                Message = "This example is never compiled or executed: it has no FSI transcript, is not marked data-livedocs=\"snapshot\", and no page transcludes it."
+                Remedy = "Transclude it with {{< example id=\"...\" >}} to compile it, or mark it data-livedocs=\"snapshot\" to run it."
+            })
+
+        let rec walk (entity: EntityModel) =
+            [ yield! examplesOf entity.Id { File = ""; Line = 0 } (if isNull (box entity.Examples) then [] else entity.Examples)
+              for entityMember in entity.Members do
+                  yield! examplesOf entityMember.Id entityMember.Location entityMember.Examples
+              for nested in entity.Entities do
+                  yield! walk nested ]
+
+        package.Entities |> List.collect walk
 
     let private analyzeDocumentation (projectPaths: string list) (projectFingerprint: string) (package: PackageModel) =
         let prelude = loadSiteConfig().FSharpPrelude |> Option.defaultValue ""
@@ -435,7 +473,14 @@ module Program =
                 |> Array.toList
                 |> List.collect id
         DocumentationDiscovery.validateCoverage blocks
-        { Blocks = blocks; Results = results; Prelude = prelude; CachedArtifact = cachedArtifact; CachePath = cachePath }
+        {
+            Blocks = blocks
+            Results = results
+            Prelude = prelude
+            CachedArtifact = cachedArtifact
+            CachePath = cachePath
+            ApiDiagnostics = unverifiedExampleDiagnostics package pages
+        }
 
     let private printAudit (analysis: DocumentationAnalysis) =
         let diagnosticsByBlock =
@@ -485,7 +530,7 @@ module Program =
         let package, diagnostics, projectFingerprint = getUnifiedPackageCached projectPaths
         let analysis = analyzeDocumentation projectPaths projectFingerprint package
         let blockFailures = printAudit analysis
-        let apiFailures = printApiDiagnostics warnAsError diagnostics
+        let apiFailures = printApiDiagnostics warnAsError (diagnostics @ analysis.ApiDiagnostics)
         if blockFailures = 0 && apiFailures = 0 then 0 else 1
 
     let private createSemanticArtifact (projectPaths: string list) (package: PackageModel) =
@@ -664,7 +709,7 @@ module Program =
         let analysis = analyzeDocumentation projectPaths projectFingerprint packageRaw
         if printAudit analysis <> 0 then
             invalidOp "Documentation contains uncovered or non-compiling F# blocks. Fix the mapped audit failures before building."
-        if printApiDiagnostics warnAsError apiDiagnostics <> 0 then
+        if printApiDiagnostics warnAsError (apiDiagnostics @ analysis.ApiDiagnostics) <> 0 then
             invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
         AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
