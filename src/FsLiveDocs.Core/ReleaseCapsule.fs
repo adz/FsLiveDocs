@@ -109,14 +109,17 @@ module ReleaseCapsule =
         if String.IsNullOrWhiteSpace api.Package.Version then invalidOp "Release API artifact has no product version."
         let rec collectIds (entities: EntityModel list) =
             entities
-            |> List.collect (fun (entity: EntityModel) -> entity.Id :: ((entity.Members |> List.map _.Id) @ collectIds entity.Entities))
-        let ids = collectIds api.Package.Entities
-        match ids |> List.tryFind String.IsNullOrWhiteSpace with
+            |> List.fold (fun (entityIds, memberIds) (entity: EntityModel) ->
+                let nestedEntities, nestedMembers = collectIds entity.Entities
+                entity.Id :: (nestedEntities @ entityIds), (entity.Members |> List.map _.Id) @ nestedMembers @ memberIds) ([], [])
+        let entityIds, memberIds = collectIds api.Package.Entities
+        match entityIds @ memberIds |> List.tryFind String.IsNullOrWhiteSpace with
         | Some _ -> invalidOp "Release API artifact contains an empty symbol ID."
         | None -> ()
-        match ids |> List.countBy id |> List.tryFind (fun (_, count) -> count > 1) with
-        | Some (id, _) -> invalidOp $"Release API artifact contains duplicate symbol ID {id}."
-        | None -> ()
+        for kind, ids in [ "entity", entityIds; "member", memberIds ] do
+            match ids |> List.countBy id |> List.tryFind (fun (_, count) -> count > 1) with
+            | Some (id, _) -> invalidOp $"Release API artifact contains duplicate {kind} ID {id}."
+            | None -> ()
 
     let private validateSemantic (semantic: SemanticDocumentationArtifact) =
         match semantic.Pages |> List.countBy _.SourcePath |> List.tryFind (fun (_, count) -> count > 1) with
