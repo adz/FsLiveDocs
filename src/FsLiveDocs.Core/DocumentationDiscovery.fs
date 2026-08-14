@@ -47,6 +47,21 @@ type VerificationCase =
     | Execute of DocumentationBlock
     | ExecuteTranscript of DocumentationBlock
 
+/// The action owned by one stable generated verification case.
+type GeneratedVerificationAction =
+    | CompileUnit of unitId: string
+    | ExecuteBlock of blockId: string
+    | ExecuteTranscriptBlock of blockId: string
+
+/// A self-contained case consumed through the single generated-verification runner interface.
+type GeneratedVerificationCase = {
+    Id: string
+    ProjectPath: string
+    SourcePath: string
+    ExpandedMarkdown: string
+    Action: GeneratedVerificationAction
+}
+
 /// Canonical discovery of expanded documentation code.
 module DocumentationDiscovery =
 
@@ -189,3 +204,36 @@ module DocumentationDiscovery =
             | NoCheck _ when compileCount <> 0 || executeCount <> 0 -> invalidOp $"Coverage invariant failed for {block.Id}."
             | _ -> ()
         cases
+
+    /// Produces the stable values embedded in generated tests. Validation and case composition
+    /// remain owned here so generated callers cannot omit or reorder policy steps.
+    let generatedCases projectPath prelude sourcePath expandedMarkdown (externallyExecutedBlockIds: Set<string>) =
+        let blocks = discoverMarkdown sourcePath (Some projectPath) expandedMarkdown
+        verificationCases projectPath prelude blocks
+        |> List.choose (function
+            | Compile unit ->
+                Some {
+                    Id = unit.Id
+                    ProjectPath = projectPath
+                    SourcePath = sourcePath
+                    ExpandedMarkdown = expandedMarkdown
+                    Action = CompileUnit unit.Id
+                }
+            | Execute block when externallyExecutedBlockIds.Contains block.Id -> None
+            | Execute block ->
+                Some {
+                    Id = block.Id
+                    ProjectPath = projectPath
+                    SourcePath = sourcePath
+                    ExpandedMarkdown = expandedMarkdown
+                    Action = ExecuteBlock block.Id
+                }
+            | ExecuteTranscript block when externallyExecutedBlockIds.Contains block.Id -> None
+            | ExecuteTranscript block ->
+                Some {
+                    Id = block.Id
+                    ProjectPath = projectPath
+                    SourcePath = sourcePath
+                    ExpandedMarkdown = expandedMarkdown
+                    Action = ExecuteTranscriptBlock block.Id
+                })

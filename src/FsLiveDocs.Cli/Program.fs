@@ -649,34 +649,48 @@ module Program =
             let package, _ = getUnifiedPackage resolvedProjects |> Async.RunSynchronously
             let documentationCases =
                 [ for page in documentationPages resolvedProjects package do
-                    let encoded = Convert.ToBase64String(Text.Encoding.UTF8.GetBytes page.Expanded)
-                    yield "coverage", page.Relative + "#coverage", page.SelectedProject, page.Relative, encoded
-                    for unit in DocumentationDiscovery.compilationUnits page.SelectedProject "" page.Blocks do
-                        yield "compile", unit.Id, page.SelectedProject, page.Relative, encoded
-                    for block in page.Blocks do
-                        match block.Mode, block.Origin with
-                        | (Run | Transcript), XmlExample -> () // The existing named XML snapshot case owns this execution.
-                        | (Run | Transcript), _ -> yield "execute", block.Id, page.SelectedProject, page.Relative, encoded
-                        | _ -> () ]
+                    let externallyExecuted =
+                        page.Blocks
+                        |> List.choose (fun block ->
+                            match block.Mode, block.Origin with
+                            | (Run | Transcript), XmlExample -> Some block.Id
+                            | _ -> None)
+                        |> Set.ofList
+                    yield!
+                        DocumentationDiscovery.generatedCases
+                            page.SelectedProject
+                            ""
+                            page.Relative
+                            page.Expanded
+                            externallyExecuted ]
 
             let documentationTestBodies =
                 documentationCases
-                |> List.map (fun (action, id, projectPath, sourcePath, encoded) ->
-                    let escapedProject = Path.GetFullPath(projectPath).Replace("\"", "\"\"")
-                    let escapedSource = sourcePath.Replace("\"", "\"\"")
-                    let escapedId = id.Replace("`", "'").Replace("\"", "\"\"")
+                |> List.map (fun case ->
+                    let escapedProject = Path.GetFullPath(case.ProjectPath).Replace("\"", "\"\"")
+                    let escapedSource = case.SourcePath.Replace("\"", "\"\"")
+                    let escapedId = case.Id.Replace("`", "'").Replace("\"", "\"\"")
+                    let escapedCaseId = case.Id.Replace("\"", "\"\"")
+                    let encoded = Convert.ToBase64String(Text.Encoding.UTF8.GetBytes case.ExpandedMarkdown)
+                    let actionExpression =
+                        match case.Action with
+                        | CompileUnit id ->
+                            let escapedActionId = id.Replace("\"", "\"\"")
+                            $"CompileUnit @\"{escapedActionId}\""
+                        | ExecuteBlock id ->
+                            let escapedActionId = id.Replace("\"", "\"\"")
+                            $"ExecuteBlock @\"{escapedActionId}\""
+                        | ExecuteTranscriptBlock id ->
+                            let escapedActionId = id.Replace("\"", "\"\"")
+                            $"ExecuteTranscriptBlock @\"{escapedActionId}\""
                     [ ""
                       "    [<Fact>]"
-                      $"    let ``{action} {escapedId}`` () ="
+                      $"    let ``documentation {escapedId}`` () ="
                       $"        let projectPath = @\"{escapedProject}\""
                       $"        let references = [ {assemblyReferenceLiteral} ]"
                       $"        let markdown = System.Text.Encoding.UTF8.GetString(System.Convert.FromBase64String(\"{encoded}\"))"
-                      if action = "coverage" then
-                          $"        GeneratedVerification.validateCoverage projectPath @\"{escapedSource}\" markdown"
-                      elif action = "compile" then
-                          $"        GeneratedVerification.verifyCompilationUnit projectPath references @\"{escapedSource}\" markdown @\"{id}\" |> Async.RunSynchronously"
-                      else
-                          $"        GeneratedVerification.executeBlock projectPath references @\"{escapedSource}\" markdown @\"{id}\"" ]
+                      $"        let case = {{ Id = @\"{escapedCaseId}\"; ProjectPath = projectPath; SourcePath = @\"{escapedSource}\"; ExpandedMarkdown = markdown; Action = {actionExpression} }}"
+                      "        GeneratedVerification.runCase references case |> Async.RunSynchronously" ]
                     |> String.concat eol)
                 |> String.concat eol
 
@@ -945,15 +959,24 @@ jobs:
                     // alternative to generating a test project rather than a subset of one.
                     let package, _ = getUnifiedPackage projectPaths |> Async.RunSynchronously
                     for page in documentationPages projectPaths package do
-                        for block in page.Blocks do
-                            match block.Mode with
-                            | Run | Transcript ->
+                        let externallyExecuted =
+                            page.Blocks
+                            |> List.choose (fun block ->
+                                match block.Mode, block.Origin with
+                                | (Run | Transcript), XmlExample -> Some block.Id
+                                | _ -> None)
+                            |> Set.ofList
+                        let cases =
+                            DocumentationDiscovery.generatedCases
+                                page.SelectedProject "" page.Relative page.Expanded externallyExecuted
+                        for case in cases do
+                            match case.Action with
+                            | ExecuteBlock _ | ExecuteTranscriptBlock _ ->
                                 try
-                                    GeneratedVerification.executeBlock
-                                        page.SelectedProject references page.Relative page.Expanded block.Id
-                                    AnsiConsole.MarkupLine($"  [green]pass[/] {Markup.Escape(block.Id)}")
+                                    GeneratedVerification.runCase references case |> Async.RunSynchronously
+                                    AnsiConsole.MarkupLine($"  [green]pass[/] {Markup.Escape(case.Id)}")
                                 with error ->
-                                    AnsiConsole.MarkupLine($"  [red]fail[/] {Markup.Escape(block.Id)}")
+                                    AnsiConsole.MarkupLine($"  [red]fail[/] {Markup.Escape(case.Id)}")
                                     AnsiConsole.MarkupLine($"       [grey]{Markup.Escape(error.Message)}[/]")
                                     allPassed <- false
                             | _ -> ()

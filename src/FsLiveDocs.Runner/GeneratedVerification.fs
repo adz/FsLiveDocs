@@ -3,14 +3,10 @@ namespace FsLiveDocs.Runner
 open System
 open FsLiveDocs.Core
 
-/// Stable entry points used by generated xUnit cases.
+/// The single stable execution boundary used by generated xUnit cases.
 module GeneratedVerification =
 
-    let validateCoverage projectPath sourcePath expandedMarkdown =
-        let blocks = DocumentationDiscovery.discoverMarkdown sourcePath (Some projectPath) expandedMarkdown
-        DocumentationDiscovery.verificationCases projectPath "" blocks |> ignore
-
-    let verifyCompilationUnit projectPath references sourcePath expandedMarkdown unitId = async {
+    let private verifyCompilationUnit projectPath references sourcePath expandedMarkdown unitId = async {
         let blocks = DocumentationDiscovery.discoverMarkdown sourcePath (Some projectPath) expandedMarkdown
         DocumentationDiscovery.validateCoverage blocks
         let unit =
@@ -29,7 +25,7 @@ module GeneratedVerification =
             invalidOp details
     }
 
-    let executeBlock projectPath references sourcePath expandedMarkdown blockId =
+    let private executeBlock projectPath references sourcePath expandedMarkdown blockId =
         let block =
             DocumentationDiscovery.discoverMarkdown sourcePath (Some projectPath) expandedMarkdown
             |> List.tryFind (fun candidate -> candidate.Id = blockId)
@@ -59,6 +55,40 @@ module GeneratedVerification =
             invalidOp $"{blockId} output mismatch.{Environment.NewLine}Expected:{Environment.NewLine}{expected}{Environment.NewLine}Actual:{Environment.NewLine}{output}"
         | _ when output.Contains("error FS", StringComparison.OrdinalIgnoreCase) -> invalidOp $"{blockId} execution failed:{Environment.NewLine}{output}"
         | _ -> ()
+
+    /// Runs one generated case without exposing verification ordering or composition to its caller.
+    let runCase references (case: GeneratedVerificationCase) = async {
+        // Recreate the canonical cases first. This validates coverage and makes stale generated
+        // source fail even when a developer selects only one generated xUnit fact.
+        let currentCases =
+            DocumentationDiscovery.generatedCases
+                case.ProjectPath
+                ""
+                case.SourcePath
+                case.ExpandedMarkdown
+                Set.empty
+
+        let current =
+            currentCases
+            |> List.tryFind (fun candidate -> candidate.Id = case.Id && candidate.Action = case.Action)
+            |> Option.defaultWith (fun () ->
+                invalidOp $"Generated documentation case no longer exists: {case.Id}. Regenerate tests.")
+
+        match current.Action with
+        | CompileUnit unitId ->
+            do! verifyCompilationUnit current.ProjectPath references current.SourcePath current.ExpandedMarkdown unitId
+        | ExecuteBlock blockId ->
+            // A selected execution fact must retain the compile-before-execute contract even when
+            // its companion compilation fact is not run by the test filter.
+            let blocks = DocumentationDiscovery.discoverMarkdown current.SourcePath (Some current.ProjectPath) current.ExpandedMarkdown
+            let owningUnit =
+                DocumentationDiscovery.compilationUnits current.ProjectPath "" blocks
+                |> List.find (fun unit -> unit.Blocks |> List.exists (fun block -> block.Id = blockId))
+            do! verifyCompilationUnit current.ProjectPath references current.SourcePath current.ExpandedMarkdown owningUnit.Id
+            executeBlock current.ProjectPath references current.SourcePath current.ExpandedMarkdown blockId
+        | ExecuteTranscriptBlock blockId ->
+            executeBlock current.ProjectPath references current.SourcePath current.ExpandedMarkdown blockId
+    }
 
     /// <summary>
     /// Compiles XML examples that no page transcludes and no snapshot runs, against the project

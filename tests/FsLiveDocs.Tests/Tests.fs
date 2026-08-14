@@ -237,6 +237,24 @@ module ContentProviderTests =
         Assert.Equal(1, cases |> List.choose (function ExecuteTranscript block -> Some block | _ -> None) |> List.length)
 
     [<Fact>]
+    let ``generated verification exposes stable cases and honors external execution ownership`` () =
+        let markdown = "```fsharp\nlet a = 1\n```\n```fsharp run\nprintfn \"run\"\n```\n```fsharp transcript\n> 1 + 1;;\nval it: int = 2\n```"
+        let allCases = DocumentationDiscovery.generatedCases "sample.fsproj" "" "guide.md" markdown Set.empty
+        let transcriptId = "guide.md#fsharp-2"
+        let generated = DocumentationDiscovery.generatedCases "sample.fsproj" "" "guide.md" markdown (set [ transcriptId ])
+
+        Assert.Equal<string list>(
+            [ "guide.md#page"; "guide.md#fsharp-1"; transcriptId ],
+            allCases |> List.map _.Id)
+        Assert.Equal<string list>(
+            [ "guide.md#page"; "guide.md#fsharp-1" ],
+            generated |> List.map _.Id)
+        Assert.All(generated, fun case ->
+            Assert.Equal("sample.fsproj", case.ProjectPath)
+            Assert.Equal("guide.md", case.SourcePath)
+            Assert.Equal(markdown, case.ExpandedMarkdown))
+
+    [<Fact>]
     let ``snippet modes and example transcripts survive canonical expansion`` () =
         let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore
