@@ -15,23 +15,33 @@ module SemanticExtractor =
     let private normalizeDocumentation (value: string) =
         Regex.Replace(value, @"\s+", " ").Trim()
 
+    let private xmlDocumentation = Collections.Concurrent.ConcurrentDictionary<string, Lazy<Map<string, string>>>()
+
     let private readXmlMember xmlPath signature =
         if String.IsNullOrWhiteSpace xmlPath || String.IsNullOrWhiteSpace signature || not (File.Exists xmlPath) then None
         else
             try
-                let document = XDocument.Load(xmlPath)
-                document.Descendants(XName.Get "member")
-                |> Seq.tryFind (fun element ->
-                    match element.Attribute(XName.Get "name") with
-                    | null -> false
-                    | attribute -> attribute.Value = signature)
-                |> Option.bind (fun memberElement ->
-                    memberElement.Elements()
-                    |> Seq.map (fun element -> element.Value |> normalizeDocumentation)
-                    |> Seq.filter (String.IsNullOrWhiteSpace >> not)
-                    |> String.concat "\n"
-                    |> Option.ofObj
-                    |> Option.filter (String.IsNullOrWhiteSpace >> not))
+                // Tooltip extraction asks for many symbols from the same assembly. Index one XML
+                // file once per file version instead of reparsing it for every symbol use.
+                let fullPath = Path.GetFullPath xmlPath
+                let cacheKey = fullPath + "|" + string (File.GetLastWriteTimeUtc(fullPath).Ticks)
+                let members =
+                    xmlDocumentation.GetOrAdd(cacheKey, fun _ -> lazy (
+                        let document = XDocument.Load(fullPath)
+                        document.Descendants(XName.Get "member")
+                        |> Seq.choose (fun memberElement ->
+                            match memberElement.Attribute(XName.Get "name") with
+                            | null -> None
+                            | attribute ->
+                                let documentation =
+                                    memberElement.Elements()
+                                    |> Seq.map (fun element -> element.Value |> normalizeDocumentation)
+                                    |> Seq.filter (String.IsNullOrWhiteSpace >> not)
+                                    |> String.concat "\n"
+                                if String.IsNullOrWhiteSpace documentation then None
+                                else Some(attribute.Value, documentation))
+                        |> Map.ofSeq)).Value
+                Map.tryFind signature members
             with _ -> None
 
     /// FCS deliberately models XML docs as a union. Reflection here keeps this boundary tolerant of additive FCS changes.

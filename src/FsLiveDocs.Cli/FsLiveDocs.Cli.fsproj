@@ -9,15 +9,26 @@
     <PackageId>FsLiveDocs</PackageId>
     <Version>0.1.0</Version>
     <Authors>FsLiveDocs contributors</Authors>
+    <Title>FsLiveDocs</Title>
     <Description>Verified, semantic, version-aware documentation for F#.</Description>
+    <PackageTags>fsharp;documentation;api-docs;doctest;static-site-generator</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/adz/FsLiveDocs</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/adz/FsLiveDocs.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReleaseNotes>https://github.com/adz/FsLiveDocs/releases/tag/v0.1.0</PackageReleaseNotes>
+    <Copyright>Copyright © FsLiveDocs contributors</Copyright>
   </PropertyGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 
   <ItemGroup>
+    <Compile Include="LiveDocsBanner.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

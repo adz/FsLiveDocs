@@ -425,17 +425,50 @@ module View =
                         --pagefind-ui-background: hsl(var(--b1));
                         --pagefind-ui-border: hsl(var(--b3));
                         --pagefind-ui-font: inherit;
+                        position: relative;
+                        width: min(22rem, 28vw);
+                        margin-inline: 1.5rem;
                     }
-                    .pagefind-ui__search-input {
-                        background-color: hsl(var(--b2)) !important;
-                        border: 1px solid hsl(var(--b3)) !important;
+                    #search-ui .pagefind-ui__search-input {
+                        height: 2.75rem;
+                        background-color: var(--fallback-b2, oklch(var(--b2) / 1)) !important;
+                        border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1)) !important;
                         border-radius: 1rem !important;
-                        padding: 0.75rem 1.25rem !important;
+                        padding: 0.6rem 2.75rem 0.6rem 2.75rem !important;
                         color: hsl(var(--bc)) !important;
+                        font-size: 0.875rem;
                     }
-                    .pagefind-ui__search-input:focus {
-                        outline: 2px solid hsl(var(--p)) !important;
+                    #search-ui .pagefind-ui__search-input:focus {
+                        outline: 2px solid var(--fallback-p, oklch(var(--p) / 1)) !important;
                         outline-offset: 1px !important;
+                    }
+                    #search-ui .pagefind-ui__drawer {
+                        position: fixed;
+                        top: 5.5rem;
+                        left: 50%;
+                        z-index: 120;
+                        width: min(48rem, calc(100vw - 2rem));
+                        max-height: calc(100vh - 7rem);
+                        overflow-y: auto;
+                        transform: translateX(-50%);
+                        padding: 1.25rem;
+                        border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
+                        border-radius: 1rem;
+                        background-color: var(--fallback-b1, oklch(var(--b1) / 1)) !important;
+                        box-shadow: 0 20px 45px rgb(0 0 0 / 0.25);
+                    }
+                    #search-ui .pagefind-ui__result,
+                    #search-ui .pagefind-ui__result-link,
+                    #search-ui .pagefind-ui__result-excerpt,
+                    #search-ui .pagefind-ui__result-nested,
+                    #search-ui .pagefind-ui__result-nested * {
+                        min-width: 0;
+                        max-width: 100%;
+                        overflow-wrap: anywhere;
+                        word-break: break-word;
+                    }
+                    #search-ui .pagefind-ui__result-excerpt {
+                        line-height: 1.55;
                     }
                     pre.code-frame {
                         position: relative;
@@ -591,6 +624,7 @@ module View =
                                 yield span [ _class "text-2xl font-black tracking-tighter" ] [ str siteName ]
                         ]
                     ]
+                    div [ _id "search-ui"; _class "hidden md:block not-prose" ] []
                     div [ _class "flex-none hidden lg:flex" ] [
                         ul [ _class "menu menu-horizontal px-1 gap-6" ] [
                             yield! navigation |> List.map (fun item -> navItem item.Label (navigationHref item.Href))
@@ -629,7 +663,6 @@ module View =
                             div [ _class "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_14rem] gap-6 p-4 md:p-6 xl:p-8" ] [
                                 div [ _class "min-w-0" ] [
                                     main [ _class "prose prose-base md:prose-lg max-w-none bg-base-100 p-6 md:p-8 rounded-xl shadow-xl shadow-base-300/30 border border-base-300 min-h-[85vh]" ] [
-                                            div [ _id "search-ui"; _class "not-prose mb-12" ] []
                                             yield! content
                                     ]
                                 ]

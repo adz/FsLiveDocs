@@ -19,26 +19,18 @@ dotnet test tests/FsLiveDocs.Tests/FsLiveDocs.Tests.fsproj
 dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj
 ```
 
-## Audit every documentation project
+## Verify every documentation project
 
-The deep reference selects the sample project. Include it with the four product projects:
+FsLiveDocs discovers documentable projects outside ignored build and test directories. The deep-reference sample is included automatically:
 
 ```bash
-projects=(
-  src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj
-  src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj
-  src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj
-  src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj
-  samples/DeepReference/Acme.Docs/Acme.Docs.fsproj
-)
-
-dotnet livedocs audit "${projects[@]}"
+dotnet livedocs test
 ```
 
 ## Rehearse capture
 
 ```bash
-dotnet livedocs capture "${projects[@]}" \
+dotnet livedocs capture \
   --version 0.1.0 \
   --output artifacts/fslivedocs-0.1.0.zip \
   --dry-run
@@ -51,7 +43,7 @@ Review the API, semantic, content, and compressed sizes.
 Run capture from the exact tagged commit:
 
 ```bash
-dotnet livedocs capture "${projects[@]}" \
+dotnet livedocs capture \
   --version 0.1.0 \
   --output artifacts/fslivedocs-0.1.0.zip
 ```

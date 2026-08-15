@@ -31,8 +31,10 @@ dotnet tool restore
 Initialize the repository:
 
 ```bash
-dotnet livedocs init
+dotnet livedocs init --discover-projects
 ```
+
+`--discover-projects` records the discovered `.fsproj` files in `.livedocs/config.json`. Commands use explicit project arguments first, then the configured list, then automatic discovery.
 
 Build your project before FsLiveDocs reads its API:
 
@@ -43,16 +45,14 @@ dotnet build
 Audit and build the documentation:
 
 ```bash
-dotnet livedocs audit src/YourLibrary/YourLibrary.fsproj
-dotnet livedocs build src/YourLibrary/YourLibrary.fsproj
+dotnet livedocs audit
+dotnet livedocs build
 ```
 
 Open a local preview while you edit:
 
 ```bash
-dotnet livedocs watch src/YourLibrary/YourLibrary.fsproj \
-  --host 127.0.0.1 \
-  --port 5000
+dotnet livedocs watch --host 127.0.0.1 --port 5000
 ```
 
 The generated site is in `output/`.
@@ -62,8 +62,7 @@ The generated site is in `output/`.
 Generate stable xUnit cases from the same discovery result used by the build:
 
 ```bash
-dotnet livedocs generate-tests src/YourLibrary/YourLibrary.fsproj
-dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj
+dotnet livedocs test
 ```
 
 Generated tests call one FsLiveDocs runner interface. They don't reproduce coverage, compilation, or execution policy.
@@ -73,7 +72,7 @@ Generated tests call one FsLiveDocs runner interface. They don't reproduce cover
 Create a self-contained release capsule after verification succeeds:
 
 ```bash
-dotnet livedocs capture src/YourLibrary/YourLibrary.fsproj \
+dotnet livedocs capture \
   --version 1.4.0 \
   --output artifacts/your-library-livedocs-1.4.0.zip
 ```
@@ -83,7 +82,7 @@ Capture writes the capsule and a machine-readable `.report.json` file. It prints
 Validate the process without writing the requested output:
 
 ```bash
-dotnet livedocs capture src/YourLibrary/YourLibrary.fsproj \
+dotnet livedocs capture \
   --version 1.4.0 \
   --output artifacts/your-library-livedocs-1.4.0.zip \
   --dry-run

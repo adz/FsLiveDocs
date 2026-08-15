@@ -29,8 +29,10 @@ dotnet tool install FsLiveDocs --version 0.1.0
 Run this command from the repository root:
 
 ```bash
-dotnet livedocs init
+dotnet livedocs init --discover-projects
 ```
+
+`--discover-projects` writes the repository's documentable `.fsproj` files to the configuration. Review that list when the repository also contains benchmarks, probes, or applications that should not appear in the API reference.
 
 The command creates:
 
@@ -39,7 +41,7 @@ The command creates:
 - `docs/index.md` as a starter page;
 - cache and release-download entries in `.gitignore`.
 
-The command does not replace existing files.
+The command does not replace existing files. Project arguments passed to later commands override the configured list; without either, FsLiveDocs discovers projects for that run.
 
 ## Add a guide page
 

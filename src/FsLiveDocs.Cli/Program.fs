@@ -59,6 +59,14 @@ type Arguments =
     | [<Inherit>] Ignore of string
     /// <summary>Fails the run when the documented API produces quality warnings.</summary>
     | [<Inherit; AltCommandLine("--warnaserror")>] Warn_As_Error
+    /// <summary>Sets console verbosity to warnings, info, or debug.</summary>
+    | [<Inherit>] Verbosity of string
+    /// <summary>Enables or disables interactive terminal rendering.</summary>
+    | [<Inherit>] Interactive of bool
+    /// <summary>Enables or disables the LiveDocs banner.</summary>
+    | [<Inherit>] Banner of bool
+    /// <summary>Discovers documentable projects and records them in .livedocs/config.json during init.</summary>
+    | [<Inherit>] Discover_Projects
     /// <summary>Validates capture and reports its expected result without publishing the requested output.</summary>
     | [<Inherit>] Dry_Run
     interface IArgParserTemplate with
@@ -86,7 +94,35 @@ type Arguments =
             | Port _ -> "Set the preview port (default: 5000)."
             | Ignore _ -> "Add a comma-separated list of directory names the watcher ignores. Repeatable."
             | Warn_As_Error -> "Fail the run when the documented API produces quality warnings (default: warn only)."
+            | Verbosity _ -> "Set console verbosity: warnings (default), info, or debug."
+            | Interactive _ -> "Enable or disable interactive terminal rendering (default: true)."
+            | Banner _ -> "Enable or disable the LiveDocs banner (default: true)."
+            | Discover_Projects -> "Discover project files and write them to .livedocs/config.json (with init)."
             | Dry_Run -> "Validate capture and report expected output without writing the requested capsule."
+
+type internal VerbosityLevel =
+    | Warnings
+    | Info
+    | Debug
+
+module internal ConsoleOutput =
+    let mutable verbosity = Warnings
+    let mutable interactive = true
+    let mutable banner = true
+    let mutable animateBanner = false
+
+    let configure (verbosityValue: string option) (interactiveValue: bool) (bannerValue: bool) =
+        verbosity <-
+            match verbosityValue |> Option.map _.Trim().ToLowerInvariant() with
+            | None | Some "warnings" -> Warnings
+            | Some "info" -> Info
+            | Some "debug" -> Debug
+            | Some value -> invalidArg "verbosity" $"Unsupported verbosity '{value}'. Use warnings, info, or debug."
+        interactive <- interactiveValue
+        banner <- bannerValue
+
+    let isInfo () = verbosity = Info || verbosity = Debug
+    let isDebug () = verbosity = Debug
 
 /// <summary>Watches source and documentation files so the preview server rebuilds after an edit.</summary>
 module internal PreviewWatcher =
@@ -128,7 +164,8 @@ module internal PreviewWatcher =
                     match! inbox.TryReceive(debounceMs) with
                     | Some next -> return! settle next
                     | None ->
-                        AnsiConsole.MarkupLine($"[yellow]⚡ Change detected in {Markup.Escape(path)}, rebuilding...[/]")
+                        if ConsoleOutput.isInfo () then
+                            AnsiConsole.MarkupLine($"[yellow]⚡ Change detected in {Markup.Escape(path)}, rebuilding...[/]")
                         try rebuild () with e -> AnsiConsole.WriteException(e)
                         return! idle ()
                 }
@@ -179,8 +216,9 @@ module internal PreviewWatcher =
               for name in watched -> createWatcher root (Path.Combine(root, name)) true ignored pump.Post ]
         let watchedNames = String.Join(", ", watched)
         let ignoredNames = String.Join(", ", Set.toList ignored)
-        AnsiConsole.MarkupLine($"   [grey]Watching:[/] {Markup.Escape(watchedNames)}")
-        AnsiConsole.MarkupLine($"   [grey]Ignoring:[/] {Markup.Escape(ignoredNames)}")
+        if ConsoleOutput.isDebug () then
+            AnsiConsole.MarkupLine($"   [grey]Watching:[/] {Markup.Escape(watchedNames)}")
+            AnsiConsole.MarkupLine($"   [grey]Ignoring:[/] {Markup.Escape(ignoredNames)}")
         watchers
 
 /// <summary>The main entry point module for the CLI application.</summary>
@@ -188,11 +226,61 @@ module Program =
 
     let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None }
 
+    /// <summary>Finds documentable projects when callers omit the project list.</summary>
+    let discoverProjects () =
+        let root = Directory.GetCurrentDirectory()
+        let ignored = set [ ".git"; ".livedocs"; "artifacts"; "bin"; "node_modules"; "obj"; "output"; "packages"; "TestResults"; "tests" ]
+        let isIgnored (path: string) =
+            Path.GetRelativePath(root, path).Split([| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |])
+            |> Array.exists ignored.Contains
+        Directory.GetFiles(root, "*.fsproj", SearchOption.AllDirectories)
+        |> Array.filter (isIgnored >> not)
+        |> Array.sort
+        |> Array.map (fun path -> Path.GetRelativePath(root, path).Replace('\\', '/'))
+        |> Array.toList
+
+    let private configuredProjects () =
+        let configPath = Path.Combine(".livedocs", "config.json")
+        if not (File.Exists configPath) then []
+        else
+            let config = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText configPath)
+            match config.GetValue("projects", StringComparison.OrdinalIgnoreCase) with
+            | :? Newtonsoft.Json.Linq.JArray as projects ->
+                projects.Values<string>()
+                |> Seq.filter (String.IsNullOrWhiteSpace >> not)
+                |> Seq.toList
+            | _ -> []
+
+    let private resolveProjects command projectPaths =
+        match projectPaths with
+        | _ :: _ -> projectPaths
+        | [] ->
+            match configuredProjects () with
+            | _ :: _ as projects -> projects
+            | [] ->
+                match discoverProjects () with
+                | [] -> invalidOp $"{command} requires at least one project, and no .fsproj files were discovered. Pass project paths explicitly."
+                | projects ->
+                    AnsiConsole.MarkupLine($"[grey]Discovered {projects.Length} project(s). Pass paths explicitly, or run 'livedocs init --discover-projects' to record the selection.[/]")
+                    projects
+
+    let private writeDiscoveredProjects () =
+        let projects = discoverProjects ()
+        if projects.IsEmpty then invalidOp "No documentable .fsproj files were discovered."
+        let configPath = Path.Combine(".livedocs", "config.json")
+        let config =
+            if File.Exists configPath then Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText configPath)
+            else Newtonsoft.Json.Linq.JObject()
+        config["projects"] <- Newtonsoft.Json.Linq.JArray(projects |> List.map Newtonsoft.Json.Linq.JValue)
+        File.WriteAllText(configPath, config.ToString(Newtonsoft.Json.Formatting.Indented) + Environment.NewLine)
+        AnsiConsole.MarkupLine($"[green]✔ Recorded {projects.Length} project(s):[/] {Markup.Escape configPath}")
+
     let printBanner () =
-        let figlet = FigletText("LiveDocs")
-        figlet.Color <- Color.Blue
-        AnsiConsole.Write(figlet)
-        AnsiConsole.MarkupLine("[grey]Verified Documentation for F#[/]\n")
+        if ConsoleOutput.banner && not ConsoleOutput.animateBanner then
+            let figlet = FigletText("LiveDocs")
+            figlet.Color <- Color.Blue
+            AnsiConsole.Write(figlet)
+            AnsiConsole.MarkupLine("[grey]Verified Documentation for F#[/]\n")
 
     let loadSiteConfig () =
         let configPath = Path.Combine(".livedocs", "config.json")
@@ -221,7 +309,7 @@ module Program =
             |> Set.unionMany
 
     /// <summary>Loads and merges multiple project models into a unified package.</summary>
-    let getUnifiedPackage (projectPaths: string list) = async {
+    let private getUnifiedPackageWithProgress reportProgress (projectPaths: string list) = async {
         let packages = ResizeArray()
         let diagnostics = ResizeArray()
         let covered = transcludedExamples ()
@@ -233,7 +321,8 @@ module Program =
             |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
             |> List.filter (String.IsNullOrWhiteSpace >> not)
             |> List.distinct
-        for projectPath in projectPaths do
+        for index, projectPath in projectPaths |> List.indexed do
+            reportProgress "Extracting API documentation" (index + 1) projectPaths.Length
             let! package, projectDiagnostics = SymbolLister.extractFromProjectWithDiagnostics projectPath
             packages.Add(package)
             diagnostics.AddRange(projectDiagnostics)
@@ -243,6 +332,9 @@ module Program =
             diagnostics.AddRange(exampleDiagnostics)
         return SymbolLister.merge (Seq.toList packages), List.ofSeq diagnostics
     }
+
+    let getUnifiedPackage projectPaths =
+        getUnifiedPackageWithProgress (fun _ _ _ -> ()) projectPaths
 
     let private writeIfChanged (path: string) (content: string) =
         let normalized = content.Replace("\r\n", "\n").TrimEnd() + "\n"
@@ -320,7 +412,7 @@ module Program =
         for stale in Directory.GetFiles(directory, pattern) do
             if not (Path.GetFullPath(stale).Equals(Path.GetFullPath(path), StringComparison.Ordinal)) then File.Delete(stale)
 
-    let private getUnifiedPackageCached (projectPaths: string list) =
+    let private getUnifiedPackageCachedWithProgress reportProgress (projectPaths: string list) =
         let inputHash = projectInputFingerprint projectPaths
         let cacheDirectory = Path.GetFullPath(Path.Combine(".livedocs", "cache"))
         // The key covers every assembly whose code shapes what is cached. Keying on Core alone
@@ -338,6 +430,7 @@ module Program =
         // rather than inside it — otherwise a warning would be reported once and never again.
         let diagnosticsPath = Path.Combine(cacheDirectory, cacheKey + ".diagnostics.json")
         if File.Exists cachePath then
+            reportProgress "Extracting API documentation" projectPaths.Length projectPaths.Length
             let package = Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(File.ReadAllText(cachePath), FsLiveDocs.Core.Serialization.jsonSettings)
             if isNull (box package) then invalidOp $"Invalid cached package model: {cachePath}"
             let diagnostics =
@@ -348,10 +441,13 @@ module Program =
                 else []
             package, diagnostics, inputHash
         else
-            let package, diagnostics = getUnifiedPackage projectPaths |> Async.RunSynchronously
+            let package, diagnostics = getUnifiedPackageWithProgress reportProgress projectPaths |> Async.RunSynchronously
             writeCurrentCache cachePath "*.package.json" (Newtonsoft.Json.JsonConvert.SerializeObject(package, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
             writeCurrentCache diagnosticsPath "*.diagnostics.json" (Newtonsoft.Json.JsonConvert.SerializeObject(diagnostics, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
             package, diagnostics, inputHash
+
+    let private getUnifiedPackageCached projectPaths =
+        getUnifiedPackageCachedWithProgress (fun _ _ _ -> ()) projectPaths
 
     /// <summary>
     /// Reports API-quality warnings, grouped by the file that declares them.
@@ -373,22 +469,38 @@ module Program =
                 else path.Replace('\\', '/')
 
             AnsiConsole.MarkupLine("")
-            for file, items in diagnostics |> List.groupBy (fun d -> relative d.Location.File) do
+            let repoUrl = loadSiteConfig().RepoUrl |> Option.map (fun value -> value.TrimEnd('/'))
+            let files = diagnostics |> List.groupBy (fun d -> relative d.Location.File)
+            for file, items in files do
                 AnsiConsole.MarkupLine($"[bold]{Markup.Escape file}[/]")
-                for item in items |> List.sortBy (fun d -> d.Location.Line) do
-                    let symbol = Markup.Escape item.Symbol
-                    AnsiConsole.MarkupLine($"  {label} [grey]{item.Location.Line}[/] {symbol} [grey]({Markup.Escape item.Code})[/]")
-                    AnsiConsole.MarkupLine($"        {Markup.Escape item.Message}")
-                    AnsiConsole.MarkupLine($"        [grey]{Markup.Escape item.Remedy}[/]")
+                if ConsoleOutput.isDebug () then
+                    for item in items |> List.sortBy (fun d -> d.Location.Line) do
+                        let symbol = Markup.Escape item.Symbol
+                        AnsiConsole.MarkupLine($"  {label} [grey]{item.Location.Line}[/] {symbol} [grey]({Markup.Escape item.Code})[/]")
+                        AnsiConsole.MarkupLine($"        {Markup.Escape item.Message}")
+                        AnsiConsole.MarkupLine($"        [grey]{Markup.Escape item.Remedy}[/]")
+                else
+                    for code, matching in items |> List.groupBy _.Code |> List.sortBy fst do
+                        let lines = matching |> List.sortBy _.Location.Line |> List.map (fun item -> string item.Location.Line) |> String.concat ", "
+                        let issue =
+                            match code with
+                            | "example-does-not-compile" -> "examples do not compile"
+                            | _ -> code.Replace('-', ' ')
+                        AnsiConsole.MarkupLine($"  {label} {matching.Length} {Markup.Escape(issue)} [grey](lines {Markup.Escape(lines)})[/]")
+                match repoUrl with
+                | Some root when file <> "(unknown source)" ->
+                    let url = $"{root}/blob/HEAD/{file}"
+                    AnsiConsole.MarkupLine($"  [link={Markup.Escape url}]View source on GitHub[/]")
+                | _ -> ()
 
             let count = diagnostics.Length
             let noun = if count = 1 then "warning" else "warnings"
             if warnAsError then
                 let verb = if count = 1 then "treated as an error" else "treated as errors"
-                AnsiConsole.MarkupLine($"\n[red]✖ {count} API documentation {noun} {verb} (--warn-as-error).[/]")
+                AnsiConsole.MarkupLine($"\n[red]✖ {count} API documentation {noun} across {files.Length} file(s), {verb} (--warn-as-error).[/]")
                 count
             else
-                AnsiConsole.MarkupLine($"\n[yellow]⚠ {count} API documentation {noun}.[/] [grey]Documentation still rendered; pass --warn-as-error to fail on these.[/]")
+                AnsiConsole.MarkupLine($"\n[yellow]⚠ {count} API documentation {noun} across {files.Length} file(s).[/] [grey]Use --verbosity debug for details or --warn-as-error to fail.[/]")
                 0
 
     /// <summary>
@@ -460,7 +572,7 @@ module Program =
                     TargetFramework = targetFramework
                 } ]
 
-    let private analyzeDocumentation (projectPaths: string list) (projectFingerprint: string) (package: PackageModel) =
+    let private analyzeDocumentationWithProgress reportProgress (projectPaths: string list) (projectFingerprint: string) (package: PackageModel) =
         let prelude = loadSiteConfig().FSharpPrelude |> Option.defaultValue ""
         let builtAssemblies =
             projectPaths
@@ -491,7 +603,9 @@ module Program =
             else None
         let results =
             match cachedArtifact with
-            | Some _ -> []
+            | Some _ ->
+                reportProgress "Checking documentation pages" pages.Length pages.Length
+                []
             | None ->
                 // Only page-selected projects need compiler evaluation. Evaluating every project
                 // leaks solution composition into documentation checking and can make an unrelated
@@ -507,8 +621,9 @@ module Program =
                     (evaluated |> List.collect (snd >> _.References)) @ builtAssemblies
                     |> List.distinct
                 let evaluatedProjects = evaluated |> List.map (fun (path, project) -> path, { project with References = aggregateReferences }) |> Map.ofList
+                let completed = ref 0
                 pages
-                |> List.map (fun page ->
+                |> List.map (fun page -> async {
                     let selectedEvaluation =
                         match page.TargetFramework with
                         | None -> evaluatedProjects.[page.SelectedProject]
@@ -516,7 +631,10 @@ module Program =
                             let selected = DocumentationCompiler.evaluateProjectFor page.TargetFramework page.SelectedProject
                             let references = selected.References @ aggregateReferences |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
                             { selected with References = references }
-                    DocumentationCompiler.checkBlocksWithProject selectedEvaluation prelude page.Blocks)
+                    let! checkedUnits = DocumentationCompiler.checkBlocksWithProject selectedEvaluation prelude page.Blocks
+                    let current = Threading.Interlocked.Increment(completed)
+                    reportProgress "Checking documentation pages" current pages.Length
+                    return checkedUnits })
                 |> fun checks -> Async.Parallel(checks, maxDegreeOfParallelism = max 1 Environment.ProcessorCount)
                 |> Async.RunSynchronously
                 |> Array.toList
@@ -530,7 +648,10 @@ module Program =
             CachePath = cachePath
         }
 
-    let private printAudit (analysis: DocumentationAnalysis) =
+    let private analyzeDocumentation projectPaths projectFingerprint package =
+        analyzeDocumentationWithProgress (fun _ _ _ -> ()) projectPaths projectFingerprint package
+
+    let private printAudit showSuccess (analysis: DocumentationAnalysis) =
         let diagnosticsByBlock =
             match analysis.CachedArtifact with
             | Some artifact ->
@@ -565,10 +686,14 @@ module Program =
                     | Run -> "PASS", "run (compiled; execution is explicit)"
                     | Transcript -> "PASS", "transcript (explicit execution case)"
                     | NoCheck reason -> "EXCLUDED", reason
-            let color = if status = "PASS" then "green" elif status = "FAIL" then "red" else "yellow"
-            AnsiConsole.MarkupLine($"[{color}]{status,-8}[/] {Markup.Escape(block.Id)} ({Markup.Escape(detail)})")
+            if status = "FAIL" || ConsoleOutput.isDebug () then
+                let color = if status = "PASS" then "green" elif status = "FAIL" then "red" else "yellow"
+                AnsiConsole.MarkupLine($"[{color}]{status,-8}[/] {Markup.Escape(block.Id)} ({Markup.Escape(detail)})")
         if failures = 0 then
-            AnsiConsole.MarkupLine($"\n[green]✔ Audit complete:[/] {analysis.Blocks.Length} expanded F# block(s), all covered or explicitly excluded.")
+            let excluded = analysis.Blocks |> List.filter (fun block -> match block.Mode with NoCheck _ -> true | _ -> false) |> List.length
+            let verified = analysis.Blocks.Length - excluded
+            if showSuccess then
+                AnsiConsole.MarkupLine($"[green]✔ Audit complete:[/] {analysis.Blocks.Length} blocks — {verified} verified, {excluded} excluded, 0 failed.")
         else
             AnsiConsole.MarkupLine($"\n[red]✖ Audit failed:[/] {failures} of {analysis.Blocks.Length} expanded F# block(s) contain compiler errors.")
         failures
@@ -577,7 +702,7 @@ module Program =
         if List.isEmpty projectPaths then invalidOp "Audit requires at least one project path."
         let package, diagnostics, projectFingerprint = getUnifiedPackageCached projectPaths
         let analysis = analyzeDocumentation projectPaths projectFingerprint package
-        let blockFailures = printAudit analysis
+        let blockFailures = printAudit true analysis
         let apiFailures = printApiDiagnostics warnAsError diagnostics
         if blockFailures = 0 && apiFailures = 0 then 0 else 1
 
@@ -636,7 +761,7 @@ module Program =
         let extracted, apiDiagnostics, projectFingerprint = getUnifiedPackageCached projectPaths
         let package = { extracted with Version = version |> Option.defaultValue extracted.Version }
         let analysis = analyzeDocumentation projectPaths projectFingerprint package
-        if printAudit analysis <> 0 then
+        if printAudit true analysis <> 0 then
             invalidOp "Documentation contains uncovered or non-compiling F# blocks. Fix the mapped audit failures before capture."
         if printApiDiagnostics warnAsError apiDiagnostics <> 0 then
             invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
@@ -901,45 +1026,148 @@ module Program =
             AnsiConsole.MarkupLine($"[green]✔ Snapshot test project generated:[/] {outputDir}")
             0
 
+    let private prepareBuildDocumentation reportProgress reportNote projectPaths projectFingerprint package =
+        let analysis = analyzeDocumentationWithProgress reportProgress projectPaths projectFingerprint package
+        if printAudit false analysis <> 0 then
+            invalidOp "Documentation contains uncovered or non-compiling F# blocks. Fix the mapped audit failures before building."
+        let excluded = analysis.Blocks |> List.filter (fun block -> match block.Mode with NoCheck _ -> true | _ -> false) |> List.length
+        let verified = analysis.Blocks.Length - excluded
+        reportNote $"Audit complete: {analysis.Blocks.Length} blocks — {verified} verified, {excluded} excluded, 0 failed."
+        let semanticArtifact = analysis.CachedArtifact |> Option.defaultWith (fun () -> SemanticExtractor.artifact analysis.Results)
+        if analysis.CachedArtifact.IsNone then
+            writeCurrentCache analysis.CachePath "*.semantic.json" (Newtonsoft.Json.JsonConvert.SerializeObject(semanticArtifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
+        semanticArtifact, analysis.Prelude
+
     /// <summary>Orchestrates the build process for one or more projects.</summary>
     let buildAction (warnAsError: bool) (projectPaths: string list) (theme: string) (version: string option) =
-        let extracted, apiDiagnostics, projectFingerprint = getUnifiedPackageCached projectPaths
-        let packageRaw = { extracted with Version = version |> Option.defaultValue extracted.Version }
-        let analysis = analyzeDocumentation projectPaths projectFingerprint packageRaw
-        if printAudit analysis <> 0 then
-            invalidOp "Documentation contains uncovered or non-compiling F# blocks. Fix the mapped audit failures before building."
-        if printApiDiagnostics warnAsError apiDiagnostics <> 0 then
-            invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
-        AnsiConsole.Status()
-            .Spinner(Spinner.Known.Dots)
-            .Start("[blue]Building documentation site...[/]", fun ctx ->
-                let semanticArtifact = analysis.CachedArtifact |> Option.defaultWith (fun () -> SemanticExtractor.artifact analysis.Results)
-                if analysis.CachedArtifact.IsNone then
-                    writeCurrentCache analysis.CachePath "*.semantic.json" (Newtonsoft.Json.JsonConvert.SerializeObject(semanticArtifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
-                let sourceDir = Directory.GetCurrentDirectory() 
-                let semanticCode =
-                    {
-                        SemanticCode.defaults with
-                            Artifact = Some semanticArtifact
-                            Prelude = analysis.Prelude
-                    }
-                let package = ContentProvider.applyApiDocsWithOptions "docs" sourceDir packageRaw semanticCode
-                let pages = ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
-                let config = loadSiteConfig()
-                
-                let historyDir = ".livedocs/history"
-                if not (Directory.Exists(historyDir)) then Directory.CreateDirectory(historyDir) |> ignore
-                
-                SiteBuilder.buildAll historyDir package pages config theme "output"
-                ContentProvider.copyStaticFiles "docs" "output"
-                
-                let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
-                psi.RedirectStandardOutput <- true
-                psi.RedirectStandardError <- true
-                psi.UseShellExecute <- false
-                let proc = System.Diagnostics.Process.Start(psi)
-                proc.WaitForExit()
-            )
+        let mutable deferredApiDiagnostics: ApiDiagnostic list = []
+        let pipeline reportStage reportProgress reportNote =
+            reportStage "Extracting API documentation"
+            let extracted, apiDiagnostics, projectFingerprint = getUnifiedPackageCachedWithProgress reportProgress projectPaths
+            let packageRaw = { extracted with Version = version |> Option.defaultValue extracted.Version }
+            reportStage "Checking documentation examples"
+            let semanticArtifact, prelude =
+                prepareBuildDocumentation reportProgress reportNote projectPaths projectFingerprint packageRaw
+            if warnAsError then
+                if printApiDiagnostics true apiDiagnostics <> 0 then
+                    invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
+            else
+                deferredApiDiagnostics <- apiDiagnostics
+            reportStage "Rendering documentation site"
+            let sourceDir = Directory.GetCurrentDirectory()
+            let semanticCode =
+                {
+                    SemanticCode.defaults with
+                        Artifact = Some semanticArtifact
+                        Prelude = prelude
+                }
+            let package = ContentProvider.applyApiDocsWithOptions "docs" sourceDir packageRaw semanticCode
+            let pages = ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
+            let config = loadSiteConfig()
+
+            let historyDir = ".livedocs/history"
+            if not (Directory.Exists(historyDir)) then Directory.CreateDirectory(historyDir) |> ignore
+
+            SiteBuilder.buildAll historyDir package pages config theme "output"
+            ContentProvider.copyStaticFiles "docs" "output"
+
+            reportStage "Building search index"
+            let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
+            psi.RedirectStandardOutput <- true
+            psi.RedirectStandardError <- true
+            psi.UseShellExecute <- false
+            let proc = System.Diagnostics.Process.Start(psi)
+            proc.WaitForExit()
+        if ConsoleOutput.interactive then
+            // Wrapper scripts commonly run the preview server as a background job so they can
+            // monitor a stop file. Spectre classifies that process as non-interactive even though
+            // stdout is still a terminal. An explicit --interactive true must override detection.
+            let settings = AnsiConsoleSettings()
+            settings.Interactive <- InteractionSupport.Yes
+            let interactiveConsole = AnsiConsole.Create(settings)
+            if ConsoleOutput.banner then
+                let started = Diagnostics.Stopwatch.StartNew()
+                let syncRoot = obj ()
+                let completed = ResizeArray<string * float * bool * string list>()
+                let mutable currentName: string option = None
+                let mutable currentText = "Starting documentation build"
+                let mutable currentStarted = 0.0
+                let currentNotes = ResizeArray<string>()
+                let finishCurrent succeeded =
+                    match currentName with
+                    | Some name ->
+                        completed.Add(name, started.Elapsed.TotalSeconds - currentStarted, succeeded, List.ofSeq currentNotes)
+                        currentNotes.Clear()
+                        currentName <- None
+                    | None -> ()
+                let startStage name =
+                    lock syncRoot (fun () ->
+                        if currentName <> Some name then
+                            finishCurrent true
+                            currentName <- Some name
+                            currentText <- name
+                            currentStarted <- started.Elapsed.TotalSeconds)
+                let reportProgress name current total =
+                    lock syncRoot (fun () ->
+                        if currentName <> Some name then
+                            finishCurrent true
+                            currentName <- Some name
+                            currentStarted <- started.Elapsed.TotalSeconds
+                        currentText <- $"{name} ({current}/{total})")
+                let reportNote note = lock syncRoot (fun () -> currentNotes.Add note)
+                let render () =
+                    let elapsed = started.Elapsed.TotalMilliseconds
+                    let activityFrames = Spinner.Known.Dots12.Frames
+                    let activity = activityFrames.[int (elapsed / 80.0) % activityFrames.Count]
+                    let status =
+                        lock syncRoot (fun () ->
+                            [ for name, duration, succeeded, notes in completed do
+                                  let mark = if succeeded then "[green]✓[/]" else "[red]✗[/]"
+                                  let formattedDuration = duration.ToString("0.0")
+                                  yield $"{mark} {Markup.Escape(name)} [grey]({formattedDuration}s)[/]"
+                                  for note in notes do yield $"  [grey]{Markup.Escape(note)}[/]"
+                              match currentName with
+                              | Some _ ->
+                                  let duration = started.Elapsed.TotalSeconds - currentStarted
+                                  let formattedDuration = duration.ToString("0.0")
+                                  yield $"[bold blue]{Markup.Escape(activity)} {Markup.Escape(currentText)}[/] [grey]({formattedDuration}s)[/]"
+                                  for note in currentNotes do yield $"  [grey]{Markup.Escape(note)}[/]"
+                              | None -> () ]
+                            |> String.concat "\n")
+                    LiveDocsBanner.render elapsed status
+                interactiveConsole.Live(render ())
+                    .AutoClear(false)
+                    .Start(fun context ->
+                        use stopAnimation = new Threading.CancellationTokenSource()
+                        let animation =
+                            Threading.Tasks.Task.Run(fun () ->
+                                while not stopAnimation.IsCancellationRequested do
+                                    context.UpdateTarget(render ())
+                                    Threading.Thread.Sleep(80))
+                        try
+                            try
+                                pipeline startStage reportProgress reportNote
+                                lock syncRoot (fun () -> finishCurrent true)
+                            with error ->
+                                lock syncRoot (fun () -> finishCurrent false)
+                                reraise ()
+                        finally
+                            stopAnimation.Cancel()
+                            animation.Wait())
+            else
+                interactiveConsole.Status()
+                    .Spinner(Spinner.Known.Dots12)
+                    .SpinnerStyle(Style.Parse("bold blue"))
+                    .Start("[bold blue]Starting documentation build[/]", fun context ->
+                        let update text = context.Status($"[bold blue]{Markup.Escape(text)}[/]") |> ignore
+                        pipeline update (fun name current total -> update $"{name} ({current}/{total})") (fun note -> AnsiConsole.MarkupLine($"  [grey]{Markup.Escape(note)}[/]")))
+        else
+            let reportStage stage = if ConsoleOutput.isInfo () then AnsiConsole.MarkupLine($"{Markup.Escape(stage)}...")
+            let reportProgress stage current total =
+                if ConsoleOutput.isInfo () then AnsiConsole.MarkupLine($"{Markup.Escape(stage)} ({current}/{total})")
+            let reportNote note = AnsiConsole.MarkupLine($"  [grey]{Markup.Escape(note)}[/]")
+            pipeline reportStage reportProgress reportNote
+        printApiDiagnostics false deferredApiDiagnostics |> ignore
         AnsiConsole.MarkupLine("[green]✔ Build complete:[/] output/")
 
     let buildHistoryAction manifestPath theme =
@@ -1021,6 +1249,12 @@ module Program =
         else
             try
                 let results = parser.Parse(args)
+                ConsoleOutput.configure
+                    (results.TryGetResult Verbosity)
+                    (results.GetResult(Interactive, defaultValue = true))
+                    (results.GetResult(Banner, defaultValue = true))
+                ConsoleOutput.animateBanner <-
+                    ConsoleOutput.interactive && ConsoleOutput.banner && (results.Contains Build || results.Contains Watch)
                 let theme = results.GetResult(Theme, defaultValue = "light")
                 
                 if results.Contains Init then
@@ -1028,6 +1262,7 @@ module Program =
                     AnsiConsole.MarkupLine("[blue]Scaffolding new project...[/]")
                     if not (Directory.Exists(".livedocs")) then Directory.CreateDirectory(".livedocs") |> ignore
                     if not (File.Exists(".livedocs/config.json")) then File.WriteAllText(".livedocs/config.json", "{}")
+                    if results.Contains Discover_Projects then writeDiscoveredProjects ()
                     if not (File.Exists(".livedocs/history.json")) then
                         let historyStarter = """{
   "SchemaVersion": 1,
@@ -1062,9 +1297,9 @@ Replace the project path below, then run from your repository root:
 
 ```bash
 dotnet build
-livedocs audit src/YourLibrary/YourLibrary.fsproj
-livedocs build src/YourLibrary/YourLibrary.fsproj
-livedocs watch src/YourLibrary/YourLibrary.fsproj --host 127.0.0.1 --port 5000
+livedocs audit
+livedocs build
+livedocs watch --host 127.0.0.1 --port 5000
 ```
 
 Add an ordinary `fsharp` fence to a guide for compile-only verification. Use `run` only for intentional execution,
@@ -1074,7 +1309,7 @@ Add an ordinary `fsharp` fence to a guide for compile-only verification. Use `ru
 To capture a release after verification succeeds, run:
 
 ```bash
-livedocs capture src/YourLibrary/YourLibrary.fsproj --version 1.0.0
+livedocs capture --version 1.0.0
 ```
 """
                         File.WriteAllText("docs/index.md", starter)
@@ -1108,18 +1343,14 @@ jobs:
       - run: dotnet tool restore
       - name: Verify and build documentation
         run: |
-          mapfile -t projects < <(find src -name '*.fsproj' -type f | sort)
-          test ${#projects[@]} -gt 0
           dotnet build --nologo
-          dotnet livedocs generate-tests "${projects[@]}"
-          dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj --nologo
-          dotnet livedocs build "${projects[@]}"
+          dotnet livedocs test
+          dotnet livedocs build
       - name: Capture release documentation
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          mapfile -t projects < <(find src -name '*.fsproj' -type f | sort)
           version="${GITHUB_REF_NAME#v}"
-          dotnet livedocs capture "${projects[@]}" --version "$version" --output "artifacts/livedocs-$version.zip"
+          dotnet livedocs capture --version "$version" --output "artifacts/livedocs-$version.zip"
       - name: Publish immutable release capsule
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -1139,12 +1370,12 @@ jobs:
                     0
 
                 elif results.Contains GenerateTests then
-                    let projectPaths = results.GetResult GenerateTests
+                    let projectPaths = results.GetResult GenerateTests |> resolveProjects "generate-tests"
                     generateSnapshotTests projectPaths
 
                 elif results.Contains Capture then
                     printBanner()
-                    let projectPaths = results.GetResult Capture
+                    let projectPaths = results.GetResult Capture |> resolveProjects "capture"
                     let version = results.TryGetResult Version
                     let output = results.TryGetResult Output
                     captureAction (results.Contains Warn_As_Error) (results.Contains Dry_Run) projectPaths version output
@@ -1177,7 +1408,7 @@ jobs:
 
                 elif results.Contains Extract then
                     printBanner()
-                    let projectPaths = results.GetResult Extract
+                    let projectPaths = results.GetResult Extract |> resolveProjects "extract"
                     let mutable extractDiagnostics = []
                     AnsiConsole.Status().Start("Extracting symbols...", fun ctx ->
                         let packageRaw, apiDiagnostics = getUnifiedPackage projectPaths |> Async.RunSynchronously
@@ -1204,7 +1435,7 @@ jobs:
 
                 elif results.Contains Test then
                     printBanner()
-                    let projectPaths = results.GetResult Test
+                    let projectPaths = results.GetResult Test |> resolveProjects "test"
                     let mutable allPassed = auditAction (results.Contains Warn_As_Error) projectPaths = 0
                     // The same references the generated cases receive. Passing none, as the retired
                     // path did, made any example touching another project fail for want of a
@@ -1274,11 +1505,11 @@ jobs:
 
                 elif results.Contains Audit then
                     printBanner()
-                    auditAction (results.Contains Warn_As_Error) (results.GetResult Audit)
+                    auditAction (results.Contains Warn_As_Error) (results.GetResult Audit |> resolveProjects "audit")
 
                 elif results.Contains Build then
                     printBanner()
-                    let projectPaths = results.GetResult Build
+                    let projectPaths = results.GetResult Build |> resolveProjects "build"
                     buildAction (results.Contains Warn_As_Error) projectPaths theme (results.TryGetResult Version)
                     0
 
@@ -1289,14 +1520,18 @@ jobs:
 
                 elif results.Contains Watch then
                     printBanner()
-                    let projectPaths = results.GetResult Watch
+                    let projectPaths = results.GetResult Watch |> resolveProjects "watch"
                     let version = results.TryGetResult Version
                     let host = results.GetResult(Host, defaultValue = "0.0.0.0")
                     let port = results.GetResult(Port, defaultValue = 5000)
                     if String.IsNullOrWhiteSpace host then invalidArg "host" "Preview host must not be empty."
                     if port < 1 || port > 65535 then invalidArg "port" "Preview port must be between 1 and 65535."
                     let previewUrl = $"http://{host}:{port}"
-                    buildAction (results.Contains Warn_As_Error) projectPaths theme version
+                    let buildPreview () =
+                        // buildAction owns documentation verification and diagnostic reporting. Running
+                        // auditAction first duplicates both in watch output without adding coverage.
+                        buildAction (results.Contains Warn_As_Error) projectPaths theme version
+                    buildPreview ()
                     
                     try
                         let builder = WebApplication.CreateBuilder()
@@ -1332,7 +1567,7 @@ jobs:
                             PreviewWatcher.start
                                 (Directory.GetCurrentDirectory())
                                 (PreviewWatcher.parseIgnored (results.GetResults Ignore))
-                                (fun () -> buildAction (results.Contains Warn_As_Error) projectPaths theme version)
+                                buildPreview
                         AnsiConsole.MarkupLine("")
 
                         app.Run(previewUrl)

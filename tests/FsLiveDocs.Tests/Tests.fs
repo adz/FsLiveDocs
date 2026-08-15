@@ -985,6 +985,10 @@ module SiteBuilderTests =
         Assert.True(nestedPage.IndexOf("window.Prism.manual = true", StringComparison.Ordinal) < nestedPage.IndexOf("prism.min.js", StringComparison.Ordinal))
         Assert.Contains(".livedocs-code .tok-keyword { color: var(--livedocs-code-keyword); }", nestedPage)
         Assert.Contains("#sidebar-root [data-sidebar-item=\"true\"] a[href]", nestedPage)
+        Assert.Contains("<div id=\"search-ui\" class=\"hidden md:block not-prose\"></div>", nestedPage)
+        Assert.Contains("#search-ui .pagefind-ui__drawer", nestedPage)
+        Assert.Contains("overflow-wrap: anywhere", nestedPage)
+        Assert.DoesNotContain("not-prose mb-12", nestedPage)
         Assert.Contains("el.style.display = el.getAttribute('data-theme-variant') === theme ? 'block' : 'none'", nestedPage)
 
     [<Fact>]

@@ -9,6 +9,10 @@ open FsLiveDocs.Core
 /// <summary>The high-level site assembly engine.</summary>
 module SiteBuilder =
 
+    let private parallelRender (items: 'a array) (render: 'a -> unit) =
+        let options = Threading.Tasks.ParallelOptions(MaxDegreeOfParallelism = min 4 Environment.ProcessorCount)
+        Threading.Tasks.Parallel.ForEach(items, options, Action<'a>(render)) |> ignore
+
     let private validateGeneratedApiLinks (apiDir: string) =
         let hrefPattern = Regex("href=\"(?<href>[^\"]+)\"", RegexOptions.IgnoreCase)
         let apiRoot = Path.GetFullPath(apiDir) + string Path.DirectorySeparatorChar
@@ -338,24 +342,29 @@ module SiteBuilder =
         // LLMS Integration
         File.WriteAllText(Path.Combine(context.OutputDir, "llms.txt"), generateLlmsTxt context.Package)
         
-        // Render content pages
-        for page in context.Pages do
+        // Pages are independent immutable renders. Rendering them concurrently avoids making
+        // large documentation sets pay the full HTML generation cost serially.
+        context.Pages
+        |> List.toArray
+        |> fun pages -> parallelRender pages (fun page ->
             let depth = page.OutputPath.Split('/').Length - 1
             let pageContext = { renderContext with RootPath = context.RootPath + String.replicate depth "../" }
-            let (html: string) = renderPage page pageContext
+            let html = renderPage page pageContext
             let outputPath = Path.Combine(context.OutputDir, page.OutputPath)
             let outputDirectory = Path.GetDirectoryName(outputPath)
-            if not (Directory.Exists(outputDirectory)) then Directory.CreateDirectory(outputDirectory) |> ignore
-            File.WriteAllText(outputPath, html)
+            Directory.CreateDirectory(outputDirectory) |> ignore
+            File.WriteAllText(outputPath, html))
 
         // Render API docs - Multi-page approach
         let apiDir = Path.Combine(context.OutputDir, "api")
         if not (Directory.Exists(apiDir)) then Directory.CreateDirectory(apiDir) |> ignore
         
         let apiRenderContext = { renderContext with RootPath = context.RootPath + "../" }
-        for e in Presentation.flattenEntities context.Package.Entities do
-            let html = renderEntityPage e apiRenderContext
-            File.WriteAllText(Path.Combine(apiDir, e.Id + ".html"), html)
+        Presentation.flattenEntities context.Package.Entities
+        |> List.toArray
+        |> fun entities -> parallelRender entities (fun entity ->
+            let html = renderEntityPage entity apiRenderContext
+            File.WriteAllText(Path.Combine(apiDir, entity.Id + ".html"), html))
 
         validateGeneratedApiLinks apiDir
 
