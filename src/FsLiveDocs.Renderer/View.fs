@@ -157,9 +157,10 @@ module View =
                 | DocsFolder childPath ->
                     yield li [ attr "data-sidebar-item" "true" ] [
                         details [ _class "group"; attr "data-docs-group" childPath ] [
+                            // The menu's own list styles already render a disclosure arrow for
+                            // `li > details > summary`; adding our own icon here duplicated it.
                             summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none font-semibold text-sm" ] [
                                 span [] [ str (docsFolderLabel childPath items) ]
-                                i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
                             ]
                             ul [ _class "menu menu-sm p-0 mt-1 ml-2 border-l border-base-300" ] (sidebarDocsItems rootPath childPath items)
                         ]
@@ -180,23 +181,99 @@ module View =
                         ] [
                             str e.Name
                         ]
+                        // The menu's own list styles already render a disclosure arrow for
+                        // `li > details > summary`; this button is only the click target that
+                        // toggles it (the label link above intercepts clicks to navigate instead).
                         button [
                             _type "button"
                             attr "onclick" "const d = this.closest('details'); if (d) d.open = !d.open; event.preventDefault(); event.stopPropagation();"
-                            _class "ml-2 shrink-0"
+                            _class "ml-2 shrink-0 w-4 h-4"
                             attr "aria-label" $"Toggle {e.Name}"
-                        ] [
-                            i [ _class "bi bi-chevron-right text-[10px] transition-transform group-open:rotate-90" ] []
-                        ]
+                        ] []
                     ]
                     ul [ _class "menu menu-sm p-0 mt-1 ml-2 border-l border-base-300" ] (e.Entities |> List.map (sidebarEntityLink rootPath))
                 ]
         ]
 
+    let entitiesForPackage (packageInfo: PackageInfo) (entities: EntityModel list) =
+        let contributedIds = packageInfo.EntityIds |> Set.ofList
+
+        let rec retainContributedEntity (entity: EntityModel) =
+            let children = entity.Entities |> List.choose retainContributedEntity
+            let isContributed = contributedIds.Contains entity.Id
+            let ownsDescendant =
+                contributedIds
+                |> Set.exists (fun id -> id.StartsWith(entity.Id + ".", StringComparison.Ordinal))
+
+            if isContributed || ownsDescendant || not children.IsEmpty then
+                Some { entity with Entities = children }
+            else
+                None
+
+        entities |> List.choose retainContributedEntity
+
+    /// <summary>Finds the entity whose Id matches a package's own name, so the sidebar can link
+    /// straight to it and show its contents instead of the ancestor namespace chain leading to it.</summary>
+    let rec private findPackageRoot (packageName: string) (entities: EntityModel list) =
+        entities
+        |> List.tryPick (fun entity ->
+            if entity.Id.Equals(packageName, StringComparison.OrdinalIgnoreCase) then Some entity
+            else findPackageRoot packageName entity.Entities)
+
+    let private sidebarApiGroup (rootPath: string) (label: string) (groupPageId: string option) (packageAnchor: string option) (entities: EntityModel list) =
+        // The label spans the full row height (not just its text) so the whole row - not only the
+        // glyphs - is a navigation target, matching leaf sidebar items. Only the chevron's own small
+        // zone toggles expand/collapse; a plain background highlight on this link (added by the
+        // active-page script) then covers the entire row instead of a text-sized sliver next to it.
+        li [ attr "data-sidebar-item" "true" ] [
+            details [ _class "group" ] [
+                // The menu's own list styles already render a disclosure arrow for
+                // `li > details > summary`; adding our own icon here duplicated it.
+                summary [ _class "flex items-center justify-between text-primary font-black hover:bg-base-300 rounded-lg cursor-pointer list-none uppercase tracking-widest text-[10px] pr-4" ] [
+                    match groupPageId with
+                    | Some pageId ->
+                        // When two projects both contribute directly to the same shared namespace
+                        // page, jump to this project's own package badge instead of the bare page
+                        // top, so this link doesn't look like it silently opened a different project.
+                        let fragment =
+                            packageAnchor
+                            |> Option.map (fun name -> "#package-" + Uri.EscapeDataString name)
+                            |> Option.defaultValue ""
+                        a [
+                            _href (Url.resolve rootPath ("api/" + pageId + ".html") + fragment)
+                            attr "onclick" "event.stopPropagation();"
+                            _class "flex-1 min-w-0 truncate hover:link rounded-lg py-2 pl-4"
+                        ] [ str label ]
+                    | None -> span [ _class "flex-1 min-w-0 truncate py-2 pl-4" ] [ str label ]
+                ]
+                ul [ _class "menu menu-sm p-0 mt-2 gap-1 border-l-2 border-primary/10 ml-4" ] (entities |> List.map (sidebarEntityLink rootPath))
+            ]
+        ]
+
     let sidebar (rootPath: string) (pages: ContentPage list) (package: PackageModel) =
-        let apiGroups = 
-            package.Entities 
-            |> List.groupBy (fun e -> e.Id.Split('.').[0])
+        let packageGroups =
+            if isNull (box package.Packages) then []
+            else
+                // Two independent projects can both add members directly to the same shared
+                // namespace (e.g. both "Axial" and "Axial.Telemetry" declare things in namespace
+                // "Axial.Telemetry"). Always link to this project's own package-content anchor on the
+                // target page rather than the bare page top: when the page is genuinely shared, the
+                // renderer groups Contents by owning project under a matching anchor id, so this jumps
+                // straight to this project's own members instead of looking like it belongs to
+                // whichever project happens to render first. When the page isn't shared, no element
+                // has that id and the fragment is simply a harmless no-op.
+                package.Packages
+                |> List.map (fun project ->
+                    let contributed = entitiesForPackage project package.Entities
+                    match findPackageRoot project.Name contributed with
+                    | Some root -> project.Name, Some root.Id, root.Entities, Some project.Name, contributed
+                    | None -> project.Name, None, contributed, None, contributed)
+                |> List.filter (fun (_, _, _, _, contributed) -> not contributed.IsEmpty)
+                |> List.map (fun (name, pageId, entities, anchor, _) -> name, pageId, entities, anchor)
+
+        let namespaceGroups =
+            package.Entities
+            |> List.groupBy (fun entity -> entity.Id.Split('.').[0])
             |> List.sortBy fst
 
         let docsGroups =
@@ -237,9 +314,10 @@ module View =
                         else
                             li [ attr "data-sidebar-item" "true" ] [
                                 details [ _class "group" ] [
+                                    // The menu's own list styles already render a disclosure arrow for
+                                    // `li > details > summary`; adding our own icon here duplicated it.
                                     summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none font-black text-[10px] uppercase tracking-[0.2em] opacity-70" ] [
                                         span [] [ str (docsSectionLabel groupKey items) ]
-                                        i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
                                     ]
                                     ul [ _class "menu menu-sm p-0 mt-2 ml-2 border-l border-base-300" ] (sidebarDocsItems rootPath groupKey items)
                                 ]
@@ -251,37 +329,22 @@ module View =
             div [ attr "data-sidebar-section" "true" ] [
                 h3WithAnchor "api-reference" "API Reference" "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
                 ul [ _class "menu menu-sm p-0 gap-2" ] (
-                    apiGroups |> List.map (fun (area, entities) ->
-                        let entitiesToRender = 
-                            // If we have a single namespace root that matches the area name, and it has children,
-                            // promote children to the top level of this group to avoid "Namespace > Namespace" redundancy.
-                            match entities with
-                            | [ e ] when e.Kind = EntityKind.Namespace && e.Name.Equals(area, StringComparison.OrdinalIgnoreCase) && not e.Entities.IsEmpty ->
-                                e.Entities
-                            | _ -> entities
-
-                        let areaPageId =
-                            entities
-                            |> List.tryFind (fun e -> e.Kind = EntityKind.Namespace && e.Name.Equals(area, StringComparison.OrdinalIgnoreCase))
-                            |> Option.map (fun e -> e.Id)
-                            |> Option.defaultValue area
-
-                        li [ attr "data-sidebar-item" "true" ] [
-                            details [ _class "group" ] [
-                                summary [ _class "flex items-center justify-between py-2 px-4 text-primary font-black hover:bg-base-300 rounded-lg cursor-pointer list-none uppercase tracking-widest text-[10px]" ] [
-                                    a [
-                                        _href (Url.resolve rootPath ("api/" + areaPageId + ".html"))
-                                        attr "onclick" "event.stopPropagation();"
-                                        _class "flex-1 truncate hover:link"
-                                    ] [
-                                        str area
-                                    ]
-                                    i [ _class "bi bi-chevron-down text-[8px] transition-transform group-open:rotate-180" ] []
-                                ]
-                                ul [ _class "menu menu-sm p-0 mt-2 gap-1 border-l-2 border-primary/10 ml-4" ] (entitiesToRender |> List.map (sidebarEntityLink rootPath))
-                            ]
-                        ]
-                    )
+                    if packageGroups.IsEmpty then
+                        namespaceGroups
+                        |> List.map (fun (area, entities) ->
+                            let entitiesToRender =
+                                match entities with
+                                | [ entity ] when entity.Kind = EntityKind.Namespace && entity.Name.Equals(area, StringComparison.OrdinalIgnoreCase) && not entity.Entities.IsEmpty -> entity.Entities
+                                | _ -> entities
+                            let areaPageId =
+                                entities
+                                |> List.tryFind (fun entity -> entity.Kind = EntityKind.Namespace && entity.Name.Equals(area, StringComparison.OrdinalIgnoreCase))
+                                |> Option.map _.Id
+                                |> Option.defaultValue area
+                            sidebarApiGroup rootPath area (Some areaPageId) None entitiesToRender)
+                    else
+                        packageGroups
+                        |> List.map (fun (projectName, pageId, entities, anchor) -> sidebarApiGroup rootPath projectName pageId anchor entities)
                 )
             ]
         ]
@@ -419,6 +482,7 @@ module View =
                     summary::-webkit-details-marker { display: none !important; }
                     summary::marker { display: none !important; }
                     summary { list-style: none !important; }
+                    [id^="package-"]:target { color: hsl(var(--p)) !important; }
                     #search-ui {
                         --pagefind-ui-primary: hsl(var(--p));
                         --pagefind-ui-text: hsl(var(--bc));

@@ -66,13 +66,25 @@ module SiteBuilder =
     /// <param name="e">The entity to render.</param>
     /// <returns>The rendered HTML document as a string.</returns>
     let renderEntityPage (e: EntityModel) (context: SiteRenderContext) =
+        // Other projects' own root entities (e.g. "Axial.Layers") nest under a shared parent
+        // namespace ("Axial") in the merged tree. Each such project already gets its own sidebar
+        // group and API index card, so listing it again in the parent's Contents is noise.
+        let otherPackageRootIds =
+            (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
+            |> List.map (fun package -> package.Name)
+            |> Set.ofList
+
         let renderPackageBadges (ent: EntityModel) =
             let packageNames =
+                // Only a package that directly owns this entity (not merely an ancestor namespace
+                // shared by many packages) is worth surfacing here - otherwise every package that
+                // nests anything below a shared namespace root would show up on that root's page.
                 (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
-                |> List.filter (fun package ->
-                    package.EntityIds
-                    |> List.exists (fun entityId -> entityId = ent.Id || entityId.StartsWith(ent.Id + ".", StringComparison.Ordinal)))
+                |> List.filter (fun package -> package.EntityIds |> List.contains ent.Id)
                 |> List.map (fun package -> package.Name)
+                // A package name that matches the entity's own id is already implied by the page's
+                // breadcrumb, so surfacing it as a badge is noise.
+                |> List.filter (fun name -> name <> ent.Id)
                 |> List.distinct
                 |> List.sort
             if packageNames.IsEmpty then emptyText
@@ -143,17 +155,47 @@ module SiteBuilder =
 
                 renderSummaryBlock ent.Summary
 
-                if not ent.Entities.IsEmpty then
+                let ownContents =
+                    ent.Entities |> List.filter (fun ne -> not (otherPackageRootIds.Contains ne.Id))
+
+                let contentsCard (ne: EntityModel) =
+                    a [ _href (ne.Id + ".html"); _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
+                        span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str ne.Name ]
+                        span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string ne.Kind) ]
+                    ]
+
+                if not ownContents.IsEmpty then
+                    // Two independent projects can both add members directly to the same shared
+                    // namespace (e.g. "Axial" and "Axial.Telemetry" both declare things in namespace
+                    // "Axial.Telemetry"). Split Contents by the owning project and give each group an
+                    // anchor, so a sidebar link scoped to one project can land on that project's own
+                    // members instead of the page just looking like it belongs to a different one.
+                    let packagesFor (childId: string) =
+                        (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
+                        |> List.filter (fun package -> package.EntityIds |> List.contains childId)
+                        |> List.map (fun package -> package.Name)
+
+                    let groupedByPackage =
+                        ownContents
+                        |> List.groupBy (fun ne -> packagesFor ne.Id |> List.tryHead |> Option.defaultValue "")
+                        |> List.sortBy fst
+
                     div [ _class "mb-16" ] [
                         View.h2WithAnchor (ent.Id + "-contents") "Contents" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                        div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (
-                            ent.Entities |> List.map (fun ne ->
-                                a [ _href (ne.Id + ".html"); _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
-                                    span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str ne.Name ]
-                                    span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string ne.Kind) ]
-                                ]
+                        if groupedByPackage.Length > 1 then
+                            div [ _class "flex flex-col gap-8" ] (
+                                groupedByPackage |> List.map (fun (packageName, items) ->
+                                    div [ _class "flex flex-col gap-4" ] [
+                                        if packageName <> "" then
+                                            h3 [
+                                                _id ("package-" + packageName)
+                                                _class "scroll-mt-24 text-[10px] font-black uppercase tracking-widest opacity-40"
+                                            ] [ str packageName ]
+                                        div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (items |> List.map contentsCard)
+                                    ])
                             )
-                        )
+                        else
+                            div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (ownContents |> List.map contentsCard)
                     ]
 
                 if ent.Kind <> EntityKind.Module && not ent.Members.IsEmpty then
@@ -369,33 +411,50 @@ module SiteBuilder =
         validateGeneratedApiLinks apiDir
 
         // Generate api.html (Overview / API Reference index)
+        let card (e: EntityModel) =
+            a [ _href (context.RootPath + "api/" + e.Id + ".html"); _class "card bg-base-100 border border-base-300 p-5 hover:shadow-xl hover:border-primary transition-all group" ] [
+                div [ _class "flex justify-between items-center" ] [
+                    h3 [ _class "text-lg font-bold group-hover:text-primary transition-colors" ] [ str e.Name ]
+                    span [ _class "badge badge-sm opacity-40" ] [ str (string e.Kind) ]
+                ]
+                p [ _class "text-sm opacity-60 mt-2 line-clamp-2" ] [ str (Presentation.synopsis e.Summary) ]
+            ]
+
+        let apiSections (entities: EntityModel list) =
+            let topLevel =
+                match entities with
+                | [ e ] when e.Kind = EntityKind.Namespace && e.Members.IsEmpty -> e.Entities
+                | _ -> entities
+
+            topLevel |> List.map (fun root ->
+                let descendants = Presentation.flattenEntities root.Entities
+                section [ _class "flex flex-col gap-5" ] [
+                    card root
+                    if not descendants.IsEmpty then
+                        div [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 ml-4 md:ml-8 border-l-4 border-primary/10 pl-4 md:pl-8" ] (
+                            descendants |> List.map card
+                        )
+                ]
+            )
+
+        let packageGroups =
+            if isNull (box context.Package.Packages) then []
+            else
+                context.Package.Packages
+                |> List.map (fun project -> project.Name, View.entitiesForPackage project context.Package.Entities)
+                |> List.filter (snd >> List.isEmpty >> not)
+
         let apiOverview = [
             View.h1WithAnchor "api-reference" "API Reference" "text-5xl font-black mb-12 tracking-tighter"
-            div [ _class "flex flex-col gap-12 not-prose" ] (
-                let card (e: EntityModel) =
-                    a [ _href (context.RootPath + "api/" + e.Id + ".html"); _class "card bg-base-100 border border-base-300 p-5 hover:shadow-xl hover:border-primary transition-all group" ] [
-                        div [ _class "flex justify-between items-center" ] [
-                            h3 [ _class "text-lg font-bold group-hover:text-primary transition-colors" ] [ str e.Name ]
-                            span [ _class "badge badge-sm opacity-40" ] [ str (string e.Kind) ]
-                        ]
-                        p [ _class "text-sm opacity-60 mt-2 line-clamp-2" ] [ str (Presentation.synopsis e.Summary) ]
-                    ]
-
-                let topLevel =
-                    match context.Package.Entities with
-                    | [ e ] when e.Kind = EntityKind.Namespace && e.Members.IsEmpty -> e.Entities
-                    | _ -> context.Package.Entities
-
-                topLevel |> List.map (fun root ->
-                    let descendants = Presentation.flattenEntities root.Entities
-                    section [ _class "flex flex-col gap-5" ] [
-                        card root
-                        if not descendants.IsEmpty then
-                            div [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 ml-4 md:ml-8 border-l-4 border-primary/10 pl-4 md:pl-8" ] (
-                                descendants |> List.map card
-                            )
-                    ]
-                )
+            div [ _class "flex flex-col gap-16 not-prose" ] (
+                if packageGroups.IsEmpty then
+                    apiSections context.Package.Entities
+                else
+                    packageGroups |> List.collect (fun (projectName, entities) ->
+                        [
+                            h2 [ _class "text-xs font-black uppercase tracking-[0.2em] opacity-40 border-b border-base-300 pb-3" ] [ str projectName ]
+                            div [ _class "flex flex-col gap-12" ] (apiSections entities)
+                        ])
             )
         ]
         let (apiHtml: string) = View.layout "API Reference" context.Pages context.Package context.Config context.Versions context.Theme context.RootPath apiOverview |> RenderView.AsString.htmlNode

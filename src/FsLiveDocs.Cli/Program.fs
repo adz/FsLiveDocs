@@ -1117,7 +1117,7 @@ module Program =
                 let reportNote note = lock syncRoot (fun () -> currentNotes.Add note)
                 let render () =
                     let elapsed = started.Elapsed.TotalMilliseconds
-                    let activityFrames = Spinner.Known.Dots12.Frames
+                    let activityFrames = Spinner.Known.DotsCircle.Frames
                     let activity = activityFrames.[int (elapsed / 80.0) % activityFrames.Count]
                     let status =
                         lock syncRoot (fun () ->
@@ -1156,7 +1156,7 @@ module Program =
                             animation.Wait())
             else
                 interactiveConsole.Status()
-                    .Spinner(Spinner.Known.Dots12)
+                    .Spinner(Spinner.Known.DotsCircle)
                     .SpinnerStyle(Style.Parse("bold blue"))
                     .Start("[bold blue]Starting documentation build[/]", fun context ->
                         let update text = context.Status($"[bold blue]{Markup.Escape(text)}[/]") |> ignore
@@ -1587,9 +1587,12 @@ jobs:
                 else 
                     printUsage (Some "No command specified.")
                     0
-            with 
+            with
             | :? ArguParseException as e ->
                 AnsiConsole.WriteLine(e.Message)
+                1
+            | :? InvalidOperationException as e ->
+                AnsiConsole.MarkupLine($"[red]✖ {Markup.Escape(e.Message)}[/]")
                 1
             | e ->
                 AnsiConsole.WriteException(e)

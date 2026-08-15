@@ -690,7 +690,11 @@ module SymbolLister =
                     Version = "0.1.0"
                     Entities = entities
                     Scenarios = extractScenariosFromAssembly dllPath
-                    Packages = [ { Name = assemblyName; EntityIds = entities |> List.map (fun entity -> entity.Id) |> List.distinct } ]
+                    // Namespace containers are synthesized independently by every project that has anything
+                    // nested under them, so listing them here would make every project appear to "own" shared
+                    // ancestor namespaces. Only concrete entities (modules, types, ...) reflect real per-project
+                    // ownership; ancestor namespace nodes are still retained in rendered trees via prefix matching.
+                    Packages = [ { Name = assemblyName; EntityIds = entities |> List.filter (fun entity -> entity.Kind <> EntityKind.Namespace) |> List.map (fun entity -> entity.Id) |> List.distinct } ]
                 }, diagnostics
     }
 

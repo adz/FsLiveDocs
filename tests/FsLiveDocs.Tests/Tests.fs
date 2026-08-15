@@ -1068,6 +1068,350 @@ module SiteBuilderTests =
         Assert.Contains("href=\"api/Example.Widget.html\"", apiIndex)
         Assert.Contains("A useful widget.", apiIndex)
 
+    [<Fact>]
+    let ``sidebar groups API reference by configured project order`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let entity id name = {
+            Id = id
+            Name = name
+            Kind = EntityKind.Module
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let first = entity "Shared.First" "First"
+        let second = entity "Shared.Second" "Second"
+        let shared = {
+            Id = "Shared"
+            Name = "Shared"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = [ first; second ]
+        }
+        let package : PackageModel = {
+            Version = "1.0"
+            Entities = [ shared ]
+            Scenarios = []
+            Packages = [
+                { Name = "Second.Project"; EntityIds = [ "Shared"; second.Id ] }
+                { Name = "First.Project"; EntityIds = [ "Shared"; first.Id ] }
+            ]
+        }
+
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+
+        let homepage = File.ReadAllText(Path.Combine(outputDir, "index.html"))
+        let secondProject = homepage.IndexOf(">Second.Project<", StringComparison.Ordinal)
+        let firstProject = homepage.IndexOf(">First.Project<", StringComparison.Ordinal)
+        Assert.True(secondProject >= 0)
+        Assert.True(firstProject > secondProject)
+
+        let secondMenu = homepage.Substring(secondProject, firstProject - secondProject)
+        Assert.Contains(">Second</a>", secondMenu)
+        Assert.DoesNotContain(">First</a>", secondMenu)
+
+    [<Fact>]
+    let ``API reference index groups entities by project`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let entity id name = {
+            Id = id
+            Name = name
+            Kind = EntityKind.Module
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let first = entity "Shared.First" "First"
+        let second = entity "Shared.Second" "Second"
+        let shared = {
+            Id = "Shared"
+            Name = "Shared"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = [ first; second ]
+        }
+        let package : PackageModel = {
+            Version = "1.0"
+            Entities = [ shared ]
+            Scenarios = []
+            Packages = [
+                { Name = "Second.Project"; EntityIds = [ "Shared"; second.Id ] }
+                { Name = "First.Project"; EntityIds = [ "Shared"; first.Id ] }
+            ]
+        }
+
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+
+        let apiIndex = File.ReadAllText(Path.Combine(outputDir, "api.html"))
+        let secondProject = apiIndex.IndexOf(">Second.Project<", StringComparison.Ordinal)
+        let firstProject = apiIndex.IndexOf(">First.Project<", StringComparison.Ordinal)
+        Assert.True(secondProject >= 0)
+        Assert.True(firstProject > secondProject)
+
+        let secondSection = apiIndex.Substring(secondProject, firstProject - secondProject)
+        Assert.Contains(">Second<", secondSection)
+        Assert.DoesNotContain(">First<", secondSection)
+
+    [<Fact>]
+    let ``entity page hides a package badge that only restates the entity's own namespace`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let owned = {
+            Id = "Axial.Layers"
+            Name = "Layers"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let shared = {
+            Id = "Axial.Shared"
+            Name = "Shared"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let package : PackageModel = {
+            Version = "1.0"
+            Entities = [ owned; shared ]
+            Scenarios = []
+            Packages = [
+                { Name = "Axial.Layers"; EntityIds = [ owned.Id; shared.Id ] }
+                { Name = "Axial.PlatformService"; EntityIds = [ shared.Id ] }
+            ]
+        }
+
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+
+        let ownedPage = File.ReadAllText(Path.Combine(outputDir, "api", "Axial.Layers.html"))
+        Assert.DoesNotContain("badge-outline font-mono", ownedPage)
+
+        let sharedPage = File.ReadAllText(Path.Combine(outputDir, "api", "Axial.Shared.html"))
+        Assert.Contains(">Axial.Layers<", sharedPage)
+        Assert.Contains(">Axial.PlatformService<", sharedPage)
+
+    [<Fact>]
+    let ``sidebar links a project group straight to its own entity, skipping ancestor namespace wrappers`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let builders = {
+            Id = "Axial.Layers.Builders"
+            Name = "Builders"
+            Kind = EntityKind.Module
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let layer = {
+            Id = "Axial.Layers.Layer"
+            Name = "Layer"
+            Kind = EntityKind.Module
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let axialLayers = {
+            Id = "Axial.Layers"
+            Name = "Layers"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = [ builders; layer ]
+        }
+        let axial = {
+            Id = "Axial"
+            Name = "Axial"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = [ axialLayers ]
+        }
+        let package : PackageModel = {
+            Version = "1.0"
+            Entities = [ axial ]
+            Scenarios = []
+            Packages = [
+                { Name = "Axial.Layers"; EntityIds = [ builders.Id; layer.Id ] }
+            ]
+        }
+
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+
+        let homepage = File.ReadAllText(Path.Combine(outputDir, "index.html"))
+        let groupStart = homepage.IndexOf(">Axial.Layers<", StringComparison.Ordinal)
+        Assert.True(groupStart >= 0)
+        Assert.Contains("href=\"api/Axial.Layers.html", homepage.Substring(max 0 (groupStart - 200), 200))
+
+        let groupEnd = homepage.IndexOf("</details>", groupStart, StringComparison.Ordinal)
+        let groupBody = homepage.Substring(groupStart, groupEnd - groupStart)
+        Assert.DoesNotContain(">Axial<", groupBody)
+        Assert.DoesNotContain(">Layers<", groupBody)
+        Assert.Contains(">Builders<", groupBody)
+        Assert.Contains(">Layer<", groupBody)
+
+    [<Fact>]
+    let ``entity page Contents omits another project's own root namespace`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let app = {
+            Id = "Axial.App"
+            Name = "App"
+            Kind = EntityKind.Module
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let axialLayers = {
+            Id = "Axial.Layers"
+            Name = "Layers"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let axial = {
+            Id = "Axial"
+            Name = "Axial"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = [ app; axialLayers ]
+        }
+        let package : PackageModel = {
+            Version = "1.0"
+            Entities = [ axial ]
+            Scenarios = []
+            Packages = [
+                { Name = "Axial"; EntityIds = [ app.Id ] }
+                { Name = "Axial.Layers"; EntityIds = [] }
+            ]
+        }
+
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+
+        let axialPage = File.ReadAllText(Path.Combine(outputDir, "api", "Axial.html"))
+        Assert.Contains(">App<", axialPage)
+        Assert.DoesNotContain(">Layers<", axialPage)
+
+    [<Fact>]
+    let ``sidebar link to a namespace shared by two projects targets that project's own content`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let attribute = {
+            Id = "Axial.Telemetry.Attribute"
+            Name = "Attribute"
+            Kind = EntityKind.Type
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let fiberTelemetry = {
+            Id = "Axial.Telemetry.FiberTelemetry"
+            Name = "FiberTelemetry"
+            Kind = EntityKind.Module
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let telemetry = {
+            Id = "Axial.Telemetry"
+            Name = "Telemetry"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = [ attribute; fiberTelemetry ]
+        }
+        let axial = {
+            Id = "Axial"
+            Name = "Axial"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = [ telemetry ]
+        }
+        let package : PackageModel = {
+            Version = "1.0"
+            Entities = [ axial ]
+            Scenarios = []
+            Packages = [
+                { Name = "Axial"; EntityIds = [ attribute.Id ] }
+                { Name = "Axial.Telemetry"; EntityIds = [ fiberTelemetry.Id ] }
+            ]
+        }
+
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+
+        let homepage = File.ReadAllText(Path.Combine(outputDir, "index.html"))
+        Assert.Contains("href=\"api/Axial.Telemetry.html#package-Axial.Telemetry\"", homepage)
+
+        let telemetryPage = File.ReadAllText(Path.Combine(outputDir, "api", "Axial.Telemetry.html"))
+        Assert.Contains("id=\"package-Axial.Telemetry\"", telemetryPage)
+        Assert.Contains("id=\"package-Axial\"", telemetryPage)
+
 module PresentationTests =
 
     [<Fact>]
