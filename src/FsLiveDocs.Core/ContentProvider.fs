@@ -3,6 +3,8 @@ namespace FsLiveDocs.Core
 open System.IO
 open System.Text.RegularExpressions
 open Markdig
+open Markdig.Syntax
+open Markdig.Syntax.Inlines
 open YamlDotNet.Serialization
 open YamlDotNet.Serialization.NamingConventions
 
@@ -159,7 +161,8 @@ module ContentProvider =
         elif cleaned.StartsWith("http://", System.StringComparison.OrdinalIgnoreCase)
              || cleaned.StartsWith("https://", System.StringComparison.OrdinalIgnoreCase)
              || cleaned.StartsWith("mailto:", System.StringComparison.OrdinalIgnoreCase)
-             || cleaned.StartsWith("tel:", System.StringComparison.OrdinalIgnoreCase) then None
+             || cleaned.StartsWith("tel:", System.StringComparison.OrdinalIgnoreCase)
+             || cleaned.StartsWith("xref:", System.StringComparison.Ordinal) then None
         else
             let currentDir = Path.GetDirectoryName(currentOutputPath)
             let candidate =
@@ -329,31 +332,82 @@ module ContentProvider =
 
             body2)
 
-    /// <summary>Resolves semantic cross-references during rendering, after canonical content capture.</summary>
+    type private ApiLink = { Label: string; Url: string }
+
+    let private apiLinks (package: PackageModel) (rootPath: string) =
+        let links = ResizeArray<string * ApiLink>()
+        let add alias label url =
+            if not (System.String.IsNullOrWhiteSpace alias) then
+                links.Add(alias, { Label = label; Url = url })
+
+        let rec collect (entities: EntityModel list) =
+            for entity in entities do
+                let entityUrl = $"{rootPath}api/{entity.Id}.html"
+                add entity.Id entity.Name entityUrl
+                add entity.Name entity.Name entityUrl
+                let ownerName = entity.Name.Split('<').[0]
+                for member' in entity.Members do
+                    let memberUrl = $"{entityUrl}#{member'.Id}"
+                    add member'.Id member'.Name memberUrl
+                    add $"{ownerName}.{member'.Name}" member'.Name memberUrl
+                collect entity.Entities
+        collect package.Entities
+
+        links
+        |> Seq.groupBy fst
+        |> Seq.choose (fun (alias, candidates) ->
+            let distinct = candidates |> Seq.map snd |> Seq.distinctBy _.Url |> Seq.toList
+            match distinct with
+            | [ link ] -> Some(alias, link)
+            | _ -> None)
+        |> Map.ofSeq
+
+    let private resolveApiTarget (links: Map<string, ApiLink>) (target: string) =
+        let separator = target.LastIndexOf(':')
+        let id = if separator >= 0 then target.Substring(separator + 1) else target
+        links |> Map.tryFind id
+
+    /// <summary>Resolves bare semantic cross-references during rendering.</summary>
     let private resolveCrossReferences (body: string) (package: PackageModel) (rootPath: string) =
-        let xrefPattern = @"xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
+        let xrefPattern = @"(?<!\]\()xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
+        let links = apiLinks package rootPath
         withProtectedCodeSegments body "FSLIVEDOCS_XREF" (fun protectedBody ->
-            // <snippet:XrefResolution>
-            System.Text.RegularExpressions.Regex.Replace(protectedBody, xrefPattern, fun (m: System.Text.RegularExpressions.Match) ->
-                    let id = m.Groups.["id"].Value
-                    match findMember id package, findEntity id package with
-                    | Some mem, _ ->
-                        // We point to the module/type page, not individual member pages yet
-                        // Need to find the parent entity ID
-                        let rec findParentId (entities: EntityModel list) parentId =
-                            entities |> Seq.tryPick (fun e ->
-                                if e.Members |> List.exists (fun m -> m.Id = id || m.Name = id) then
-                                    Some e.Id
-                                else
-                                    findParentId e.Entities (Some e.Id)
-                            )
-                        let targetPage = defaultArg (findParentId package.Entities None) "api"
-                        $"[{mem.Name}]({rootPath}api/{targetPage}.html#{mem.Id})"
-                    | None, Some ent -> $"[{ent.Name}]({rootPath}api/{ent.Id}.html)"
-                    | None, None -> invalidOp $"Cross-reference '{id}' was not found."
-                )
-            // </snippet:XrefResolution>
-        )
+            Regex.Replace(protectedBody, xrefPattern, fun (matched: Match) ->
+                let symbolType = matched.Groups.["type"].Value
+                let symbolId = matched.Groups.["id"].Value
+                let target = $"{symbolType}:{symbolId}"
+                match resolveApiTarget links target with
+                | Some link -> $"[{link.Label}]({link.Url})"
+                | None -> invalidOp $"Cross-reference '{target}' was not found."))
+
+    /// Resolves explicit xref links and unambiguous inline-code API names on the parsed Markdown tree.
+    let private renderMarkdownWithApiLinks (body: string) (package: PackageModel) (rootPath: string) =
+        let document = Markdown.Parse(body, pipeline)
+        let links = apiLinks package rootPath
+
+        let inlineRoots =
+            document.Descendants<LeafBlock>()
+            |> Seq.choose (fun block -> if isNull block.Inline then None else Some block.Inline)
+            |> Seq.toList
+        let linkNodes = inlineRoots |> Seq.collect _.FindDescendants<LinkInline>() |> Seq.toArray
+        let codeNodes = inlineRoots |> Seq.collect _.FindDescendants<CodeInline>() |> Seq.toArray
+
+        for link in linkNodes do
+            if not (isNull link.Url) && link.Url.StartsWith("xref:", System.StringComparison.Ordinal) then
+                match resolveApiTarget links link.Url with
+                | Some target -> link.Url <- target.Url
+                | None -> invalidOp $"Cross-reference '{link.Url}' was not found."
+
+        for code in codeNodes do
+            if not (code.Parent :? LinkInline) then
+                match links |> Map.tryFind code.Content with
+                | Some target ->
+                    let link = LinkInline(target.Url, null)
+                    code.ReplaceBy(link) |> ignore
+                    link.AppendChild(code) |> ignore
+                | None -> ()
+
+        Markdown.ToHtml(document, pipeline)
 
     /// <summary>Resolves transclusions and semantic links for a current render.</summary>
     let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
@@ -386,7 +440,7 @@ module ContentProvider =
                 let index = semanticSegments.Count
                 semanticSegments.Add(matched.Groups.["html"].Value)
                 $"<div data-fslivedocs-semantic-placeholder=\"{index}\"></div>")
-        let rendered = Markdown.ToHtml(protectedMarkdown, pipeline)
+        let rendered = renderMarkdownWithApiLinks protectedMarkdown context.Package context.RootPath
         semanticSegments
         |> Seq.mapi (fun index html -> $"<div data-fslivedocs-semantic-placeholder=\"{index}\"></div>", html)
         |> Seq.fold (fun (current: string) (placeholder, html) -> current.Replace(placeholder, html)) rendered

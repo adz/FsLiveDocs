@@ -630,6 +630,58 @@ module ContentProviderTests =
         Assert.Contains("```fsharp origin=xml-example\n1+1\n```", resolved)
         Assert.Contains("[add](/api/M1.html#M1.add)", resolved)
 
+    [<Fact>]
+    let ``inline code links unambiguous API symbols from the Markdown tree`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let file = Path.Combine(root, "guide.md")
+        File.WriteAllText(file, "Use `Math.add` and `Math`. Keep `missing` as code.")
+        let package : PackageModel =
+            {
+                Version = "1.0"
+                Entities =
+                    [
+                        {
+                            Id = "Example.Math"
+                            Name = "Math"
+                            Kind = EntityKind.Module
+                            Summary = []
+                            Members = [ { Id = "Example.Math.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; Summary = []; Remarks = []; Examples = []; Location = { File = ""; Line = 0 } } ]
+                            Examples = []
+                            Entities = []
+                        }
+                    ]
+                Scenarios = []
+                Packages = []
+            }
+
+        let page = ContentProvider.loadPage file root package "/" "guide.html" (set [ "guide.html"; "api/Example.Math.html" ])
+
+        Assert.Contains("<a href=\"/api/Example.Math.html#Example.Math.add\"><code>Math.add</code></a>", page.ContentHtml)
+        Assert.Contains("<a href=\"/api/Example.Math.html\"><code>Math</code></a>", page.ContentHtml)
+        Assert.Contains("<code>missing</code>", page.ContentHtml)
+
+    [<Fact>]
+    let ``explicit xref links keep authored labels and fail when unresolved`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let file = Path.Combine(root, "guide.md")
+        let package : PackageModel =
+            {
+                Version = "1.0"
+                Entities = [ { Id = "Example.Math"; Name = "Math"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] } ]
+                Scenarios = []
+                Packages = []
+            }
+        File.WriteAllText(file, "See [`the math module`](xref:T:Example.Math).")
+
+        let page = ContentProvider.loadPage file root package "/" "guide.html" (set [ "guide.html"; "api/Example.Math.html" ])
+        Assert.Contains("<a href=\"/api/Example.Math.html\"><code>the math module</code></a>", page.ContentHtml)
+
+        File.WriteAllText(file, "See [`missing`](xref:T:Example.Missing).")
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.loadPage file root package "/" "guide.html" (set [ "guide.html" ]) |> ignore)
+        Assert.Contains("Cross-reference 'xref:T:Example.Missing' was not found", error.Message)
+
 module DocTestRunnerTests =
 
     [<Fact>]

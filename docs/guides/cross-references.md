@@ -4,21 +4,26 @@ title: Link to API symbols
 
 # Link to API symbols
 
-Use `xref` identifiers to link guide text to the generated API reference.
+FsLiveDocs links an inline code span when its text identifies exactly one entity or member in the generated API reference:
 
-## Link to an entity
-
-```text
-xref:T:Example.Orders.Order
+```markdown
+Create an `Order` with `Orders.create`.
 ```
 
-## Link to a member
+Entity display names, entity IDs, qualified member names, and member IDs are eligible. Unmatched or ambiguous spans remain inline code. In particular, an unqualified member such as `create` is not linked because another documented entity may expose a member with the same name.
 
-```text
-xref:M:Example.Orders.create
+## Disambiguate a reference
+
+Use a Markdown link with an `xref` destination when a short name is ambiguous or the link needs custom text:
+
+```markdown
+Use [`Order`](xref:T:Example.Orders.Order).
+Call [`the order factory`](xref:M:Example.Orders.create).
 ```
 
-Use the exact symbol ID reported by the extracted API model.
+Use the exact symbol ID reported by the extracted API model. An explicit reference that does not resolve fails the build.
+
+The bare forms `xref:T:Example.Orders.Order` and `xref:M:Example.Orders.create` are also supported. FsLiveDocs supplies their link text from the API model.
 
 ## Resolve links during rendering
 
