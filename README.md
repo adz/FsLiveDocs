@@ -135,8 +135,8 @@ FsLiveDocs verifies and caches remote capsules under `.livedocs/releases/`. Hist
 Build and test the repository:
 
 ```bash
-dotnet build FsLiveDocs.sln
-dotnet test FsLiveDocs.sln
+dotnet build FsLiveDocs.slnx
+dotnet test FsLiveDocs.slnx
 ```
 
 See [Dogfood FsLiveDocs](docs/dogfooding.md) for the self-hosting workflow.

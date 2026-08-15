@@ -9,7 +9,7 @@ FsLiveDocs documents and releases itself. Use this workflow before publishing ve
 ## Build the repository
 
 ```bash
-dotnet build FsLiveDocs.sln
+dotnet build FsLiveDocs.slnx
 ```
 
 ## Run both test suites

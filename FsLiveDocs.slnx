@@ -1,0 +1,22 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/samples/" />
+  <Folder Name="/samples/DeepReference/">
+    <Project Path="samples/DeepReference/Acme.Docs/Acme.Docs.fsproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/FsLiveDocs.Abstractions/FsLiveDocs.Abstractions.csproj" />
+    <Project Path="src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj" />
+    <Project Path="src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj" />
+    <Project Path="src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj" />
+    <Project Path="src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj" />
+    <Project Path="tests/FsLiveDocs.Tests/FsLiveDocs.Tests.fsproj" />
+  </Folder>
+</Solution>
