@@ -101,10 +101,24 @@ module DocumentationCompiler =
         | _ -> ()
         let frameworkArgument =
             selectedFramework |> Option.map (fun framework -> $"-property:TargetFramework={framework}") |> Option.toList
+        let targetExists (json: JToken) =
+            json.["Properties"]
+            |> fun properties -> readString properties "TargetPath"
+            |> Option.exists File.Exists
+        let defaultBuild =
+            runMsBuild fullPath (frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
+        let configurationArgument =
+            if targetExists defaultBuild then []
+            else
+                let releaseArgument = [ "-property:Configuration=Release" ]
+                let releaseBuild =
+                    runMsBuild fullPath (releaseArgument @ frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
+                if targetExists releaseBuild then releaseArgument else []
         let json =
             runMsBuild
                 fullPath
-                (frameworkArgument
+                (configurationArgument
+                 @ frameworkArgument
                  @ [ "-target:ResolveReferences"
                      "-getProperty:TargetFramework,TargetPath,LangVersion,DefineConstants,NoWarn,WarningsAsErrors"
                      "-getItem:ReferencePath" ])

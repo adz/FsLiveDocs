@@ -80,6 +80,35 @@ module IntegrationTests =
         Assert.Contains("is not declared", unsupported.Message)
 
     [<Fact>]
+    let ``documentation compiler falls back to the built Release configuration`` () =
+        let directory = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", Guid.NewGuid().ToString("N"))
+        let libraryDirectory = Path.Combine(directory, "Referenced")
+        let appDirectory = Path.Combine(directory, "Documented")
+        Directory.CreateDirectory(libraryDirectory) |> ignore
+        Directory.CreateDirectory(appDirectory) |> ignore
+        let libraryProject = Path.Combine(libraryDirectory, "Referenced.fsproj")
+        let appProject = Path.Combine(appDirectory, "Documented.fsproj")
+        File.WriteAllText(Path.Combine(libraryDirectory, "Library.fs"), "namespace Referenced\ntype PublicType = { Value: int }")
+        File.WriteAllText(libraryProject, """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
+</Project>""")
+        File.WriteAllText(Path.Combine(appDirectory, "Library.fs"), "namespace Documented\nmodule Library = let value = 42")
+        File.WriteAllText(appProject, $"""<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="{libraryProject}" /></ItemGroup>
+</Project>""")
+        let build = System.Diagnostics.Process.Start(System.Diagnostics.ProcessStartInfo("dotnet", $"build \"{appProject}\" --configuration Release --nologo"))
+        build.WaitForExit()
+        Assert.Equal(0, build.ExitCode)
+
+        let evaluated = DocumentationCompiler.evaluateProject appProject
+        Assert.Contains(evaluated.References, fun reference ->
+            reference.EndsWith("Referenced.dll", StringComparison.Ordinal)
+            && reference.Contains($"{Path.DirectorySeparatorChar}release{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+
+    [<Fact>]
     let ``evaluating an unrestored project explains that it needs restoring`` () =
         // A project outside the solution is never restored by a solution-level build, so this is
         // what a caller hits after passing a project the solution does not build.
