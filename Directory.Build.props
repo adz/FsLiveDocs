@@ -10,7 +10,7 @@
     <Authors>FsLiveDocs contributors</Authors>
     <Company>FsLiveDocs contributors</Company>
     <Copyright>Copyright © FsLiveDocs contributors</Copyright>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/adz/FsLiveDocs</PackageProjectUrl>
     <RepositoryUrl>https://github.com/adz/FsLiveDocs.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
