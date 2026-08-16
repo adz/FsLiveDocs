@@ -10,9 +10,20 @@ on:
       - src/**
       - Directory.Build.props
       - FsLiveDocs.slnx
-  release:
-    types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: Released semantic version to add to the history build
+        required: false
+        type: string
+      capsule_url:
+        description: HTTPS URL of the released documentation capsule
+        required: false
+        type: string
+      capsule_sha256:
+        description: SHA-256 of the released documentation capsule
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -45,6 +56,15 @@ jobs:
 
       - name: Build FsLiveDocs
         run: dotnet build src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj --configuration Release --no-restore
+
+      - name: Add the newly released capsule to this history build
+        if: inputs.version != ''
+        run: |
+          dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll history-add "${{ inputs.version }}" \
+            --url "${{ inputs.capsule_url }}" \
+            --sha256 "${{ inputs.capsule_sha256 }}" \
+            --interactive false \
+            --banner false
 
       - name: Render release history
         run: dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll build-history .livedocs/history.json --interactive false --banner false

@@ -6,6 +6,7 @@ on:
       - 'v*'
 
 permissions:
+  actions: write
   contents: write
   id-token: write
 
@@ -121,3 +122,16 @@ jobs:
             "artifacts/FsLiveDocs-$VERSION-livedocs.zip.report.json" \
             --verify-tag \
             --notes-file "dev-docs/releases/$VERSION.md"
+
+      - name: Publish release documentation to GitHub Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          capsule="artifacts/FsLiveDocs-$VERSION-livedocs.zip"
+          capsule_url="https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/FsLiveDocs-$VERSION-livedocs.zip"
+          capsule_sha256="$(sha256sum "$capsule" | cut -d ' ' -f 1)"
+          gh workflow run pages.yml \
+            --ref "${{ github.event.repository.default_branch }}" \
+            -f version="$VERSION" \
+            -f capsule_url="$capsule_url" \
+            -f capsule_sha256="$capsule_sha256"
