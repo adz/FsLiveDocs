@@ -4,7 +4,7 @@ This document covers publishing FsLiveDocs itself. For publishing a library's do
 
 ## Publish FsLiveDocs packages
 
-FsLiveDocs uses `.github/workflows/release.yml`. A tag named `v<semver>` is the only release trigger. The workflow removes the leading `v`, passes that version to every build and pack, verifies the package set, publishes it to NuGet.org, captures the matching documentation capsule, and creates the GitHub release.
+FsLiveDocs uses `.github/workflows/release.yml`. A tag named `v<semver>` is the only release trigger. The workflow removes the leading `v`, passes that version to every build and pack, verifies the package set, publishes it to NuGet.org, captures the matching documentation capsule, and creates the GitHub release. After the release exists, it dispatches `.github/workflows/pages.yml` with the capsule URL and SHA-256. That Pages build adds the new immutable capsule to its temporary history index before rendering; the committed index remains the baseline for manual and branch-triggered builds.
 
 The published package set is:
 
