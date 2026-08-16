@@ -361,7 +361,13 @@ module SymbolLister =
         else xmlDocSignature.Substring(prefixSeparator + 1)
 
     let rec mapEntity (e: ApiDocEntity) : EntityModel =
-        let apiMembers = e.AllMembers |> Seq.toList
+        // A type abbreviation (`type DateRange = Interval<DateTimeOffset>`) has no members of its
+        // own: FSharp.Formatting's AllMembers resolves through the abbreviation and reports the
+        // aliased type's members again, under the aliased type's own FullName. Keeping them here
+        // would put the same member ID in two entities, which validateApi rejects as a duplicate.
+        let apiMembers =
+            if e.Symbol.IsFSharpAbbreviation then []
+            else e.AllMembers |> Seq.toList
         let overloadedNames =
             apiMembers
             |> List.countBy _.Symbol.FullName
