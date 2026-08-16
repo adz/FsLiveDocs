@@ -29,6 +29,12 @@
 
   <ItemGroup>
     <Compile Include="LiveDocsBanner.fs" />
+    <Compile Include="CommandLine.fs" />
+    <Compile Include="Templates.fs" />
+    <Compile Include="Workspace.fs" />
+    <Compile Include="PackageExtraction.fs" />
+    <Compile Include="DocAnalysis.fs" />
+    <Compile Include="ReleaseCapture.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
