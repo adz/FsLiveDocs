@@ -1296,7 +1296,7 @@ module SiteBuilderTests =
         Assert.Contains(">Axial.PlatformService<", sharedPage)
 
     [<Fact>]
-    let ``sidebar links a project group straight to its own entity, skipping ancestor namespace wrappers`` () =
+    let ``sidebar package group omits ancestor namespace wrappers`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         let builders = {
             Id = "Axial.Layers.Builders"
@@ -1356,7 +1356,7 @@ module SiteBuilderTests =
         let homepage = File.ReadAllText(Path.Combine(outputDir, "index.html"))
         let groupStart = homepage.IndexOf(">Axial.Layers<", StringComparison.Ordinal)
         Assert.True(groupStart >= 0)
-        Assert.Contains("href=\"api/Axial.Layers.html", homepage.Substring(max 0 (groupStart - 200), 200))
+        Assert.Contains("href=\"api/packages/Axial.Layers.html", homepage.Substring(max 0 (groupStart - 200), 200))
 
         let groupEnd = homepage.IndexOf("</details>", groupStart, StringComparison.Ordinal)
         let groupBody = homepage.Substring(groupStart, groupEnd - groupStart)
@@ -1420,7 +1420,7 @@ module SiteBuilderTests =
         Assert.DoesNotContain(">Layers<", axialPage)
 
     [<Fact>]
-    let ``sidebar link to a namespace shared by two projects targets that project's own content`` () =
+    let ``package sidebar link opens a distinct package landing page`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         let attribute = {
             Id = "Axial.Telemetry.Attribute"
@@ -1479,11 +1479,17 @@ module SiteBuilderTests =
         }
 
         let homepage = File.ReadAllText(Path.Combine(outputDir, "index.html"))
-        Assert.Contains("href=\"api/Axial.Telemetry.html#package-Axial.Telemetry\"", homepage)
+        Assert.Contains("href=\"api/packages/Axial.Telemetry.html\"", homepage)
 
-        let telemetryPage = File.ReadAllText(Path.Combine(outputDir, "api", "Axial.Telemetry.html"))
-        Assert.Contains("id=\"package-Axial.Telemetry\"", telemetryPage)
-        Assert.Contains("id=\"package-Axial\"", telemetryPage)
+        let packagePage = File.ReadAllText(Path.Combine(outputDir, "api", "packages", "Axial.Telemetry.html"))
+        Assert.Contains("<title>Axial.Telemetry - FsLiveDocs</title>", packagePage)
+        Assert.Contains(">Package<", packagePage)
+        Assert.Contains("href=\"../Axial.Telemetry.FiberTelemetry.html\"", packagePage)
+        Assert.DoesNotContain("href=\"../Axial.Telemetry.Attribute.html\"", packagePage)
+
+        let namespacePage = File.ReadAllText(Path.Combine(outputDir, "api", "Axial.Telemetry.html"))
+        Assert.Contains(">Attribute<", namespacePage)
+        Assert.Contains(">FiberTelemetry<", namespacePage)
 
 module PresentationTests =
 

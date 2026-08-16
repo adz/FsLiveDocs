@@ -402,11 +402,41 @@ module SiteBuilder =
         if not (Directory.Exists(apiDir)) then Directory.CreateDirectory(apiDir) |> ignore
         
         let apiRenderContext = { renderContext with RootPath = context.RootPath + "../" }
-        Presentation.flattenEntities context.Package.Entities
+        let allEntities = Presentation.flattenEntities context.Package.Entities
+
+        allEntities
         |> List.toArray
         |> fun entities -> parallelRender entities (fun entity ->
             let html = renderEntityPage entity apiRenderContext
             File.WriteAllText(Path.Combine(apiDir, entity.Id + ".html"), html))
+
+        let packageDir = Path.Combine(apiDir, "packages")
+        Directory.CreateDirectory(packageDir) |> ignore
+
+        (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
+        |> List.toArray
+        |> fun packages -> parallelRender packages (fun packageInfo ->
+            let ownedIds = packageInfo.EntityIds |> Set.ofList
+            let ownedEntities = allEntities |> List.filter (fun entity -> ownedIds.Contains entity.Id)
+
+            if not ownedEntities.IsEmpty then
+                let packageContent = [
+                    div [ _class "flex items-center gap-3 mb-12" ] [
+                        h1 [ _id "package"; attr "data-toc-title" packageInfo.Name; _class "text-5xl font-black tracking-tighter" ] [ str packageInfo.Name ]
+                        span [ _class "badge badge-primary badge-sm" ] [ str "Package" ]
+                    ]
+                    View.h2WithAnchor "contents" "Contents" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
+                    div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (
+                        ownedEntities |> List.map (fun entity ->
+                            a [ _href ("../" + entity.Id + ".html"); _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
+                                span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str entity.Name ]
+                                span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string entity.Kind) ]
+                            ])
+                    )
+                ]
+                let packageContext = { renderContext with RootPath = context.RootPath + "../../" }
+                let html = View.layout packageInfo.Name context.Pages context.Package context.Config context.Versions context.Theme packageContext.RootPath packageContent |> RenderView.AsString.htmlNode
+                File.WriteAllText(Path.Combine(packageDir, Uri.EscapeDataString packageInfo.Name + ".html"), html))
 
         validateGeneratedApiLinks apiDir
 
