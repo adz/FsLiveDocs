@@ -22,10 +22,7 @@ The capsule stores documentation content and meaning rather than generated site 
 Run a dry run before publishing:
 
 ```bash
-dotnet livedocs capture src/YourLibrary/YourLibrary.fsproj \
-  --version 1.4.0 \
-  --output artifacts/YourLibrary-1.4.0-livedocs.zip \
-  --dry-run
+dotnet livedocs capture --version 1.4.0 --output artifacts/YourLibrary-1.4.0-livedocs.zip --dry-run
 ```
 
 The command audits and verifies the same inputs as a real capture. It reports expected component and compressed sizes without writing the requested capsule.
@@ -35,9 +32,7 @@ The command audits and verifies the same inputs as a real capture. It reports ex
 Build the library commit you are releasing, then run:
 
 ```bash
-dotnet livedocs capture src/YourLibrary/YourLibrary.fsproj \
-  --version 1.4.0 \
-  --output artifacts/YourLibrary-1.4.0-livedocs.zip
+dotnet livedocs capture --version 1.4.0 --output artifacts/YourLibrary-1.4.0-livedocs.zip
 ```
 
 Capture performs these operations:

@@ -674,8 +674,8 @@ module View =
                             yield! navigation |> List.map (fun item -> navItem item.Label (navigationHref item.Href))
                             li [] [
                                 details [ _class "dropdown dropdown-end" ] [
-                                    summary [ _class "px-8 py-3 bg-base-200 hover:bg-base-300 rounded-2xl cursor-pointer transition-all font-black text-xs uppercase tracking-widest" ] [ 
-                                        str (if versions.IsEmpty then "v0.1.0" else versions |> List.head) 
+                                    summary [ _class "px-8 py-3 bg-base-200 hover:bg-base-300 rounded-2xl cursor-pointer transition-all font-black text-xs uppercase tracking-widest" ] [
+                                        str package.Version
                                     ]
                                     ul [ _class "p-3 bg-base-100 rounded-2xl shadow-2xl border border-base-300 w-56 mt-4" ] (
                                         versions |> List.map (fun v ->

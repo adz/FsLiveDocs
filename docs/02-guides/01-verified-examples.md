@@ -141,7 +141,7 @@ Do not add `FsLiveDocs` itself as a library dependency. It is a .NET tool packag
 ## Generate stable tests
 
 ```bash
-dotnet livedocs generate-tests src/YourLibrary/YourLibrary.fsproj
+dotnet livedocs generate-tests
 dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj
 ```
 
@@ -152,7 +152,7 @@ Run the generated test project in CI. FsLiveDocs handles coverage validation, co
 ## Audit without generated tests
 
 ```bash
-dotnet livedocs audit src/YourLibrary/YourLibrary.fsproj
+dotnet livedocs audit
 ```
 
 Audit classifies every block as passed, excluded, or failed. A successful release capture requires complete coverage.

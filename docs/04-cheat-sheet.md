@@ -51,7 +51,7 @@ Run commands from the repository root. Build documented projects before commands
 | `--port <number>` | Set the preview port. |
 | `--ignore <names>` | Add watcher directory names to ignore. |
 
-At the default `warnings` level, LiveDocs groups API issues by source file and issue kind, links to configured GitHub source, and prints a concise summary. `info` adds normal progress messages. `debug` expands every issue with its compiler message and remedy, and also lists every audited block and watcher directory. Interactive builds animate while reporting the current real build stage—API extraction, example checking, rendering, or search indexing—and show item counts such as `Checking documentation pages (7/42)` where work is divisible. Use `--interactive false` for stable line-oriented logs. Use `--banner false` to hide the banner; verbosity, interactivity, and the banner are independent.
+At the default `warnings` level, LiveDocs groups API issues by source file and issue kind, links to configured GitHub source, and prints a concise summary. `info` adds normal progress messages. `debug` expands every issue with its compiler message and remedy, and also lists every audited block and watcher directory. Use `--interactive false` for stable line-oriented logs. Verbosity, interactivity, and the banner are independent.
 
 ## Fence modes
 

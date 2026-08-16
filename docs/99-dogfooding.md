@@ -4,66 +4,8 @@ title: Dogfood FsLiveDocs
 
 # Dogfood FsLiveDocs
 
-FsLiveDocs documents and releases itself. Use this workflow before publishing version `0.1.0`.
+FsLiveDocs documents and releases itself with its own tool, using the same `init`, `audit`, `capture`, and `build-history` workflow described elsewhere in these docs. Nothing about the release process is special-cased for this repository.
 
-## Build the repository
+Each release goes through the full pipeline before publishing: every documentation example across the repository's own projects is checked, a release capsule is captured and inspected, and the historical site is rebuilt from that capsule alone, with no compilation of the tagged source. That rebuild is what confirms a release capsule is genuinely self-contained: if it required recompiling the original project, `build-history` would fail.
 
-```bash
-dotnet build FsLiveDocs.slnx
-```
-
-## Run both test suites
-
-```bash
-dotnet test tests/FsLiveDocs.Tests/FsLiveDocs.Tests.fsproj
-dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj
-```
-
-## Verify every documentation project
-
-FsLiveDocs discovers documentable projects outside ignored build and test directories. The deep-reference sample is included automatically:
-
-```bash
-dotnet livedocs test
-```
-
-## Rehearse capture
-
-```bash
-dotnet livedocs capture \
-  --version 0.1.0 \
-  --output artifacts/FsLiveDocs-0.1.0-livedocs.zip \
-  --dry-run
-```
-
-Review the API, semantic, content, and compressed sizes.
-
-## Capture the release
-
-Run capture from the exact tagged commit:
-
-```bash
-dotnet livedocs capture \
-  --version 0.1.0 \
-  --output artifacts/FsLiveDocs-0.1.0-livedocs.zip
-```
-
-Inspect the result:
-
-```bash
-dotnet livedocs inspect artifacts/FsLiveDocs-0.1.0-livedocs.zip
-```
-
-## Rebuild from the capsule
-
-Add the capsule to a temporary or release history index:
-
-```bash
-dotnet livedocs history-add 0.1.0 \
-  --capsule artifacts/FsLiveDocs-0.1.0-livedocs.zip \
-  --output .livedocs/history.json
-
-dotnet livedocs build-history .livedocs/history.json
-```
-
-This final build must use only the capsule for historical content and semantics. It must not compile an old project.
+This is the same guarantee described in [Capture and publish releases](guides/releases.md) — dogfooding is simply how that guarantee gets exercised before every FsLiveDocs release ships.

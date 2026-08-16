@@ -31,7 +31,7 @@ FsLiveDocs compiles that block during `audit`, `test`, `build`, and `capture`. I
 If `Orders.total` is renamed or its type changes, the documentation build fails at the page and line that need fixing.
 
 ```bash
-dotnet livedocs audit src/YourLibrary/YourLibrary.fsproj
+dotnet livedocs audit
 ```
 
 Ordinary examples compile but do not run. Execution is explicit:
@@ -84,9 +84,7 @@ Rendered F# blocks can show inferred types and documentation tooltips. The compi
 `capture` stores the public API, Markdown, assets, and compiler-derived code information in one immutable capsule:
 
 ```bash
-dotnet livedocs capture src/YourLibrary/YourLibrary.fsproj \
-  --version 1.4.0 \
-  --output artifacts/YourLibrary-1.4.0-livedocs.zip
+dotnet livedocs capture --version 1.4.0 --output artifacts/YourLibrary-1.4.0-livedocs.zip
 ```
 
 A current FsLiveDocs version can render that capsule later. It does not need the old SDK, packages, source tree, or FSharp.Formatting version.

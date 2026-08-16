@@ -68,7 +68,7 @@ Build your project, then audit every F# block:
 
 ```bash
 dotnet build
-dotnet livedocs audit src/YourLibrary/YourLibrary.fsproj
+dotnet livedocs audit
 ```
 
 Fix compilation failures or mark deliberate pseudocode with a reason:
@@ -84,7 +84,7 @@ match result with
 ## Build the site
 
 ```bash
-dotnet livedocs build src/YourLibrary/YourLibrary.fsproj
+dotnet livedocs build
 ```
 
 The generated site is in `output/`.
@@ -92,9 +92,7 @@ The generated site is in `output/`.
 ## Preview changes
 
 ```bash
-dotnet livedocs watch src/YourLibrary/YourLibrary.fsproj \
-  --host 127.0.0.1 \
-  --port 5000
+dotnet livedocs watch --host 127.0.0.1 --port 5000
 ```
 
 The watcher rebuilds after source, project, configuration, or documentation changes.

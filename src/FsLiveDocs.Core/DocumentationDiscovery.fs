@@ -65,10 +65,68 @@ type GeneratedVerificationCase = {
 /// Canonical discovery of expanded documentation code.
 module DocumentationDiscovery =
 
-    let private fencePattern =
-        Regex(@"(?ms)^```(?<info>fsharp(?:[ \t]+[^\r\n]*)?)[ \t]*\r?\n(?<code>.*?)^```[ \t]*\r?$", RegexOptions.Compiled)
-
     let normalizeSource (source: string) = source.Replace("\r\n", "\n").Replace("\r", "\n")
+
+    /// One fenced code block found by scanning for fence delimiters at the top nesting level.
+    /// A fence opened inside an already-open fence is not a delimiter (CommonMark fences do not nest);
+    /// its content, including any inner ```fsharp-looking lines, is opaque literal text.
+    type FenceMatch = { Info: string; Code: string; Start: int; Length: int }
+
+    let private fenceLinePattern = Regex(@"^[ \t]{0,3}(?<fence>`{3,}|~{3,})[ \t]*(?<info>[^\r\n]*)$", RegexOptions.Compiled)
+    let private fsharpInfoPattern = Regex(@"(?i)^fsharp(?:[ \t]+[^\r\n]*)?$", RegexOptions.Compiled)
+
+    /// Splits text into lines, keeping each line's start offset and the offset just past its line terminator.
+    let private splitLinesWithOffsets (text: string) =
+        let result = ResizeArray<string * int * int>()
+        let mutable start = 0
+        let mutable index = 0
+        while index < text.Length do
+            if text.[index] = '\n' then
+                let lineEnd = if index > start && text.[index - 1] = '\r' then index - 1 else index
+                result.Add(text.Substring(start, lineEnd - start), start, index + 1)
+                start <- index + 1
+            index <- index + 1
+        if start <= text.Length then
+            result.Add(text.Substring(start), start, text.Length)
+        result
+
+    /// Scans Markdown for fsharp fenced code blocks at the top nesting level only.
+    let scanFsharpFences (markdown: string) : FenceMatch list =
+        let lines = splitLinesWithOffsets markdown
+        let results = ResizeArray<FenceMatch>()
+        let mutable i = 0
+        while i < lines.Count do
+            let (lineText, lineStart, _) = lines.[i]
+            let openMatch = fenceLinePattern.Match(lineText)
+            if openMatch.Success then
+                let fenceRun = openMatch.Groups.["fence"].Value
+                let fenceChar = fenceRun.[0]
+                let fenceLen = fenceRun.Length
+                let info = openMatch.Groups.["info"].Value.Trim()
+                let mutable closeIndex = -1
+                let mutable j = i + 1
+                while closeIndex < 0 && j < lines.Count do
+                    let (closeLineText, _, _) = lines.[j]
+                    let closeMatch = fenceLinePattern.Match(closeLineText)
+                    if closeMatch.Success
+                       && closeMatch.Groups.["info"].Value.Trim() = ""
+                       && closeMatch.Groups.["fence"].Value.[0] = fenceChar
+                       && closeMatch.Groups.["fence"].Value.Length >= fenceLen then
+                        closeIndex <- j
+                    j <- j + 1
+                if closeIndex >= 0 then
+                    if fenceChar = '`' && fenceLen = 3 && fsharpInfoPattern.IsMatch(info) then
+                        let codeStart = if i + 1 < lines.Count then let (_, s, _) = lines.[i + 1] in s else lineStart
+                        let (_, codeEndExclusive, _) = lines.[closeIndex]
+                        let code = if codeEndExclusive > codeStart then markdown.Substring(codeStart, codeEndExclusive - codeStart) else ""
+                        let (_, _, closeLineEnd) = lines.[closeIndex]
+                        results.Add { Info = info; Code = code; Start = lineStart; Length = closeLineEnd - lineStart }
+                    i <- closeIndex + 1
+                else
+                    i <- i + 1
+            else
+                i <- i + 1
+        results |> Seq.toList
 
     let private sha256 (value: string) =
         value |> Encoding.UTF8.GetBytes |> SHA256.HashData |> Convert.ToHexString |> _.ToLowerInvariant()
@@ -140,17 +198,16 @@ module DocumentationDiscovery =
     /// Discovers blocks from Markdown after shortcode/API expansion has completed.
     let discoverMarkdown (sourcePath: string) (project: string option) (expandedMarkdown: string) =
         let normalizedPath = sourcePath.Replace('\\', '/').TrimStart('/')
-        fencePattern.Matches(expandedMarkdown)
-        |> Seq.cast<Match>
+        scanFsharpFences expandedMarkdown
         |> Seq.mapi (fun ordinal matched ->
-            let info = matched.Groups.["info"].Value
+            let info = matched.Info
             let mode = parseMode info
             let origin =
                 if info.Contains("origin=source-snippet", StringComparison.OrdinalIgnoreCase) then SourceSnippet
                 elif info.Contains("origin=xml-example", StringComparison.OrdinalIgnoreCase) then XmlExample
                 elif sourcePath.Replace('\\', '/').Contains("/api/", StringComparison.OrdinalIgnoreCase) || sourcePath.Replace('\\', '/').StartsWith("api/", StringComparison.OrdinalIgnoreCase) then ApiEnrichment
                 else MarkdownFence
-            let source = normalizeSource matched.Groups.["code"].Value
+            let source = normalizeSource matched.Code
             {
                 Id = $"{normalizedPath}#fsharp-{ordinal}"
                 Origin = origin

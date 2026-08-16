@@ -19,11 +19,6 @@ module SemanticCode =
     let defaults = { Enabled = true; Artifact = None; Prelude = "" }
     let disabled = { defaults with Enabled = false }
 
-    let private fencePattern =
-        Regex(
-            @"(?ms)^```(?<info>fsharp(?:[ \t]+[^\r\n]*)?)[ \t]*\r?\n(?<code>.*?)^```[ \t]*$",
-            RegexOptions.Compiled)
-
     let private tokenClass = function
         | PlainText -> "tok-plain" | Keyword -> "tok-keyword" | Identifier -> "tok-identifier"
         | TypeName -> "tok-type" | Function -> "tok-function" | Property -> "tok-property"
@@ -112,35 +107,44 @@ module SemanticCode =
         $"<details class=\"livedocs-shared-setup livedocs-repository-setup not-prose\"><summary>Repository F# setup</summary>{renderLexicalSource prelude}</details>"
 
     let private formatFromArtifact options sourcePath markdown (artifact: SemanticDocumentationArtifact) =
+        let fences = DocumentationDiscovery.scanFsharpFences markdown
         let blocks : DocumentationBlock list = DocumentationDiscovery.discoverMarkdown sourcePath None markdown
         let page : SemanticPage option = artifact.Pages |> List.tryFind (fun page -> page.SourcePath = sourcePath.Replace('\\', '/'))
         let persistedById : Map<string, SemanticCodeBlock> =
             page |> Option.map (fun value -> value.Blocks |> List.map (fun block -> block.Id, block) |> Map.ofList) |> Option.defaultValue Map.empty
         let pageContextBlocks = blocks |> List.filter (fun block -> block.Mode <> Isolated && (match block.Mode with NoCheck _ | Transcript -> false | _ -> true))
         let pageContextHash = DocumentationDiscovery.contextHash options.Prelude pageContextBlocks
-        let mutable ordinal = 0
-        fencePattern.Replace(markdown, fun matched ->
-            let block : DocumentationBlock = blocks.[ordinal]
-            ordinal <- ordinal + 1
-            match block.Mode with
-            | Prepare ->
-                let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
-                if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}."
-                if persisted.ContextHash <> pageContextHash then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
-                htmlStartMarker + renderPreparation persisted + htmlEndMarker
-            | NoCheck _ | Transcript ->
-                htmlStartMarker + renderLexicalSource matched.Groups.["code"].Value + htmlEndMarker
-            | _ ->
-                let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
-                if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}."
-                let expectedContext = if block.Mode = Isolated then DocumentationDiscovery.contextHash options.Prelude [ block ] else pageContextHash
-                if persisted.ContextHash <> expectedContext then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
-                htmlStartMarker + renderPersistedBlock persisted + htmlEndMarker)
+        let builder = Text.StringBuilder()
+        let mutable cursor = 0
+        List.iter2
+            (fun (fence: DocumentationDiscovery.FenceMatch) (block: DocumentationBlock) ->
+                builder.Append(markdown.Substring(cursor, fence.Start - cursor)) |> ignore
+                let replacement =
+                    match block.Mode with
+                    | Prepare ->
+                        let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
+                        if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}."
+                        if persisted.ContextHash <> pageContextHash then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
+                        htmlStartMarker + renderPreparation persisted + htmlEndMarker
+                    | NoCheck _ | Transcript ->
+                        htmlStartMarker + renderLexicalSource fence.Code + htmlEndMarker
+                    | _ ->
+                        let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
+                        if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}."
+                        let expectedContext = if block.Mode = Isolated then DocumentationDiscovery.contextHash options.Prelude [ block ] else pageContextHash
+                        if persisted.ContextHash <> expectedContext then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
+                        htmlStartMarker + renderPersistedBlock persisted + htmlEndMarker
+                builder.Append(replacement) |> ignore
+                cursor <- fence.Start + fence.Length)
+            fences
+            blocks
+        builder.Append(markdown.Substring(cursor)) |> ignore
+        builder.ToString()
 
     /// Replaces compilable F# fences with compiler-enriched HTML and appends their shared tooltip payload.
     /// Compiler-backed and lexical fallback F# fences share one HTML and styling contract.
     let formatFences (options: Options) (sourcePath: string) (markdown: string) =
-        if not options.Enabled || not (fencePattern.IsMatch markdown) then markdown
+        if not options.Enabled || (DocumentationDiscovery.scanFsharpFences markdown).IsEmpty then markdown
         elif options.Artifact.IsSome then
             let formatted = formatFromArtifact options sourcePath markdown options.Artifact.Value
             if String.IsNullOrWhiteSpace options.Prelude then formatted
