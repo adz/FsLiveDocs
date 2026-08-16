@@ -85,7 +85,15 @@ The published package set is:
 
 `FsLiveDocs.Annotations` supplies declarative metadata attached to consumer code. Core, Runner, and Renderer remain internal project boundaries and are bundled into the tool package; they are not separate public NuGet packages. Consumers install `FsLiveDocs` as a tool and add `FsLiveDocs.Annotations` as a library dependency only when they use attributes such as `DocScenario`.
 
-Before the first tag, create a NuGet.org API key scoped to these package IDs with **Push new packages and package versions** permission. Add it to the GitHub repository as an Actions secret named `NUGET_API_KEY`. Restrict the key to the shortest practical expiry and rotate it in both NuGet.org and GitHub. The workflow does not use `--skip-duplicate`: package versions and release tags are immutable, so reusing a published version fails.
+Before the first tag, configure NuGet.org Trusted Publishing:
+
+1. Sign in to NuGet.org and open **Account settings → Trusted publishing**.
+2. Add a GitHub Actions policy owned by the NuGet account that will own the packages.
+3. Set the GitHub owner to `adz`, repository to `FsLiveDocs`, and workflow path to `.github/workflows/release.yml`.
+4. Leave the environment empty because the workflow does not use a GitHub environment.
+5. In the GitHub repository, create an Actions variable named `NUGET_USER` containing the NuGet.org username—not an email address.
+
+The workflow requests GitHub's OIDC token and exchanges it through `NuGet/login@v1` for a short-lived publishing credential. No persistent NuGet API key is stored in GitHub. The workflow does not use `--skip-duplicate`: package versions and release tags are immutable, so reusing a published version fails.
 
 Create and push a release tag only from the commit to release:
 
