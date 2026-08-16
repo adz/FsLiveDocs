@@ -236,9 +236,6 @@ module View =
                 summary [ _class "flex items-center justify-between text-primary font-black hover:bg-base-300 rounded-lg cursor-pointer list-none uppercase tracking-widest text-[10px] pr-4" ] [
                     match groupPageId with
                     | Some pageId ->
-                        // When two projects both contribute directly to the same shared namespace
-                        // page, jump to this project's own package badge instead of the bare page
-                        // top, so this link doesn't look like it silently opened a different project.
                         let fragment =
                             packageAnchor
                             |> Option.map (fun name -> "#package-" + Uri.EscapeDataString name)
@@ -258,20 +255,16 @@ module View =
         let packageGroups =
             if isNull (box package.Packages) then []
             else
-                // Two independent projects can both add members directly to the same shared
-                // namespace (e.g. both "Axial" and "Axial.Telemetry" declare things in namespace
-                // "Axial.Telemetry"). Always link to this project's own package-content anchor on the
-                // target page rather than the bare page top: when the page is genuinely shared, the
-                // renderer groups Contents by owning project under a matching anchor id, so this jumps
-                // straight to this project's own members instead of looking like it belongs to
-                // whichever project happens to render first. When the page isn't shared, no element
-                // has that id and the fragment is simply a harmless no-op.
+                // Package landing pages have their own route. A package name can also be a namespace
+                // id, so linking package labels to entity routes would select the namespace tree rather
+                // than the package the reader clicked.
                 package.Packages
                 |> List.map (fun project ->
                     let contributed = entitiesForPackage project package.Entities
+                    let groupPageId = "packages/" + Uri.EscapeDataString project.Name
                     match findPackageRoot project.Name contributed with
-                    | Some root -> project.Name, Some root.Id, root.Entities, Some project.Name, contributed
-                    | None -> project.Name, None, contributed, None, contributed)
+                    | Some root -> project.Name, Some groupPageId, root.Entities, None, contributed
+                    | None -> project.Name, Some groupPageId, contributed, None, contributed)
                 |> List.filter (fun (_, _, _, _, contributed) -> not contributed.IsEmpty)
                 |> List.map (fun (name, pageId, entities, anchor, _) -> name, pageId, entities, anchor)
 
