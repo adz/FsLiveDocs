@@ -29,6 +29,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Check release notes
+        run: bash scripts/check-release-notes.sh
+
       - name: Restore
         run: dotnet restore FsLiveDocs.slnx
 

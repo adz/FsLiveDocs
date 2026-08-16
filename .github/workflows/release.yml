@@ -37,11 +37,10 @@ jobs:
             echo "Release tags must have the form vMAJOR.MINOR.PATCH; got $GITHUB_REF_NAME" >&2
             exit 1
           fi
-          test -f "dev-docs/releases/$version.md" || {
-            echo "Missing release notes: dev-docs/releases/$version.md" >&2
-            exit 1
-          }
           echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Check release notes
+        run: bash scripts/check-release-notes.sh "$VERSION"
 
       - name: Restore
         run: dotnet restore FsLiveDocs.slnx
