@@ -694,25 +694,35 @@ module SymbolLister =
                     finally
                         Console.SetOut(oldOut)
                 
-                let rec flatten (e: ApiDocEntity) =
-                    seq {
-                        yield mapEntity e
-                        for n in e.NestedEntities do
-                            yield! flatten n
-                    }
-
                 let isProjectEntity (e: ApiDocEntity) =
                     e.Symbol.Assembly.SimpleName.Equals(assemblyName, StringComparison.OrdinalIgnoreCase)
 
-                let projectEntities =
+                // `model.EntityInfos` is already "the full list of all entities" (every namespace,
+                // module, and type at every nesting depth, each as its own entry — see
+                // ApiDocModel.EntityInfos). `mapEntity` and `parameterDiagnostics` are themselves
+                // recursive over `NestedEntities`, so a doubly-nested member (for example
+                // `module M = module Advanced = let f = ...`) was reachable twice: once via its
+                // parent's own recursion, and again because the same nested entity also has its own
+                // top-level entry in `EntityInfos`. Restricting to root entities (no `ParentModule`)
+                // keeps every entity exactly once; each root's own recursion supplies its descendants.
+                let rootProjectEntities =
                     model.EntityInfos
-                    |> Seq.filter (fun ei -> isProjectEntity ei.Entity)
+                    |> Seq.filter (fun ei -> isProjectEntity ei.Entity && ei.ParentModule.IsNone)
                     |> Seq.map (fun ei -> ei.Entity)
                     |> Seq.toList
 
-                let diagnostics = projectEntities |> List.collect parameterDiagnostics
+                let diagnostics = rootProjectEntities |> List.collect parameterDiagnostics
 
-                let entities = projectEntities |> List.collect (flatten >> List.ofSeq)
+                let entities = rootProjectEntities |> List.map mapEntity
+
+                // `entities` nests every descendant exactly once (see above), so package ownership
+                // needs its own recursive walk rather than reading the top-level list directly —
+                // reading only the roots would silently drop every nested module and type from
+                // `Packages.EntityIds`, and the reference model relies on that list naming everything
+                // a package owns (see the namespace-vs-package-identity note in the caller's docs).
+                let rec allEntityIds (entity: EntityModel) =
+                    [ if entity.Kind <> EntityKind.Namespace then entity.Id
+                      yield! entity.Entities |> List.collect allEntityIds ]
 
                 return {
                     Version = "0.1.0"
@@ -722,7 +732,7 @@ module SymbolLister =
                     // nested under them, so listing them here would make every project appear to "own" shared
                     // ancestor namespaces. Only concrete entities (modules, types, ...) reflect real per-project
                     // ownership; ancestor namespace nodes are still retained in rendered trees via prefix matching.
-                    Packages = [ { Name = packageName; EntityIds = entities |> List.filter (fun entity -> entity.Kind <> EntityKind.Namespace) |> List.map (fun entity -> entity.Id) |> List.distinct } ]
+                    Packages = [ { Name = packageName; EntityIds = entities |> List.collect allEntityIds |> List.distinct } ]
                 }, diagnostics
     }
 
