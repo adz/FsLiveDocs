@@ -311,7 +311,7 @@ module SymbolLister =
 
         m.UsageHtml.HtmlText |> reconcileUsageSignature unnamedDisplayNames |> plainDisplay
 
-    let mapMember (m: ApiDocMember) : MemberModel =
+    let private mapMemberWithId id (m: ApiDocMember) : MemberModel =
         let location =
             match m.Symbol.DeclarationLocation with
             | Some loc ->
@@ -331,7 +331,7 @@ module SymbolLister =
         let displayNames = displayParameterNames m
 
         {
-            Id = m.Symbol.FullName
+            Id = id
             Name = m.Name
             Signature = mapMemberSignature m
             Parameters =
@@ -348,8 +348,32 @@ module SymbolLister =
             Location = location
         }
 
+    let mapMember (m: ApiDocMember) : MemberModel =
+        mapMemberWithId m.Symbol.FullName m
+
+    let private overloadMemberId (m: ApiDocMember) =
+        let xmlDocSignature =
+            match m.Symbol with
+            | :? FSharpMemberOrFunctionOrValue as symbol -> symbol.XmlDocSig
+            | _ -> m.Symbol.FullName + "(" + mapMemberSignature m + ")"
+        let prefixSeparator = xmlDocSignature.IndexOf(':')
+        if prefixSeparator < 0 then xmlDocSignature
+        else xmlDocSignature.Substring(prefixSeparator + 1)
+
     let rec mapEntity (e: ApiDocEntity) : EntityModel =
-        let members = e.AllMembers |> Seq.map mapMember |> Seq.toList
+        let apiMembers = e.AllMembers |> Seq.toList
+        let overloadedNames =
+            apiMembers
+            |> List.countBy _.Symbol.FullName
+            |> List.choose (fun (fullName, count) -> if count > 1 then Some fullName else None)
+            |> Set.ofList
+        let members =
+            apiMembers
+            |> List.map (fun memberInfo ->
+                let id =
+                    if overloadedNames.Contains memberInfo.Symbol.FullName then overloadMemberId memberInfo
+                    else memberInfo.Symbol.FullName
+                mapMemberWithId id memberInfo)
         let nested = e.NestedEntities |> List.map mapEntity
         let entityId =
             e.Symbol.TryFullName

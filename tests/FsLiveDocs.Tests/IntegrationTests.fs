@@ -248,6 +248,39 @@ module Named =
     }
 
     [<Fact>]
+    let ``overloaded members receive distinct stable IDs`` () = async {
+        let source =
+            """namespace TestNamespace
+
+open System.Text
+
+/// <summary>Writes values.</summary>
+type IWriter =
+    /// <summary>Writes values.</summary>
+    abstract Write : path: string * values: seq<string> -> unit
+
+    /// <summary>Writes values with an encoding.</summary>
+    abstract Write : path: string * values: seq<string> * encoding: Encoding -> unit
+"""
+
+        let projFile = buildProjectWithSource "OverloadedMembers" [ "Writer.fs", source ]
+        let! package = SymbolLister.extractFromProject projFile
+
+        let rec allMembers (entities: EntityModel list) =
+            entities |> List.collect (fun entity -> entity.Members @ allMembers entity.Entities)
+
+        let overloads =
+            allMembers package.Entities
+            |> List.filter (fun memberModel -> memberModel.Id.StartsWith("TestNamespace.IWriter.Write"))
+
+        Assert.Equal(2, overloads.Length)
+        Assert.Equal<string list>(
+            [ "TestNamespace.IWriter.Write(System.String,System.Collections.Generic.IEnumerable{System.String})"
+              "TestNamespace.IWriter.Write(System.String,System.Collections.Generic.IEnumerable{System.String},System.Text.Encoding)" ],
+            overloads |> List.map _.Id |> List.sort)
+    }
+
+    [<Fact>]
     let ``Full Extraction and Merging Integration`` () = async {
         let files = [ "File1.fs"; "File2.fs" ]
         let projFile = createTestProject "Integration1" files
