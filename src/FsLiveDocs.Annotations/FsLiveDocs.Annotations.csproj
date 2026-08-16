@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <PackageId>FsLiveDocs.Annotations</PackageId>
+    <Title>FsLiveDocs annotations</Title>
+    <Description>Lightweight metadata attributes for FsLiveDocs documentation examples.</Description>
+    <PackageTags>fsharp;documentation;doctest;annotations</PackageTags>
+  </PropertyGroup>
+</Project>

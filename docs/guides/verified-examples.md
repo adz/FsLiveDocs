@@ -94,6 +94,50 @@ let add left right = left + right
 
 Use `data-livedocs="snapshot"` when output is part of the contract. Use `data-livedocs="no-check" reason="..."` for a deliberate exclusion.
 
+## Prepare XML examples with scenarios
+
+Some XML examples need deterministic state before their transcript runs. Install the small annotations package in the library that owns the example:
+
+```bash
+dotnet add package FsLiveDocs.Annotations
+```
+
+`FsLiveDocs.Annotations` contains metadata consumed by FsLiveDocs; it does not bring the CLI, compiler service, or renderer into your library. Mark a public, parameterless function with a unique scenario name:
+
+```fsharp
+open FsLiveDocs
+
+module CustomerExamples =
+    let mutable private currentCustomer = "anonymous"
+
+    [<DocScenario("preferred-customer")>]
+    let preparePreferredCustomer () =
+        currentCustomer <- "Ada"
+
+    /// <summary>Greets the current customer.</summary>
+    /// <example name="preferred-customer-greeting"
+    ///          scenario="preferred-customer"
+    ///          data-livedocs="snapshot">
+    /// > CustomerExamples.greet();;
+    /// val it: string = "Hello Ada"
+    /// </example>
+    let greet () = $"Hello {currentCustomer}"
+```
+
+For each example that names the scenario, FsLiveDocs starts the example session, loads the documented project, calls `preparePreferredCustomer()`, and then evaluates the example. Setup output is not part of the expected transcript.
+
+Use scenarios for focused deterministic setup such as fixture data, dependency-injection state, or an in-memory test double. Keep setup fast and local: executable documentation has the same file, process, network, clock, and environment access as the user running FsLiveDocs.
+
+Scenario rules:
+
+- the `scenario` value must exactly match the `DocScenario` name;
+- scenario names must be unique across the projects in one documentation build;
+- the annotated F# function must compile to a callable static, parameterless method; a public function in an F# module is the usual form;
+- the example fails when its named scenario cannot be found;
+- each example gets a fresh FSI session, so one example must not depend on another example having run first.
+
+Do not add `FsLiveDocs` itself as a library dependency. It is a .NET tool package. `FsLiveDocs.Annotations` is the compile-time contract for attributes used by documented projects.
+
 ## Generate stable tests
 
 ```bash

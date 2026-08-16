@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must have the form vMAJOR.MINOR.PATCH; got $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Restore
+        run: dotnet restore FsLiveDocs.slnx
+
+      - name: Build
+        run: dotnet build FsLiveDocs.slnx --configuration Release --no-restore -p:Version="$VERSION"
+
+      - name: Test
+        run: dotnet test FsLiveDocs.slnx --configuration Release --no-build -p:Version="$VERSION"
+
+      - name: Pack
+        run: dotnet pack FsLiveDocs.slnx --configuration Release --no-build -p:Version="$VERSION" --output artifacts/packages
+
+      - name: Verify package set
+        shell: bash
+        run: |
+          expected=(
+            FsLiveDocs
+            FsLiveDocs.Annotations
+          )
+          for package in "${expected[@]}"; do
+            test -f "artifacts/packages/$package.$VERSION.nupkg" || {
+              echo "Missing package: $package.$VERSION.nupkg" >&2
+              exit 1
+            }
+          done
+          test "$(find artifacts/packages -maxdepth 1 -name '*.nupkg' | wc -l)" -eq "${#expected[@]}"
+
+      - name: Install the packed tool
+        run: dotnet tool install FsLiveDocs --tool-path .tools --version "$VERSION" --add-source artifacts/packages
+
+      - name: Verify and build documentation
+        run: |
+          .tools/livedocs test
+          .tools/livedocs build
+
+      - name: Capture release documentation
+        run: .tools/livedocs capture --version "$VERSION" --output "artifacts/fslivedocs-$VERSION.zip"
+
+      - name: Publish packages to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        shell: bash
+        run: |
+          test -n "$NUGET_API_KEY" || {
+            echo "The NUGET_API_KEY repository secret is not configured." >&2
+            exit 1
+          }
+          packages=(
+            FsLiveDocs.Annotations
+            FsLiveDocs
+          )
+          for package in "${packages[@]}"; do
+            dotnet nuget push "artifacts/packages/$package.$VERSION.nupkg" \
+              --api-key "$NUGET_API_KEY" \
+              --source https://api.nuget.org/v3/index.json
+          done
+
+      - name: Create immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            artifacts/packages/*.nupkg \
+            artifacts/packages/*.snupkg \
+            "artifacts/fslivedocs-$VERSION.zip" \
+            "artifacts/fslivedocs-$VERSION.zip.report.json" \
+            --verify-tag \
+            --generate-notes

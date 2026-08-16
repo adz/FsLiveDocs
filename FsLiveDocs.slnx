@@ -9,7 +9,7 @@
     <Project Path="samples/DeepReference/Acme.Docs/Acme.Docs.fsproj" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/FsLiveDocs.Abstractions/FsLiveDocs.Abstractions.csproj" />
+    <Project Path="src/FsLiveDocs.Annotations/FsLiveDocs.Annotations.csproj" />
     <Project Path="src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj" />
     <Project Path="src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj" />
     <Project Path="src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj" />

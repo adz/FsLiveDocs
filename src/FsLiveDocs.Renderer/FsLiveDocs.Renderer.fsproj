@@ -2,7 +2,12 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>FsLiveDocs.Renderer</PackageId>
+    <Title>FsLiveDocs Renderer</Title>
+    <Description>Static-site renderer for current and historical FsLiveDocs artifacts.</Description>
+    <PackageTags>fsharp;documentation;api-docs;static-site-generator</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>

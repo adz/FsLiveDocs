@@ -512,7 +512,7 @@ module SymbolLister =
         |> Option.defaultValue []
 
     let private extractScenariosFromAssembly (dllPath: string) =
-        let scenarioAttributeName = "FsLiveDocs.Core.DocScenarioAttribute"
+        let scenarioAttributeName = "FsLiveDocs.DocScenarioAttribute"
         let assembly = Assembly.LoadFrom(dllPath)
         let types =
             try

@@ -2,13 +2,12 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>FsLiveDocs.Core</PackageId>
-    <Version>0.1.0</Version>
-    <Authors>FsLiveDocs contributors</Authors>
-    <Description>Runtime attribute and models for FsLiveDocs documentation examples.</Description>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/fsprojects/FsLiveDocs</RepositoryUrl>
+    <Title>FsLiveDocs Core</Title>
+    <Description>Core models, documentation discovery, semantic extraction, and release capsules for FsLiveDocs.</Description>
+    <PackageTags>fsharp;documentation;doctest;api-docs</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,7 +32,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../FsLiveDocs.Abstractions/FsLiveDocs.Abstractions.csproj" />
+    <ProjectReference Include="../FsLiveDocs.Annotations/FsLiveDocs.Annotations.csproj" />
     <PackageReference Include="FSharp.Compiler.Service" Version="43.12.201" />
     <PackageReference Include="FSharp.Formatting" Version="22.0.0" />
     <PackageReference Include="Markdig" Version="1.2.0" />

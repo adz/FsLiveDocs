@@ -7,23 +7,14 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>livedocs</ToolCommandName>
     <PackageId>FsLiveDocs</PackageId>
-    <Version>0.1.0</Version>
-    <Authors>FsLiveDocs contributors</Authors>
     <Title>FsLiveDocs</Title>
     <Description>Verified, semantic, version-aware documentation for F#.</Description>
-    <PackageTags>fsharp;documentation;api-docs;doctest;static-site-generator</PackageTags>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/adz/FsLiveDocs</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/adz/FsLiveDocs.git</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <PackageReleaseNotes>https://github.com/adz/FsLiveDocs/releases/tag/v0.1.0</PackageReleaseNotes>
-    <Copyright>Copyright © FsLiveDocs contributors</Copyright>
+    <PackageTags>fsharp;documentation;api-docs;doctest;static-site-generator;dotnet-tool</PackageTags>
+    <PackageReleaseNotes>https://github.com/adz/FsLiveDocs/releases/tag/v$(Version)</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 
@@ -39,15 +30,39 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FsLiveDocs.Core\FsLiveDocs.Core.fsproj" />
-    <ProjectReference Include="..\FsLiveDocs.Runner\FsLiveDocs.Runner.fsproj" />
-    <ProjectReference Include="..\FsLiveDocs.Renderer\FsLiveDocs.Renderer.fsproj" />
+    <!-- These implementation assemblies are bundled into the tool package below. -->
+    <ProjectReference Include="..\FsLiveDocs.Core\FsLiveDocs.Core.fsproj" PrivateAssets="All" />
+    <ProjectReference Include="..\FsLiveDocs.Runner\FsLiveDocs.Runner.fsproj" PrivateAssets="All" />
+    <ProjectReference Include="..\FsLiveDocs.Renderer\FsLiveDocs.Renderer.fsproj" PrivateAssets="All" />
+    <!-- Keep the consumer-facing annotation contract as an ordinary package dependency. -->
+    <ProjectReference Include="..\FsLiveDocs.Annotations\FsLiveDocs.Annotations.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Argu" Version="6.2.5" />
+    <PackageReference Include="FSharp.Compiler.Service" Version="43.12.201" />
+    <PackageReference Include="FSharp.Formatting" Version="22.0.0" />
+    <PackageReference Include="Giraffe.ViewEngine" Version="1.4.0" />
+    <PackageReference Include="Markdig" Version="1.2.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
+    <PackageReference Include="YamlDotNet" Version="17.1.0" />
   </ItemGroup>
+
+  <!-- PackAsTool normally turns project references into package dependencies. Core,
+       Runner, and Renderer are implementation boundaries, so ship their assemblies
+       inside FsLiveDocs instead of publishing three implementation packages. -->
+  <Target Name="BundleToolImplementationAssemblies"
+          DependsOnTargets="BuildOnlySettings;ResolveReferences"
+          BeforeTargets="_GetBuildOutputFilesWithTfm">
+    <ItemGroup>
+      <BuildOutputInPackage
+        Include="@(ReferenceCopyLocalPaths)"
+        Condition="'%(ReferenceCopyLocalPaths.Extension)' == '.dll' and
+                   ('%(ReferenceCopyLocalPaths.Filename)' == 'FsLiveDocs.Core' or
+                    '%(ReferenceCopyLocalPaths.Filename)' == 'FsLiveDocs.Runner' or
+                    '%(ReferenceCopyLocalPaths.Filename)' == 'FsLiveDocs.Renderer')" />
+    </ItemGroup>
+  </Target>
 
 </Project>

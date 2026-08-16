@@ -26,6 +26,14 @@ Restore the tool in CI:
 dotnet tool restore
 ```
 
+Libraries that use named setup for XML documentation examples should reference the lightweight annotations package separately:
+
+```bash
+dotnet add package FsLiveDocs.Annotations --version 0.1.0
+```
+
+See [Prepare XML examples with scenarios](docs/guides/verified-examples.md#prepare-xml-examples-with-scenarios). The tool package itself should not be added as a library reference.
+
 ## Create a documentation site
 
 Initialize the repository:

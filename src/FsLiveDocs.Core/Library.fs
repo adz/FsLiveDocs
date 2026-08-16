@@ -1,5 +1,7 @@
 namespace FsLiveDocs.Core
 
+open FsLiveDocs
+
 // <snippet:DocScenarioPattern>
 module DocScenarioSamples =
     // <snippet:DocScenarioAttributeUsage>
@@ -7,7 +9,7 @@ module DocScenarioSamples =
 
     /// <summary>Loads deterministic setup for the named documentation scenario.</summary>
     /// <example name="DocScenarioUsage" data-livedocs="snapshot">
-    /// > FsLiveDocs.Core.DocScenarioAttribute("AuthenticatedUser").Name;;
+    /// > FsLiveDocs.DocScenarioAttribute("AuthenticatedUser").Name;;
     /// val it: string = "AuthenticatedUser"
     /// </example>
     [<DocScenario("with-user")>]

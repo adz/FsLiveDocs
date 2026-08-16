@@ -2,7 +2,12 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>FsLiveDocs.Runner</PackageId>
+    <Title>FsLiveDocs Runner</Title>
+    <Description>Compilation and execution engine for verified FsLiveDocs examples.</Description>
+    <PackageTags>fsharp;documentation;doctest;testing</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>

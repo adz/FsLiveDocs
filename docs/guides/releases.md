@@ -72,6 +72,30 @@ dotnet livedocs ci
 
 The generated tag workflow verifies documentation, captures the release, and creates a GitHub release. It fails instead of replacing an existing release.
 
+## Publish FsLiveDocs packages
+
+FsLiveDocs itself uses `.github/workflows/release.yml`. A tag named `v<semver>` is the only release trigger. The workflow removes the leading `v`, passes that version to every build and pack, verifies the package set, publishes it to NuGet.org, captures the matching documentation capsule, and creates the GitHub release.
+
+The published package set is:
+
+| Package | Purpose |
+| --- | --- |
+| `FsLiveDocs` | The `livedocs` .NET tool. |
+| `FsLiveDocs.Annotations` | The lightweight, `netstandard2.0` compile-time contract for attributes such as `DocScenario`. |
+
+`FsLiveDocs.Annotations` supplies declarative metadata attached to consumer code. Core, Runner, and Renderer remain internal project boundaries and are bundled into the tool package; they are not separate public NuGet packages. Consumers install `FsLiveDocs` as a tool and add `FsLiveDocs.Annotations` as a library dependency only when they use attributes such as `DocScenario`.
+
+Before the first tag, create a NuGet.org API key scoped to these package IDs with **Push new packages and package versions** permission. Add it to the GitHub repository as an Actions secret named `NUGET_API_KEY`. Restrict the key to the shortest practical expiry and rotate it in both NuGet.org and GitHub. The workflow does not use `--skip-duplicate`: package versions and release tags are immutable, so reusing a published version fails.
+
+Create and push a release tag only from the commit to release:
+
+```bash
+git tag -a v0.1.0 -m "FsLiveDocs 0.1.0"
+git push origin v0.1.0
+```
+
+The version in `Directory.Build.props` is the local-development default. Tagged CI overrides it from the tag and rejects tags that are not stable semantic versions.
+
 ## Add a local release to history
 
 ```bash

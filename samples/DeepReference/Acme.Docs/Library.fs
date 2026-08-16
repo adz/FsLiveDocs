@@ -1,6 +1,6 @@
 namespace Acme.Docs
 
-open FsLiveDocs.Core
+open FsLiveDocs
 
 /// <summary>A customer order used throughout the deep-reference documentation.</summary>
 type Order = {
