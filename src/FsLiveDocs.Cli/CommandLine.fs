@@ -15,12 +15,12 @@ open Microsoft.Extensions.Logging
 
 /// <summary>Defines the supported command-line arguments for the livedocs tool.</summary>
 type Arguments =
-    /// <summary>Scaffolds a new LiveDocs project structure.</summary>
+    /// <summary>Adds FsLiveDocs configuration and starter documentation to a repository.</summary>
     | [<CliPrefix(CliPrefix.None)>] Init
-    /// <summary>Generates CI/CD templates for GitHub Actions.</summary>
-    | [<CliPrefix(CliPrefix.None)>] CI
-    /// <summary>Generates a Verify-based snapshot test project that calls into LiveDocs.</summary>
-    | [<CliPrefix(CliPrefix.None); AltCommandLine("generate-tests")>] GenerateTests of projectPaths:string list
+    /// <summary>Generates a GitHub Actions workflow for documentation verification and releases.</summary>
+    | [<CliPrefix(CliPrefix.None)>] Generate_CI
+    /// <summary>Generates a test project for documentation examples.</summary>
+    | [<CliPrefix(CliPrefix.None)>] Generate_Tests of projectPaths:string list
     /// <summary>Extracts symbol metadata from projects into JSON snapshots.</summary>
     | [<CliPrefix(CliPrefix.None)>] Extract of projectPaths:string list
     /// <summary>Captures a self-contained, renderer-neutral documentation release.</summary>
@@ -28,7 +28,7 @@ type Arguments =
     /// <summary>Verifies and describes a release capsule.</summary>
     | [<CliPrefix(CliPrefix.None)>] Inspect of capsulePath:string
     /// <summary>Adds an immutable capsule reference to a release history index.</summary>
-    | [<CliPrefix(CliPrefix.None); AltCommandLine("history-add")>] HistoryAdd of version:string
+    | [<CliPrefix(CliPrefix.None)>] History_Add of version:string
     /// <summary>Runs verified code examples found in docstrings.</summary>
     | [<CliPrefix(CliPrefix.None)>] Test of projectPaths:string list
     /// <summary>Audits coverage and compiler-checks every expanded F# documentation block.</summary>
@@ -36,14 +36,14 @@ type Arguments =
     /// <summary>Builds the full static documentation site.</summary>
     | [<CliPrefix(CliPrefix.None)>] Build of projectPaths:string list
     /// <summary>Builds every version in a verified local history manifest.</summary>
-    | [<CliPrefix(CliPrefix.None); AltCommandLine("build-history")>] BuildHistory of manifestPath:string
-    /// <summary>Starts a development server with live-rebuild capabilities.</summary>
+    | [<CliPrefix(CliPrefix.None)>] Build_History of manifestPath:string
+    /// <summary>Builds, serves, and rebuilds a local documentation preview.</summary>
     | [<CliPrefix(CliPrefix.None)>] Watch of projectPaths:string list
-    /// <summary>Sets the DaisyUI visual theme.</summary>
+    /// <summary>Sets the generated site's visual theme.</summary>
     | [<Inherit; AltCommandLine("-t")>] Theme of string
-    /// <summary>Sets the version stored by API model extraction.</summary>
+    /// <summary>Sets the documentation version for build, extraction, or capture.</summary>
     | [<Inherit>] Version of string
-    /// <summary>Sets the API model extraction output path.</summary>
+    /// <summary>Sets the output path for commands that write an artifact or history index.</summary>
     | [<Inherit>] Output of string
     /// <summary>Sets a local capsule path for history-add.</summary>
     | [<Inherit>] Capsule of string
@@ -58,7 +58,7 @@ type Arguments =
     /// <summary>Adds directory names the preview watcher must not watch or rebuild for.</summary>
     | [<Inherit>] Ignore of string
     /// <summary>Fails the run when the documented API produces quality warnings.</summary>
-    | [<Inherit; AltCommandLine("--warnaserror")>] Warn_As_Error
+    | [<Inherit>] Warn_As_Error
     /// <summary>Sets console verbosity to warnings, info, or debug.</summary>
     | [<Inherit>] Verbosity of string
     /// <summary>Enables or disables interactive terminal rendering.</summary>
@@ -67,38 +67,38 @@ type Arguments =
     | [<Inherit>] Banner of bool
     /// <summary>Discovers documentable projects and records them in .livedocs/config.json during init.</summary>
     | [<Inherit>] Discover_Projects
-    /// <summary>Validates capture and reports its expected result without publishing the requested output.</summary>
+    /// <summary>Validates capture and reports its expected result without writing a capsule.</summary>
     | [<Inherit>] Dry_Run
     interface IArgParserTemplate with
         member s.Usage =
             match s with
-            | Init -> "Scaffold a new LiveDocs project."
-            | CI -> "Generate CI/CD templates (GitHub Actions)."
-            | GenerateTests _ -> "Generate a Verify-based snapshot test project for the given projects."
+            | Init -> "Add FsLiveDocs configuration and starter documentation to this repository."
+            | Generate_CI -> "Generate a GitHub Actions workflow for documentation verification and releases."
+            | Generate_Tests _ -> "Generate a test project for documentation examples."
             | Extract _ -> "Extract symbols from one or more projects into a JSON blob."
             | Capture _ -> "Verify and capture a self-contained documentation release capsule."
             | Inspect _ -> "Verify and describe a documentation release capsule."
-            | HistoryAdd _ -> "Add an immutable capsule reference to a release history index."
+            | History_Add _ -> "Add an immutable capsule reference to a release history index."
             | Test _ -> "Verify documentation without generating a test project: audits every F# block, then runs each snapshot-selected example."
             | Audit _ -> "Audit coverage, modes, and compilation for every expanded F# documentation block."
             | Build _ -> "Render the final static site for the given projects."
-            | BuildHistory _ -> "Render all versions from a verified local history manifest."
-            | Watch _ -> "Start a dev server with file watching."
-            | Theme _ -> "Set the visual theme (default: light)."
-            | Version _ -> "Set the version stored by API model extraction."
-            | Output _ -> "Set the API model extraction output path."
-            | Capsule _ -> "Set the local capsule path for history-add."
-            | Url _ -> "Set the HTTPS capsule URL for history-add."
-            | Sha256 _ -> "Set the expected capsule SHA-256 for history-add."
-            | Host _ -> "Set the preview bind host (default: 0.0.0.0)."
-            | Port _ -> "Set the preview port (default: 5000)."
-            | Ignore _ -> "Add a comma-separated list of directory names the watcher ignores. Repeatable."
-            | Warn_As_Error -> "Fail the run when the documented API produces quality warnings (default: warn only)."
+            | Build_History _ -> "Render all versions from a verified local history manifest."
+            | Watch _ -> "Build and serve a local preview, rebuilding when files change."
+            | Theme _ -> "Set the site theme for build, build-history, or watch (default: light)."
+            | Version _ -> "Set the documentation version for build, extract, capture, or watch."
+            | Output _ -> "Set the output path for extract, capture, or history-add."
+            | Capsule _ -> "With history-add, read the release capsule from a local path."
+            | Url _ -> "With history-add, download the release capsule from an HTTPS URL."
+            | Sha256 _ -> "With history-add --url, require this capsule SHA-256."
+            | Host _ -> "Set the watch preview's bind host (default: 0.0.0.0)."
+            | Port _ -> "Set the watch preview's port (default: 5000)."
+            | Ignore _ -> "With watch, ignore these comma-separated directory names. Repeatable."
+            | Warn_As_Error -> "Make API documentation quality warnings fail audit, test, build, capture, or watch."
             | Verbosity _ -> "Set console verbosity: warnings (default), info, or debug."
             | Interactive _ -> "Enable or disable interactive terminal rendering (default: true)."
             | Banner _ -> "Enable or disable the LiveDocs banner (default: true)."
-            | Discover_Projects -> "Discover project files and write them to .livedocs/config.json (with init)."
-            | Dry_Run -> "Validate capture and report expected output without writing the requested capsule."
+            | Discover_Projects -> "With init, discover project files and save them in .livedocs/config.json."
+            | Dry_Run -> "With capture, validate and report expected output without writing a capsule."
 
 type internal VerbosityLevel =
     | Warnings

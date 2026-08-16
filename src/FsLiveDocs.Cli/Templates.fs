@@ -56,6 +56,8 @@ on:
     tags: [ 'v*' ]
 permissions:
   contents: write
+  pages: write
+  id-token: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -77,20 +79,37 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           version="${GITHUB_REF_NAME#v}"
-          dotnet livedocs capture --version "$version" --output "artifacts/livedocs-$version.zip"
+          package="${GITHUB_REPOSITORY#*/}"
+          dotnet livedocs capture --version "$version" --output "artifacts/$package-$version-livedocs.zip"
       - name: Publish immutable release capsule
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
+          package="${GITHUB_REPOSITORY#*/}"
           gh release create "$GITHUB_REF_NAME" \
-            "artifacts/livedocs-$version.zip" \
-            "artifacts/livedocs-$version.zip.report.json" \
+            "artifacts/$package-$version-livedocs.zip" \
+            "artifacts/$package-$version-livedocs.zip.report.json" \
             --verify-tag --generate-notes
+      - name: Render release history
+        if: github.ref == 'refs/heads/main' && hashFiles('.livedocs/history.json') != ''
+        run: dotnet livedocs build-history .livedocs/history.json
       - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main'
         with:
           path: output
+  deploy-pages:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
 """
 
     let snapshotProject eol projectReferences toolReferences =

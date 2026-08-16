@@ -80,7 +80,7 @@ jobs:
           .tools/livedocs build
 
       - name: Capture release documentation
-        run: .tools/livedocs capture --version "$VERSION" --output "artifacts/fslivedocs-$VERSION.zip"
+        run: .tools/livedocs capture --version "$VERSION" --output "artifacts/FsLiveDocs-$VERSION-livedocs.zip"
 
       - name: Authenticate to NuGet.org
         id: nuget-login
@@ -110,7 +110,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             artifacts/packages/*.nupkg \
             artifacts/packages/*.snupkg \
-            "artifacts/fslivedocs-$VERSION.zip" \
-            "artifacts/fslivedocs-$VERSION.zip.report.json" \
+            "artifacts/FsLiveDocs-$VERSION-livedocs.zip" \
+            "artifacts/FsLiveDocs-$VERSION-livedocs.zip.report.json" \
             --verify-tag \
             --generate-notes

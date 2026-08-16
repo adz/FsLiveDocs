@@ -74,15 +74,9 @@ An ordinary `fsharp` fence joins the page compilation unit. It can use declarati
 
 ## Generated verification contract
 
-Discovery owns verification composition. `GeneratedVerificationCase` contains the stable ID, project, source identity, canonical Markdown, and action.
+`livedocs generate-tests` creates stable xUnit cases from the same documentation discovery result used by audit, build, and capture.
 
-Generated xUnit code calls only:
-
-```text
-GeneratedVerification.runCase references case
-```
-
-The runner validates coverage, rejects stale cases, compiles owning units, executes explicit blocks, and reports mapped diagnostics.
+Run the generated test project in CI. FsLiveDocs validates coverage, rejects stale cases, compiles owning units, executes explicit blocks, and maps diagnostics back to the authored documentation.
 
 ## API extraction
 

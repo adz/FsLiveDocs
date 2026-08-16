@@ -1,7 +1,3 @@
----
-title: Verification architecture
----
-
 # Verification architecture
 
 FsLiveDocs uses one deterministic discovery result for audit, generated tests, semantic extraction, capture, and rendering.

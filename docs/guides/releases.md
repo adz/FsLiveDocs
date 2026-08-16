@@ -4,7 +4,7 @@ title: Capture and publish releases
 
 # Capture and publish releases
 
-Capture a release once, then render it with current FsLiveDocs versions without compiling the historical project.
+Capture your library's documentation when you release the library. FsLiveDocs can later render that documentation with a current renderer, without rebuilding the old library version.
 
 ## Understand the capsule
 
@@ -15,7 +15,7 @@ A capsule is a deterministic ZIP archive with four logical components:
 - `content.json` contains canonical Markdown, page metadata, assets, and site configuration.
 - `manifest.json` contains provenance, schemas, sizes, and component checksums.
 
-The capsule contains no generated HTML, CSS classes, DOM IDs, or compiler implementation objects.
+The capsule stores documentation content and meaning rather than generated site files. This lets newer FsLiveDocs versions render an older release with current templates and styling.
 
 ## Validate a planned capture
 
@@ -24,7 +24,7 @@ Run a dry run before publishing:
 ```bash
 dotnet livedocs capture src/YourLibrary/YourLibrary.fsproj \
   --version 1.4.0 \
-  --output artifacts/your-library-livedocs-1.4.0.zip \
+  --output artifacts/YourLibrary-1.4.0-livedocs.zip \
   --dry-run
 ```
 
@@ -32,12 +32,12 @@ The command audits and verifies the same inputs as a real capture. It reports ex
 
 ## Capture the release
 
-Build the exact release commit, then run:
+Build the library commit you are releasing, then run:
 
 ```bash
 dotnet livedocs capture src/YourLibrary/YourLibrary.fsproj \
   --version 1.4.0 \
-  --output artifacts/your-library-livedocs-1.4.0.zip
+  --output artifacts/YourLibrary-1.4.0-livedocs.zip
 ```
 
 Capture performs these operations:
@@ -52,10 +52,25 @@ Capture performs these operations:
 
 Capture refuses to overwrite an existing output. Publish a released version once.
 
+Name the capsule so it is distinguishable from packages and application archives:
+
+```text
+<package>-<version>-livedocs.zip
+```
+
+For example:
+
+```text
+Example.Library-1.4.0-livedocs.zip
+Example.Library-1.4.0-livedocs.zip.report.json
+```
+
+Keep the generated report beside the capsule. The `generate-ci` workflow uses the GitHub repository name as the package prefix.
+
 ## Inspect a capsule
 
 ```bash
-dotnet livedocs inspect artifacts/your-library-livedocs-1.4.0.zip
+dotnet livedocs inspect artifacts/YourLibrary-1.4.0-livedocs.zip
 ```
 
 Inspection verifies the archive and every component. It reports provenance, schema versions, checksums, compressed and uncompressed sizes, and inventory counts.
@@ -67,48 +82,28 @@ Attach the ZIP and its `.report.json` file to the matching immutable GitHub rele
 Generate a starter workflow:
 
 ```bash
-dotnet livedocs ci
+dotnet livedocs generate-ci
 ```
 
-The generated tag workflow verifies documentation, captures the release, and creates a GitHub release. It fails instead of replacing an existing release.
+The generated workflow verifies documentation, publishes tagged capsules using the recommended filename, and deploys the current site from `main`. It fails instead of replacing an existing release.
 
-## Publish FsLiveDocs packages
+To enable deployment in GitHub:
 
-FsLiveDocs itself uses `.github/workflows/release.yml`. A tag named `v<semver>` is the only release trigger. The workflow removes the leading `v`, passes that version to every build and pack, verifies the package set, publishes it to NuGet.org, captures the matching documentation capsule, and creates the GitHub release.
+1. Open the repository's **Settings → Pages**.
+2. Under **Build and deployment**, select **GitHub Actions** as the source.
+3. Push the generated `.github/workflows/livedocs.yml` workflow to the default branch.
+4. Allow the first deployment to create the `github-pages` environment.
+5. If the environment has protection rules, permit the default branch to deploy.
 
-The published package set is:
+A project repository named `Example.Library` is published at `https://<owner>.github.io/Example.Library/`. FsLiveDocs emits relative links, so no repository-path option is required.
 
-| Package | Purpose |
-| --- | --- |
-| `FsLiveDocs` | The `livedocs` .NET tool. |
-| `FsLiveDocs.Annotations` | The lightweight, `netstandard2.0` compile-time contract for attributes such as `DocScenario`. |
-
-`FsLiveDocs.Annotations` supplies declarative metadata attached to consumer code. Core, Runner, and Renderer remain internal project boundaries and are bundled into the tool package; they are not separate public NuGet packages. Consumers install `FsLiveDocs` as a tool and add `FsLiveDocs.Annotations` as a library dependency only when they use attributes such as `DocScenario`.
-
-Before the first tag, configure NuGet.org Trusted Publishing:
-
-1. Sign in to NuGet.org and open **Account settings → Trusted publishing**.
-2. Add a GitHub Actions policy owned by the NuGet account that will own the packages.
-3. Set the GitHub owner to `adz`, repository to `FsLiveDocs`, and workflow path to `.github/workflows/release.yml`.
-4. Leave the environment empty because the workflow does not use a GitHub environment.
-5. In the GitHub repository, create an Actions variable named `NUGET_USER` containing the NuGet.org username—not an email address.
-
-The workflow requests GitHub's OIDC token and exchanges it through `NuGet/login@v1` for a short-lived publishing credential. No persistent NuGet API key is stored in GitHub. The workflow does not use `--skip-duplicate`: package versions and release tags are immutable, so reusing a published version fails.
-
-Create and push a release tag only from the commit to release:
-
-```bash
-git tag -a v0.1.0 -m "FsLiveDocs 0.1.0"
-git push origin v0.1.0
-```
-
-The version in `Directory.Build.props` is the local-development default. Tagged CI overrides it from the tag and rejects tags that are not stable semantic versions.
+The generated workflow publishes the current site. To publish release history, keep `.livedocs/history.json` in the repository and run `build-history` before uploading the Pages artifact.
 
 ## Add a local release to history
 
 ```bash
 dotnet livedocs history-add 1.4.0 \
-  --capsule artifacts/your-library-livedocs-1.4.0.zip
+  --capsule artifacts/YourLibrary-1.4.0-livedocs.zip
 ```
 
 FsLiveDocs calculates the checksum and writes `.livedocs/history.json`.
@@ -117,7 +112,7 @@ FsLiveDocs calculates the checksum and writes `.livedocs/history.json`.
 
 ```bash
 dotnet livedocs history-add 1.4.0 \
-  --url https://github.com/example/your-library/releases/download/v1.4.0/your-library-livedocs-1.4.0.zip \
+  --url https://github.com/example/your-library/releases/download/v1.4.0/YourLibrary-1.4.0-livedocs.zip \
   --sha256 <sha256>
 ```
 
@@ -140,11 +135,3 @@ FsLiveDocs still reads the earlier local manifest format with separate API, sema
 Capture each maintained release into a capsule, add it with `history-add`, and switch `build-history` to `.livedocs/history.json`.
 
 Keep old manifests only while you need the compatibility path. Capsules remove the historical source-tree dependency.
-
-## Plan storage capacity
-
-Axial provides a representative large project. On 2026-08-14, its inputs contained 82 Markdown files (317,151 bytes), 8 assets (1,490,449 bytes), 942,360 bytes of API JSON, and 1,302,483 bytes of semantic JSON.
-
-The structured inputs compressed to about 264 KB. Assets therefore dominate an estimated 1.75 MB capsule. Axial's release capture was not published because its dirty source and existing build outputs left 9 of 313 blocks uncompilable.
-
-Treat that refusal as the release gate working correctly. Build a clean release commit before using its final report for retention planning.
