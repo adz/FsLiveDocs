@@ -35,6 +35,9 @@ jobs:
       - name: Build documentation generator
         run: dotnet build src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj --configuration Release --no-restore
 
+      - name: Build documentation sample
+        run: dotnet build samples/DeepReference/Acme.Docs/Acme.Docs.fsproj --configuration Release
+
       - name: Regenerate documentation tests
         run: dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll generate-tests --interactive false --banner false
 
