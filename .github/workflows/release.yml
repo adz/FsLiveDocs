@@ -36,6 +36,10 @@ jobs:
             echo "Release tags must have the form vMAJOR.MINOR.PATCH; got $GITHUB_REF_NAME" >&2
             exit 1
           fi
+          test -f "dev-docs/releases/$version.md" || {
+            echo "Missing release notes: dev-docs/releases/$version.md" >&2
+            exit 1
+          }
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Restore
@@ -116,4 +120,4 @@ jobs:
             "artifacts/FsLiveDocs-$VERSION-livedocs.zip" \
             "artifacts/FsLiveDocs-$VERSION-livedocs.zip.report.json" \
             --verify-tag \
-            --generate-notes
+            --notes-file "dev-docs/releases/$VERSION.md"
