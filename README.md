@@ -1,5 +1,11 @@
 # FsLiveDocs
 
+[![CI](https://github.com/adz/FsLiveDocs/actions/workflows/ci.yml/badge.svg)](https://github.com/adz/FsLiveDocs/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/FsLiveDocs.svg?logo=nuget)](https://www.nuget.org/packages/FsLiveDocs)
+[![NuGet downloads](https://img.shields.io/nuget/dt/FsLiveDocs.svg?logo=nuget)](https://www.nuget.org/packages/FsLiveDocs)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue?logo=github)](https://adz.github.io/FsLiveDocs/)
+[![License](https://img.shields.io/github/license/adz/FsLiveDocs)](LICENSE)
+
 FsLiveDocs builds verified, semantic, versioned documentation for F# libraries.
 
 Use FsLiveDocs to:
