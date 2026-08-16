@@ -82,7 +82,7 @@ Create a self-contained release capsule after verification succeeds:
 ```bash
 dotnet livedocs capture \
   --version 1.4.0 \
-  --output artifacts/your-library-livedocs-1.4.0.zip
+  --output artifacts/YourLibrary-1.4.0-livedocs.zip
 ```
 
 Capture writes the capsule and a machine-readable `.report.json` file. It prints component sizes, inventory counts, compressed and uncompressed sizes, and the capsule SHA-256.
@@ -92,14 +92,14 @@ Validate the process without writing the requested output:
 ```bash
 dotnet livedocs capture \
   --version 1.4.0 \
-  --output artifacts/your-library-livedocs-1.4.0.zip \
+  --output artifacts/YourLibrary-1.4.0-livedocs.zip \
   --dry-run
 ```
 
 Inspect an existing capsule:
 
 ```bash
-dotnet livedocs inspect artifacts/your-library-livedocs-1.4.0.zip
+dotnet livedocs inspect artifacts/YourLibrary-1.4.0-livedocs.zip
 ```
 
 The capsule stores API meaning, canonical Markdown and assets, and compiler-derived code semantics. It does not store generated HTML.
@@ -110,14 +110,14 @@ Add a local capsule to the history index:
 
 ```bash
 dotnet livedocs history-add 1.4.0 \
-  --capsule artifacts/your-library-livedocs-1.4.0.zip
+  --capsule artifacts/YourLibrary-1.4.0-livedocs.zip
 ```
 
 Add a remote capsule with its expected checksum:
 
 ```bash
 dotnet livedocs history-add 1.4.0 \
-  --url https://github.com/example/your-library/releases/download/v1.4.0/your-library-livedocs-1.4.0.zip \
+  --url https://github.com/example/your-library/releases/download/v1.4.0/YourLibrary-1.4.0-livedocs.zip \
   --sha256 <sha256>
 ```
 
@@ -137,14 +137,3 @@ FsLiveDocs verifies and caches remote capsules under `.livedocs/releases/`. Hist
 - [Configure semantic code](docs/guides/semantic-code.md)
 - [Use the command reference](docs/cheat-sheet.md)
 - [Read the complete reference](docs/deep-reference.md)
-
-## Develop FsLiveDocs
-
-Build and test the repository:
-
-```bash
-dotnet build FsLiveDocs.slnx
-dotnet test FsLiveDocs.slnx
-```
-
-See [Dogfood FsLiveDocs](docs/dogfooding.md) for the self-hosting workflow.

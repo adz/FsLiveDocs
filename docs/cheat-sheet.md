@@ -12,7 +12,7 @@ Run commands from the repository root. Build documented projects before commands
 | --- | --- |
 | `livedocs init` | Create starter configuration, history, docs, and ignore entries. |
 | `livedocs init --discover-projects` | Discover `.fsproj` files and record them in configuration. |
-| `livedocs ci` | Create a GitHub Actions verification and release workflow. |
+| `livedocs generate-ci` | Generate a GitHub Actions workflow that verifies documentation and publishes release capsules. |
 
 ## Authoring and verification
 

@@ -1,0 +1,66 @@
+name: Pages
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - .github/workflows/pages.yml
+      - .livedocs/history.json
+      - docs/**
+      - src/**
+      - Directory.Build.props
+      - FsLiveDocs.slnx
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Restore
+        run: dotnet restore src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj
+
+      - name: Build FsLiveDocs
+        run: dotnet build src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj --configuration Release --no-restore
+
+      - name: Render release history
+        run: dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll build-history .livedocs/history.json --interactive false --banner false
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: output
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

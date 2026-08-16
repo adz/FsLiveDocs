@@ -32,7 +32,7 @@ dotnet livedocs test
 ```bash
 dotnet livedocs capture \
   --version 0.1.0 \
-  --output artifacts/fslivedocs-0.1.0.zip \
+  --output artifacts/FsLiveDocs-0.1.0-livedocs.zip \
   --dry-run
 ```
 
@@ -45,13 +45,13 @@ Run capture from the exact tagged commit:
 ```bash
 dotnet livedocs capture \
   --version 0.1.0 \
-  --output artifacts/fslivedocs-0.1.0.zip
+  --output artifacts/FsLiveDocs-0.1.0-livedocs.zip
 ```
 
 Inspect the result:
 
 ```bash
-dotnet livedocs inspect artifacts/fslivedocs-0.1.0.zip
+dotnet livedocs inspect artifacts/FsLiveDocs-0.1.0-livedocs.zip
 ```
 
 ## Rebuild from the capsule
@@ -60,7 +60,7 @@ Add the capsule to a temporary or release history index:
 
 ```bash
 dotnet livedocs history-add 0.1.0 \
-  --capsule artifacts/fslivedocs-0.1.0.zip \
+  --capsule artifacts/FsLiveDocs-0.1.0-livedocs.zip \
   --output .livedocs/history.json
 
 dotnet livedocs build-history .livedocs/history.json

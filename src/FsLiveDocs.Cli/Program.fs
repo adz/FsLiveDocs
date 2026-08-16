@@ -554,7 +554,7 @@ module Program =
                     AnsiConsole.MarkupLine("[green]✔ Done![/]")
                     0
 
-                elif results.Contains CI then
+                elif results.Contains Generate_CI then
                     printBanner()
                     AnsiConsole.MarkupLine("[blue]Generating GitHub Actions workflow...[/]")
                     if not (Directory.Exists(".github/workflows")) then Directory.CreateDirectory(".github/workflows") |> ignore
@@ -562,8 +562,8 @@ module Program =
                     AnsiConsole.MarkupLine("[green]✔ Done:[/] .github/workflows/livedocs.yml")
                     0
 
-                elif results.Contains GenerateTests then
-                    let projectPaths = results.GetResult GenerateTests |> resolveProjects "generate-tests"
+                elif results.Contains Generate_Tests then
+                    let projectPaths = results.GetResult Generate_Tests |> resolveProjects "generate-tests"
                     generateSnapshotTests projectPaths
 
                 elif results.Contains Capture then
@@ -589,8 +589,8 @@ module Program =
                     AnsiConsole.MarkupLine($"  SHA-256: {report.Sha256}")
                     0
 
-                elif results.Contains HistoryAdd then
-                    let version = results.GetResult HistoryAdd
+                elif results.Contains History_Add then
+                    let version = results.GetResult History_Add
                     let indexPath = results.GetResult(Output, defaultValue = ".livedocs/history.json")
                     historyAddAction
                         indexPath
@@ -706,9 +706,9 @@ module Program =
                     buildAction (results.Contains Warn_As_Error) projectPaths theme (results.TryGetResult Arguments.Version)
                     0
 
-                elif results.Contains BuildHistory then
+                elif results.Contains Build_History then
                     printBanner()
-                    buildHistoryAction (results.GetResult BuildHistory) theme
+                    buildHistoryAction (results.GetResult Build_History) theme
                     0
 
                 elif results.Contains Watch then

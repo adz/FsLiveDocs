@@ -105,7 +105,7 @@ FsLiveDocs hashes each block's normalized source and semantic mode. It also hash
 
 A declared semantic component must match the captured content. Missing blocks or hash mismatches fail the build.
 
-Do not weaken this check. Capture a new unreleased capsule or use the matching released capsule.
+For an unreleased version, capture a new capsule. For a published version, use the capsule created from that exact release.
 
 ## Handle old releases
 

@@ -85,15 +85,9 @@ dotnet livedocs capture \
   src/Example.Core/Example.Core.fsproj \
   src/Example.Http/Example.Http.fsproj \
   --version 2.0.0 \
-  --output artifacts/example-livedocs-2.0.0.zip
+  --output artifacts/Example-2.0.0-livedocs.zip
 ```
 
 Only page-selected projects require compiler evaluation. Other documented projects contribute their built assemblies to the shared reference context.
 
-## Keep compatibility explicit
-
-API, semantic, content, capsule-manifest, and history-index schemas evolve independently.
-
-Loaders accept explicitly supported versions and reject unknown versions. Published capsules are immutable.
-
-See [Capture and publish releases](guides/releases.md) for the complete workflow.
+See [Capture and publish releases](guides/releases.md) for the complete release workflow.

@@ -145,9 +145,9 @@ dotnet livedocs generate-tests src/YourLibrary/YourLibrary.fsproj
 dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj
 ```
 
-Discovery produces stable case values. Generated xUnit facts pass each value to one runner interface.
+The command produces stable xUnit cases from the same documentation discovery result used by audit, build, and capture.
 
-The runner owns coverage validation, compile-before-execute ordering, transcript behavior, and stale-case detection.
+Run the generated test project in CI. FsLiveDocs handles coverage validation, compile-before-execute ordering, transcript behavior, and stale-case detection.
 
 ## Audit without generated tests
 
