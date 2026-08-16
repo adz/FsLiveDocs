@@ -41,6 +41,12 @@ jobs:
       - name: Restore
         run: dotnet restore FsLiveDocs.slnx
 
+      - name: Build the generator
+        run: dotnet build src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj --configuration Release --no-restore -p:Version="$VERSION"
+
+      - name: Regenerate snapshot tests for this checkout
+        run: dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll generate-tests --interactive false --banner false
+
       - name: Build
         run: dotnet build FsLiveDocs.slnx --configuration Release --no-restore -p:Version="$VERSION"
 
