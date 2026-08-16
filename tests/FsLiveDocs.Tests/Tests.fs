@@ -180,6 +180,7 @@ module ReleaseCapsuleTests =
         let outputDir = Path.Combine(root, "site")
         let options = { SemanticCode.defaults with Artifact = Some loadedSemantic; Prelude = loadedSemantic.Prelude }
         let pages = ContentProvider.scanDocsWithOptions docsDir docsDir package "" options
+        Assert.Equal("Home", pages.Head.Metadata.Title)
         SiteBuilder.build {
             Pages = pages
             Package = package
@@ -825,6 +826,26 @@ module ViewTests =
 
         Assert.Contains("background: #0f172a !important", html)
         Assert.Contains("background-image: linear-gradient(#0f172a, #0f172a) !important", html)
+
+    [<Fact>]
+    let ``sidebar orders a folder by its earliest prefixed page`` () =
+        let metadata title = { Title = title; Type = None; Project = None; TargetFramework = None; Platform = None }
+        let page source output title = { Metadata = metadata title; ContentHtml = ""; FilePath = source; OutputPath = output; SectionOrder = 0 }
+        let pages =
+            [ page "01-start.md" "start.html" "Get started"
+              page "02-guides/01-examples.md" "guides/examples.html" "Examples"
+              page "03-advanced.md" "advanced.html" "Advanced" ]
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+        let context : SiteBuilder.SiteRenderContext =
+            { AllPages = pages; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "light"; RootPath = "" }
+
+        let html = SiteBuilder.renderPage pages.Head context
+
+        let startIndex = html.LastIndexOf("href=\"start.html\"")
+        let guidesIndex = html.LastIndexOf("href=\"guides/examples.html\"")
+        let advancedIndex = html.LastIndexOf("href=\"advanced.html\"")
+        Assert.True(startIndex >= 0 && startIndex < guidesIndex, $"start={startIndex}, guides={guidesIndex}, advanced={advancedIndex}")
+        Assert.True(guidesIndex < advancedIndex, $"start={startIndex}, guides={guidesIndex}, advanced={advancedIndex}")
 
     [<Fact>]
     let ``sourceLinkHref builds github source links`` () =

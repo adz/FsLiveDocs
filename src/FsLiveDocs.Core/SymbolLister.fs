@@ -459,18 +459,21 @@ module SymbolLister =
     let private entityExamples (e: EntityModel) =
         if isNull (box e.Examples) then [] else e.Examples
 
-    let private getAssemblyName (projectPath: string) =
+    let private projectProperty (projectPath: string) (name: string) =
         try
-            let project = XDocument.Load(projectPath)
-            let assemblyName =
-                project.Descendants(XName.Get "AssemblyName")
-                |> Seq.tryPick (fun e ->
-                    let value = e.Value.Trim()
-                    if String.IsNullOrWhiteSpace value then None else Some value)
+            XDocument.Load(projectPath).Descendants(XName.Get name)
+            |> Seq.tryPick (fun element ->
+                let value = element.Value.Trim()
+                if String.IsNullOrWhiteSpace value then None else Some value)
+        with _ -> None
 
-            assemblyName |> Option.defaultValue (Path.GetFileNameWithoutExtension(projectPath))
-        with _ ->
-            Path.GetFileNameWithoutExtension(projectPath)
+    let private getAssemblyName (projectPath: string) =
+        projectProperty projectPath "AssemblyName"
+        |> Option.defaultValue (Path.GetFileNameWithoutExtension(projectPath))
+
+    let private getPackageName (projectPath: string) =
+        projectProperty projectPath "PackageId"
+        |> Option.defaultWith (fun () -> getAssemblyName projectPath)
 
     let private getPackageReferenceDirectories (projectPath: string) =
         let projectDir = Path.GetDirectoryName(projectPath)
@@ -617,6 +620,7 @@ module SymbolLister =
         // ApiDocs needs the DLL and XML to be built first.
         let projName = Path.GetFileNameWithoutExtension(projectPath)
         let assemblyName = getAssemblyName projectPath
+        let packageName = getPackageName projectPath
         let projDir = Path.GetDirectoryName(projectPath)
         
         let searchPaths =
@@ -694,7 +698,7 @@ module SymbolLister =
                     // nested under them, so listing them here would make every project appear to "own" shared
                     // ancestor namespaces. Only concrete entities (modules, types, ...) reflect real per-project
                     // ownership; ancestor namespace nodes are still retained in rendered trees via prefix matching.
-                    Packages = [ { Name = assemblyName; EntityIds = entities |> List.filter (fun entity -> entity.Kind <> EntityKind.Namespace) |> List.map (fun entity -> entity.Id) |> List.distinct } ]
+                    Packages = [ { Name = packageName; EntityIds = entities |> List.filter (fun entity -> entity.Kind <> EntityKind.Namespace) |> List.map (fun entity -> entity.Id) |> List.distinct } ]
                 }, diagnostics
     }
 

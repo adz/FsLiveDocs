@@ -44,6 +44,9 @@ jobs:
       - name: Build the generator
         run: dotnet build src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj --configuration Release --no-restore -p:Version="$VERSION"
 
+      - name: Build documentation sample
+        run: dotnet build samples/DeepReference/Acme.Docs/Acme.Docs.fsproj --configuration Release -p:Version="$VERSION"
+
       - name: Regenerate snapshot tests for this checkout
         run: dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll generate-tests --interactive false --banner false
 

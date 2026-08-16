@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Restore
+        run: dotnet restore FsLiveDocs.slnx
+
+      - name: Build documentation generator
+        run: dotnet build src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj --configuration Release --no-restore
+
+      - name: Build documentation sample
+        run: dotnet build samples/DeepReference/Acme.Docs/Acme.Docs.fsproj --configuration Release
+
+      - name: Regenerate documentation tests
+        run: dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll generate-tests --interactive false --banner false
+
+      - name: Build
+        run: dotnet build FsLiveDocs.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test FsLiveDocs.slnx --configuration Release --no-build
+
+      - name: Verify documentation
+        run: dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll test --interactive false --banner false
+
+      - name: Build documentation site
+        run: dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll build --interactive false --banner false

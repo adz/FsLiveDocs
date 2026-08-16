@@ -7,6 +7,7 @@ open System.Security.Cryptography
 open System.Text
 open System.Net.Http
 open Newtonsoft.Json
+open Newtonsoft.Json.Serialization
 
 /// Creates, validates, inspects, and extracts deterministic release capsules.
 module ReleaseCapsule =
@@ -295,6 +296,14 @@ module ReleaseCapsule =
             Counts = captureCounts api semantic content
         }
 
+    let private frontMatterSettings =
+        let settings = JsonSerializerSettings(
+            ContractResolver = CamelCasePropertyNamesContractResolver(),
+            NullValueHandling = NullValueHandling.Ignore)
+        for converter in Serialization.jsonSettings.Converters do
+            settings.Converters.Add(converter)
+        settings
+
     /// Materializes renderer-neutral content under a validated destination.
     let materializeContent path destination =
         let _, api, semantic, content, entries = load path
@@ -306,7 +315,7 @@ module ReleaseCapsule =
             let output = Path.GetFullPath(Path.Combine(root, relative))
             if not (output.StartsWith(root + string Path.DirectorySeparatorChar, StringComparison.Ordinal)) then invalidOp $"Unsafe release page path: {relative}"
             Directory.CreateDirectory(Path.GetDirectoryName output) |> ignore
-            let frontMatter = JsonConvert.SerializeObject(page.Metadata, Formatting.Indented, Serialization.jsonSettings)
+            let frontMatter = JsonConvert.SerializeObject(page.Metadata, Formatting.Indented, frontMatterSettings)
             File.WriteAllText(output, "---\n" + frontMatter + "\n---\n" + page.Markdown)
         for asset in content.Assets do
             let relative = normalizedEntryPath asset.Path

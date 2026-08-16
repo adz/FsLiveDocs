@@ -139,11 +139,15 @@ module View =
             items
             |> List.choose (fun page ->
                 let directory = docsPageDirectory page
-                let prefix = folderPath + "/"
-                if directory.StartsWith(prefix, StringComparison.Ordinal) then
-                    let relative = directory.Substring(prefix.Length)
-                    Some(folderPath + "/" + relative.Split('/').[0])
-                else None)
+                if String.IsNullOrEmpty folderPath then
+                    if String.IsNullOrEmpty directory then None
+                    else Some(directory.Split('/').[0])
+                else
+                    let prefix = folderPath + "/"
+                    if directory.StartsWith(prefix, StringComparison.Ordinal) then
+                        let relative = directory.Substring(prefix.Length)
+                        Some(folderPath + "/" + relative.Split('/').[0])
+                    else None)
             |> List.distinct
 
         let navigationItems =
@@ -276,12 +280,7 @@ module View =
             |> List.groupBy (fun entity -> entity.Id.Split('.').[0])
             |> List.sortBy fst
 
-        let docsGroups =
-            pages
-            |> List.filter (fun p -> p.OutputPath <> "index.html")
-            |> List.sortBy (fun p -> p.SectionOrder, docsSectionKey p, p.OutputPath)
-            |> List.groupBy docsSectionKey
-            |> List.sortBy (fun (groupKey, items) -> items |> List.map (fun page -> page.SectionOrder) |> List.min, groupKey)
+        let docsPages = pages |> List.filter (fun page -> page.OutputPath <> "index.html")
 
         div [ _class "flex flex-col gap-10 pb-32"; _id "sidebar-root" ] [
             div [ _class "sticky top-0 z-10 bg-base-100/95 backdrop-blur border-b border-base-300 -mx-10 px-10 pb-6 pt-2" ] [
@@ -304,26 +303,7 @@ module View =
             // Docs Sections
             div [ attr "data-sidebar-section" "true" ] [
                 h3WithAnchor "docs" "Docs" "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
-                ul [ _class "menu menu-sm p-0 gap-2" ] (
-                    docsGroups
-                    |> List.map (fun (groupKey, items) ->
-                        if groupKey = "overview" then
-                            li [ attr "data-sidebar-item" "true" ] [
-                                ul [ _class "menu menu-sm p-0 gap-1" ] (items |> List.map (sidebarPageLink rootPath))
-                            ]
-                        else
-                            li [ attr "data-sidebar-item" "true" ] [
-                                details [ _class "group" ] [
-                                    // The menu's own list styles already render a disclosure arrow for
-                                    // `li > details > summary`; adding our own icon here duplicated it.
-                                    summary [ _class "flex items-center justify-between py-2 px-4 hover:bg-base-300 rounded-lg cursor-pointer list-none font-black text-[10px] uppercase tracking-[0.2em] opacity-70" ] [
-                                        span [] [ str (docsSectionLabel groupKey items) ]
-                                    ]
-                                    ul [ _class "menu menu-sm p-0 mt-2 ml-2 border-l border-base-300" ] (sidebarDocsItems rootPath groupKey items)
-                                ]
-                            ]
-                    )
-                )
+                ul [ _class "menu menu-sm p-0 gap-1" ] (sidebarDocsItems rootPath "" docsPages)
             ]
             // API Reference Section
             div [ attr "data-sidebar-section" "true" ] [
