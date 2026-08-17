@@ -87,8 +87,16 @@ module SourceParameters =
                     | SynModuleDecl.Let(bindings = bindings) -> bindings |> List.iter recordBinding
                     | SynModuleDecl.NestedModule(decls = nested) -> walkDeclarations nested
                     | SynModuleDecl.Types(typeDefns = typeDefns) ->
-                        for SynTypeDefn(members = members) in typeDefns do
-                            for memberDefn in members do
+                        for SynTypeDefn(typeRepr = typeRepr; members = extraMembers) in typeDefns do
+                            // A class/interface body's own members live in the object-model
+                            // representation; `extraMembers` holds only members added after the
+                            // fact, such as a `type Foo with ...` augmentation.
+                            let bodyMembers =
+                                match typeRepr with
+                                | SynTypeDefnRepr.ObjectModel(members = members) -> members
+                                | _ -> []
+
+                            for memberDefn in bodyMembers @ extraMembers do
                                 match memberDefn with
                                 | SynMemberDefn.Member(memberDefn = binding) -> recordBinding binding
                                 | SynMemberDefn.LetBindings(bindings = bindings) -> bindings |> List.iter recordBinding
