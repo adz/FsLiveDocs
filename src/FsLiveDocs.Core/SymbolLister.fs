@@ -260,8 +260,15 @@ module SymbolLister =
             match m.Symbol.DeclarationLocation with
             | Some loc ->
                 let texts = SourceParameters.parameterTexts loc.FileName loc.StartLine
-                // Patterns map to parameters one-for-one only when no group is tupled.
-                if texts.Length = m.Parameters.Length then texts else []
+                if texts.Length = m.Parameters.Length then
+                    texts
+                elif texts.Length = 1 && m.Parameters.Length > 1 then
+                    // A single tuple-typed parameter (`f (result: bool * 'value)`) is one source
+                    // pattern naming the whole tuple, but the .NET-visible signature flattens it
+                    // into several parameter slots. The author's one name covers all of them.
+                    List.replicate m.Parameters.Length texts.Head
+                else
+                    []
             | None -> []
 
         m.Parameters

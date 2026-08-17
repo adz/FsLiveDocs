@@ -41,13 +41,30 @@ module SourceParameters =
             let collapsed = Text.RegularExpressions.Regex.Replace(segment.Trim(), @"\s+", " ")
             if String.IsNullOrWhiteSpace collapsed then None else Some collapsed
 
+    /// <summary>
+    /// Conditional-compilation symbols assumed present so a member declared inside a target-framework
+    /// <c>#if</c> block (<c>#if NET8_0_OR_GREATER</c>) is not silently dropped from this standalone
+    /// reparse. This has no access to the declaring project's actual <c>DefineConstants</c>, so it
+    /// defines every common TFM/tooling symbol at once rather than guessing one; an extra branch
+    /// included in the parse tree is harmless; a target line missing from it is not.
+    /// </summary>
+    let private assumedDefines =
+        [ "NET"
+          "NET8_0"; "NET8_0_OR_GREATER"
+          "NET9_0"; "NET9_0_OR_GREATER"
+          "NET10_0"; "NET10_0_OR_GREATER"
+          "NETSTANDARD"; "NETSTANDARD2_0"; "NETSTANDARD2_0_OR_GREATER"
+          "NETSTANDARD2_1"; "NETSTANDARD2_1_OR_GREATER"
+          "FABLE_COMPILER" ]
+        |> List.map (fun symbol -> $"--define:{symbol}")
+
     /// Maps the line declaring a binding to the source text of each of its curried parameters.
     let private parseFile (path: string) =
         try
             let source = File.ReadAllText(path)
             let lines = source.Replace("\r\n", "\n").Split('\n')
             let options, _ =
-                checker.Value.GetParsingOptionsFromCommandLineArgs([ path ])
+                checker.Value.GetParsingOptionsFromCommandLineArgs([ path ], assumedDefines)
             let parsed =
                 checker.Value.ParseFile(path, SourceText.ofString source, options)
                 |> Async.RunSynchronously
@@ -74,9 +91,16 @@ module SourceParameters =
                             | SynPat.Typed(pat = inner) -> unwrap inner
                             | other -> other
 
-                        let texts =
-                            patterns
-                            |> List.map (fun p -> textOf lines (unwrap p).Range |> Option.defaultValue "")
+                        // A .NET-style member's multiple arguments parse as one tuple pattern
+                        // (`Create(_, inner)`), not as separate curried patterns, so each tuple
+                        // element is its own parameter and needs its own recovered text.
+                        let textsFor pattern =
+                            match unwrap pattern with
+                            | SynPat.Tuple(elementPats = elements) ->
+                                elements |> List.map (fun element -> textOf lines (unwrap element).Range |> Option.defaultValue "")
+                            | other -> [ textOf lines other.Range |> Option.defaultValue "" ]
+
+                        let texts = patterns |> List.collect textsFor
                         collected.Add(line, texts)
                     | None -> ()
                 | _ -> ()
