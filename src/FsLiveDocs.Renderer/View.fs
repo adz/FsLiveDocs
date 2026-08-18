@@ -604,6 +604,51 @@ module View =
                     .livedocs-code .tok-union-case,
                     .livedocs-code .tok-active-pattern { color: var(--livedocs-code-union-case); }
                     .livedocs-code .tok-operator { color: var(--livedocs-code-operator); }
+                    .livedocs-checking-context {
+                        display: inline-block;
+                        margin-bottom: 1rem;
+                        padding: 0.25rem 0.75rem;
+                        border-radius: 999px;
+                        background: hsl(var(--b2));
+                        color: hsl(var(--bc) / 0.6);
+                        font-size: 0.75rem;
+                        font-weight: 700;
+                        letter-spacing: 0.06em;
+                        text-transform: uppercase;
+                    }
+                    .livedocs-shared-setup {
+                        margin-bottom: 1.5rem;
+                        overflow: hidden;
+                        border: 1px solid hsl(var(--b3));
+                        border-radius: 0.75rem;
+                        background: hsl(var(--b2) / 0.4);
+                    }
+                    .livedocs-shared-setup > summary {
+                        display: flex;
+                        align-items: center;
+                        gap: 0.5rem;
+                        padding: 0.5rem 1rem;
+                        color: hsl(var(--bc) / 0.6);
+                        cursor: pointer;
+                        list-style: none;
+                        font-size: 0.75rem;
+                        font-weight: 700;
+                        letter-spacing: 0.06em;
+                        text-transform: uppercase;
+                        transition: color 0.15s ease;
+                    }
+                    .livedocs-shared-setup > summary:hover { color: hsl(var(--bc)); }
+                    .livedocs-shared-setup > summary::-webkit-details-marker { display: none; }
+                    .livedocs-shared-setup > summary::before {
+                        content: '\25B8';
+                        display: inline-block;
+                        transition: transform 0.15s ease;
+                    }
+                    .livedocs-shared-setup[open] > summary::before { transform: rotate(90deg); }
+                    .livedocs-shared-setup > summary + * {
+                        margin: 0 !important;
+                        border-top: 1px solid hsl(var(--b3));
+                    }
                     .livedocs-tooltips { display: contents; }
                     .fsdocs-tip {
                         position: fixed;
