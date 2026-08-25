@@ -224,6 +224,11 @@ module View =
             if entity.Kind = EntityKind.Namespace && entity.Id.Equals(packageName, StringComparison.OrdinalIgnoreCase) then Some entity
             else findPackageRoot packageName entity.Entities)
 
+    let rec private omitAncestorNamespaces (entities: EntityModel list) =
+        match entities with
+        | [ entity ] when entity.Kind = EntityKind.Namespace -> omitAncestorNamespaces entity.Entities
+        | _ -> entities
+
     let private sidebarApiGroup (rootPath: string) (label: string) (groupPageId: string option) (packageAnchor: string option) (entities: EntityModel list) =
         // The label spans the full row height (not just its text) so the whole row - not only the
         // glyphs - is a navigation target, matching leaf sidebar items. Only the chevron's own small
@@ -264,7 +269,7 @@ module View =
                     let groupPageId = "packages/" + Uri.EscapeDataString project.Name
                     match findPackageRoot project.Name contributed with
                     | Some root -> project.Name, Some groupPageId, root.Entities, None, contributed
-                    | None -> project.Name, Some groupPageId, contributed, None, contributed)
+                    | None -> project.Name, Some groupPageId, omitAncestorNamespaces contributed, None, contributed)
                 |> List.filter (fun (_, _, _, _, contributed) -> not contributed.IsEmpty)
                 |> List.map (fun (name, pageId, entities, anchor, _) -> name, pageId, entities, anchor)
 

@@ -1424,6 +1424,10 @@ module SiteBuilderTests =
         }
 
         let schemaPage = File.ReadAllText(Path.Combine(outputDir, "api", "Reified.Schema.html"))
+        let groupStart = schemaPage.IndexOf(">Reified.Schema<", StringComparison.Ordinal)
+        let groupEnd = schemaPage.IndexOf("</details>", groupStart, StringComparison.Ordinal)
+        let groupBody = schemaPage.Substring(groupStart, groupEnd - groupStart)
+        Assert.DoesNotContain(">Reified<", groupBody)
         Assert.Contains("Reified.Schema`1.html", schemaPage)
         Assert.Contains("Reified.Inspect.html", schemaPage)
 
