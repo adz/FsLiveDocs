@@ -1366,6 +1366,68 @@ module SiteBuilderTests =
         Assert.Contains(">Layer<", groupBody)
 
     [<Fact>]
+    let ``package module with the package id does not hide sibling API entries`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let schemaModule = {
+            Id = "Reified.Schema"
+            Name = "Schema"
+            Kind = EntityKind.Module
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let schemaType = {
+            Id = "Reified.Schema`1"
+            Name = "Schema<'model>"
+            Kind = EntityKind.Type
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let inspectModule = {
+            Id = "Reified.Inspect"
+            Name = "Inspect"
+            Kind = EntityKind.Module
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = []
+        }
+        let reified = {
+            Id = "Reified"
+            Name = "Reified"
+            Kind = EntityKind.Namespace
+            Summary = []
+            Members = []
+            Examples = []
+            Entities = [ schemaModule; schemaType; inspectModule ]
+        }
+        let package : PackageModel = {
+            Version = "1.0"
+            Entities = [ reified ]
+            Scenarios = []
+            Packages = [
+                { Name = "Reified.Schema"; EntityIds = [ schemaModule.Id; schemaType.Id; inspectModule.Id ] }
+            ]
+        }
+
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            OutputDir = outputDir
+        }
+
+        let schemaPage = File.ReadAllText(Path.Combine(outputDir, "api", "Reified.Schema.html"))
+        Assert.Contains("Reified.Schema`1.html", schemaPage)
+        Assert.Contains("Reified.Inspect.html", schemaPage)
+
+    [<Fact>]
     let ``entity page Contents omits another project's own root namespace`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         let app = {

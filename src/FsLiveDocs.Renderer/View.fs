@@ -221,7 +221,7 @@ module View =
     let rec private findPackageRoot (packageName: string) (entities: EntityModel list) =
         entities
         |> List.tryPick (fun entity ->
-            if entity.Id.Equals(packageName, StringComparison.OrdinalIgnoreCase) then Some entity
+            if entity.Kind = EntityKind.Namespace && entity.Id.Equals(packageName, StringComparison.OrdinalIgnoreCase) then Some entity
             else findPackageRoot packageName entity.Entities)
 
     let private sidebarApiGroup (rootPath: string) (label: string) (groupPageId: string option) (packageAnchor: string option) (entities: EntityModel list) =
