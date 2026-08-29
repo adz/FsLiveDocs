@@ -5,6 +5,8 @@ open System.Text.RegularExpressions
 open Markdig
 open Markdig.Syntax
 open Markdig.Syntax.Inlines
+open Markdig.Renderers.Html
+open Markdig.Extensions.CustomContainers
 open YamlDotNet.Serialization
 open YamlDotNet.Serialization.NamingConventions
 
@@ -384,6 +386,13 @@ module ContentProvider =
     let private renderMarkdownWithApiLinks (body: string) (package: PackageModel) (rootPath: string) =
         let document = Markdown.Parse(body, pipeline)
         let links = apiLinks package rootPath
+
+        // A `::: rendered` custom container frames sample output so a reader can tell a
+        // demonstration of what Markdown renders to from the page's own content. Its headings
+        // are deliberately excluded from the on-this-page navigation (see the renderer).
+        for container in document.Descendants<CustomContainer>() |> Seq.toList do
+            if container.Info = "rendered" then
+                container.GetAttributes().AddClass("livedocs-rendered")
 
         let inlineRoots =
             document.Descendants<LeafBlock>()

@@ -726,6 +726,33 @@ module ContentProviderTests =
         Assert.Contains("<code>missing</code>", page.ContentHtml)
 
     [<Fact>]
+    let ``rendered container frames sample output with a livedocs class`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let file = Path.Combine(root, "guide.md")
+        File.WriteAllText(file, "Intro.\n\n::: rendered\n### Demo heading\n\nSample body.\n:::\n")
+
+        let page = ContentProvider.loadPage file root emptyPackage "/" "guide.html" (set [ "guide.html" ])
+
+        Assert.Contains("livedocs-rendered", page.ContentHtml)
+        Assert.Contains("Demo heading", page.ContentHtml)
+
+    [<Fact>]
+    let ``rendered container keeps its heading out of the page navigation`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let file = Path.Combine(root, "guide.md")
+        File.WriteAllText(file, "## Real heading\n\n::: rendered\n## Demo heading\n:::\n")
+
+        let page = ContentProvider.loadPage file root emptyPackage "/" "guide.html" (set [ "guide.html" ])
+
+        // Both headings render, but the renderer's on-this-page script filters those inside
+        // `.livedocs-rendered`; the demo heading sits within that wrapper.
+        let renderedIndex = page.ContentHtml.IndexOf("livedocs-rendered", StringComparison.Ordinal)
+        let demoIndex = page.ContentHtml.IndexOf("Demo heading", StringComparison.Ordinal)
+        Assert.True(renderedIndex >= 0 && demoIndex > renderedIndex)
+
+    [<Fact>]
     let ``explicit xref links keep authored labels and fail when unresolved`` () =
         let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore

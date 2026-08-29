@@ -51,6 +51,7 @@ Use one client per endpoint and reuse it across requests.
 
 renders as long-form prose followed by a compiler-checked code block:
 
+::: rendered
 `Client` sends typed requests to the configured endpoint.
 
 ### Create an endpoint
@@ -60,6 +61,9 @@ let endpoint = System.Uri "https://api.example.test"
 ```
 
 Use one client per endpoint and reuse it across requests.
+:::
+
+The `::: rendered` fence above frames sample output so readers can tell it from this page's own content; its headings stay out of the page navigation. Use it only to demonstrate what Markdown renders to.
 
 The generated signatures and member reference remain on the same API page.
 

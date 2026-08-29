@@ -460,12 +460,12 @@ module View =
                     summary::-webkit-details-marker { display: none !important; }
                     summary::marker { display: none !important; }
                     summary { list-style: none !important; }
-                    [id^="package-"]:target { color: hsl(var(--p)) !important; }
+                    [id^="package-"]:target { color: oklch(var(--p)) !important; }
                     #search-ui {
-                        --pagefind-ui-primary: hsl(var(--p));
-                        --pagefind-ui-text: hsl(var(--bc));
-                        --pagefind-ui-background: hsl(var(--b1));
-                        --pagefind-ui-border: hsl(var(--b3));
+                        --pagefind-ui-primary: oklch(var(--p));
+                        --pagefind-ui-text: oklch(var(--bc));
+                        --pagefind-ui-background: oklch(var(--b1));
+                        --pagefind-ui-border: oklch(var(--b3));
                         --pagefind-ui-font: inherit;
                         position: relative;
                         width: min(22rem, 28vw);
@@ -477,7 +477,7 @@ module View =
                         border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1)) !important;
                         border-radius: 1rem !important;
                         padding: 0.6rem 2.75rem 0.6rem 2.75rem !important;
-                        color: hsl(var(--bc)) !important;
+                        color: oklch(var(--bc)) !important;
                         font-size: 0.875rem;
                     }
                     #search-ui .pagefind-ui__search-input:focus {
@@ -573,8 +573,8 @@ module View =
                         overflow-x: auto;
                         border: 0 !important;
                         border-radius: 1rem;
-                        background: hsl(var(--n));
-                        color: hsl(var(--nc));
+                        background: oklch(var(--n));
+                        color: oklch(var(--nc));
                     }
                     table.pre tbody, table.pre tr { display: table; width: 100%; }
                     table.pre td { border: 0 !important; padding: 1.5rem 0 !important; }
@@ -614,26 +614,52 @@ module View =
                         margin-bottom: 1rem;
                         padding: 0.25rem 0.75rem;
                         border-radius: 999px;
-                        background: hsl(var(--b2));
-                        color: hsl(var(--bc) / 0.6);
+                        background: oklch(var(--b2));
+                        color: oklch(var(--bc) / 0.6);
                         font-size: 0.75rem;
                         font-weight: 700;
                         letter-spacing: 0.06em;
                         text-transform: uppercase;
                     }
+                    .livedocs-rendered {
+                        position: relative;
+                        margin: 2.5rem 0;
+                        padding: 2.75rem 1.5rem 1.5rem;
+                        border: 1px solid oklch(var(--bc) / 0.18);
+                        border-left: 3px solid oklch(var(--p));
+                        border-radius: 0.5rem;
+                        background: oklch(var(--b3));
+                    }
+                    .livedocs-rendered::before {
+                        content: 'Rendered output';
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        padding: 0.2rem 0.65rem;
+                        border-radius: 0 0 0.4rem 0;
+                        background: oklch(var(--p));
+                        color: oklch(var(--pc));
+                        font-size: 0.65rem;
+                        font-weight: 700;
+                        letter-spacing: 0.1em;
+                        text-transform: uppercase;
+                    }
+                    .livedocs-rendered > :first-child { margin-top: 0; }
+                    .livedocs-rendered > :last-child { margin-bottom: 0; }
+                    .livedocs-rendered .livedocs-code { margin-inline: 0; }
                     .livedocs-shared-setup {
                         margin-bottom: 1.5rem;
                         overflow: hidden;
-                        border: 1px solid hsl(var(--b3));
+                        border: 1px solid oklch(var(--b3));
                         border-radius: 0.75rem;
-                        background: hsl(var(--b2) / 0.4);
+                        background: oklch(var(--b2) / 0.4);
                     }
                     .livedocs-shared-setup > summary {
                         display: flex;
                         align-items: center;
                         gap: 0.5rem;
                         padding: 0.5rem 1rem;
-                        color: hsl(var(--bc) / 0.6);
+                        color: oklch(var(--bc) / 0.6);
                         cursor: pointer;
                         list-style: none;
                         font-size: 0.75rem;
@@ -642,7 +668,7 @@ module View =
                         text-transform: uppercase;
                         transition: color 0.15s ease;
                     }
-                    .livedocs-shared-setup > summary:hover { color: hsl(var(--bc)); }
+                    .livedocs-shared-setup > summary:hover { color: oklch(var(--bc)); }
                     .livedocs-shared-setup > summary::-webkit-details-marker { display: none; }
                     .livedocs-shared-setup > summary::before {
                         content: '\25B8';
@@ -652,7 +678,7 @@ module View =
                     .livedocs-shared-setup[open] > summary::before { transform: rotate(90deg); }
                     .livedocs-shared-setup > summary + * {
                         margin: 0 !important;
-                        border-top: 1px solid hsl(var(--b3));
+                        border-top: 1px solid oklch(var(--b3));
                     }
                     .livedocs-tooltips { display: contents; }
                     .fsdocs-tip {
@@ -925,7 +951,7 @@ module View =
                 // Dynamic On-This-Page Generator
                 script [] [ rawText """
                     window.addEventListener('DOMContentLoaded', () => {
-                        const headings = Array.from(document.querySelectorAll('main h1, main h2, main h3')).filter(h => h.id !== 'search-ui');
+                        const headings = Array.from(document.querySelectorAll('main h1, main h2, main h3')).filter(h => h.id !== 'search-ui' && !h.closest('.livedocs-rendered'));
                         const toc = document.getElementById('on-this-page');
                         if (toc && headings.length > 0) {
                             headings.forEach(h => {
