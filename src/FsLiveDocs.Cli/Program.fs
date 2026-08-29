@@ -204,7 +204,8 @@ module Program =
             | Some path, None ->
                 let fullPath = Path.GetFullPath path
                 if not (File.Exists fullPath) then invalidOp $"Release capsule is missing: {fullPath}"
-                Some path, None, checksum |> Option.defaultValue (History.sha256 fullPath)
+                let indexRoot = Path.GetDirectoryName(Path.GetFullPath indexPath)
+                Some(Path.GetRelativePath(indexRoot, fullPath)), None, checksum |> Option.defaultValue (History.sha256 fullPath)
             | None, Some url ->
                 let expected = checksum |> Option.defaultWith (fun () -> invalidOp "A remote capsule requires --sha256.")
                 None, Some url, expected
@@ -213,14 +214,9 @@ module Program =
             {
                 index with
                     CurrentVersion = version
-                    Entries =
-                        { Version = version; CapsulePath = path; CapsuleUrl = url; CapsuleSha256 = sha256 }
-                        :: index.Entries
-                        |> List.sortByDescending _.Version
+                    Entries = { Version = version; CapsulePath = path; CapsuleUrl = url; CapsuleSha256 = sha256 } :: index.Entries
             }
-        let directory = Path.GetDirectoryName(Path.GetFullPath indexPath)
-        Directory.CreateDirectory directory |> ignore
-        File.WriteAllText(indexPath, Newtonsoft.Json.JsonConvert.SerializeObject(updated, Newtonsoft.Json.Formatting.Indented, Serialization.jsonSettings))
+        ReleaseCapsule.saveHistoryIndex indexPath updated
         // Load what was written so malformed checksums and source combinations cannot be persisted silently.
         ReleaseCapsule.loadHistoryIndex indexPath |> ignore
         AnsiConsole.MarkupLine($"[green]✔ History index updated:[/] {Markup.Escape(Path.GetFullPath indexPath)}")
@@ -456,7 +452,8 @@ module Program =
         printApiDiagnostics false deferredApiDiagnostics |> ignore
         AnsiConsole.MarkupLine("[green]✔ Build complete:[/] output/")
 
-    let buildHistoryAction manifestPath theme =
+    let buildHistoryAction manifestPath theme retryAttempts =
+        if retryAttempts < 1 then invalidArg "retry" "Retry attempts must be at least one."
         let raw = File.ReadAllText manifestPath
         let isCapsuleIndex =
             raw.Contains("\"CapsulePath\"", StringComparison.OrdinalIgnoreCase)
@@ -470,7 +467,7 @@ module Program =
                 let loaded =
                     index.Entries
                     |> List.map (fun entry ->
-                        let capsulePath = ReleaseCapsule.acquire indexRoot (Path.GetFullPath(".livedocs/releases")) entry
+                        let capsulePath = ReleaseCapsule.acquireWithRetries retryAttempts indexRoot (Path.GetFullPath(".livedocs/releases")) entry
                         let docsDir = Path.Combine(temporaryRoot, entry.Version, "docs")
                         let packageRaw, semanticArtifact, site = ReleaseCapsule.materializeContent capsulePath docsDir
                         if packageRaw.Version <> entry.Version then
@@ -599,6 +596,27 @@ module Program =
                         (results.TryGetResult Url)
                         (results.TryGetResult Sha256)
 
+                elif results.Contains History_Sync then
+                    let repository = results.GetResult History_Sync
+                    let indexPath = results.GetResult(Output, defaultValue = ".livedocs/history.json")
+                    let updated =
+                        ReleaseHistoryCommands.sync repository indexPath
+                            (results.TryGetResult Arguments.Version)
+                            (results.TryGetResult Url)
+                            (results.TryGetResult Sha256)
+                    AnsiConsole.MarkupLine($"[green]✔ History synchronized:[/] {Markup.Escape(Path.GetFullPath indexPath)}")
+                    AnsiConsole.MarkupLine($"  Current: [blue]{Markup.Escape updated.CurrentVersion}[/]")
+                    AnsiConsole.MarkupLine($"  Releases: {updated.Entries.Length}")
+                    0
+
+                elif results.Contains Verify_Output then
+                    let manifestPath = results.GetResult Verify_Output
+                    let outputPath = results.GetResult(Output, defaultValue = "output")
+                    let pageCount = ReleaseHistoryCommands.verify manifestPath outputPath
+                    let releaseCount = (ReleaseCapsule.loadHistoryIndex manifestPath).Entries.Length
+                    AnsiConsole.MarkupLine($"[green]✔ History output verified:[/] {releaseCount} versions, {pageCount} HTML pages")
+                    0
+
                 elif results.Contains Extract then
                     printBanner()
                     let projectPaths = results.GetResult Extract |> resolveProjects "extract"
@@ -708,7 +726,7 @@ module Program =
 
                 elif results.Contains Build_History then
                     printBanner()
-                    buildHistoryAction (results.GetResult Build_History) theme
+                    buildHistoryAction (results.GetResult Build_History) theme (results.GetResult(Retry, defaultValue = 3))
                     0
 
                 elif results.Contains Watch then

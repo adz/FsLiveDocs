@@ -29,6 +29,10 @@ type Arguments =
     | [<CliPrefix(CliPrefix.None)>] Inspect of capsulePath:string
     /// <summary>Adds an immutable capsule reference to a release history index.</summary>
     | [<CliPrefix(CliPrefix.None)>] History_Add of version:string
+    /// <summary>Synchronizes immutable release capsules from GitHub Releases.</summary>
+    | [<CliPrefix(CliPrefix.None)>] History_Sync of repository:string
+    /// <summary>Verifies generated history entry points, version ordering, and local links.</summary>
+    | [<CliPrefix(CliPrefix.None)>] Verify_Output of manifestPath:string
     /// <summary>Runs verified code examples found in docstrings.</summary>
     | [<CliPrefix(CliPrefix.None)>] Test of projectPaths:string list
     /// <summary>Audits coverage and compiler-checks every expanded F# documentation block.</summary>
@@ -49,8 +53,10 @@ type Arguments =
     | [<Inherit>] Capsule of string
     /// <summary>Sets an HTTPS capsule URL for history-add.</summary>
     | [<Inherit>] Url of string
-    /// <summary>Sets the expected capsule SHA-256 for history-add.</summary>
+    /// <summary>Sets the expected capsule SHA-256 for history operations.</summary>
     | [<Inherit>] Sha256 of string
+    /// <summary>Sets the number of transient download attempts for build-history.</summary>
+    | [<Inherit>] Retry of int
     /// <summary>Sets the network interface used by the preview server.</summary>
     | [<Inherit>] Host of string
     /// <summary>Sets the TCP port used by the preview server.</summary>
@@ -79,6 +85,8 @@ type Arguments =
             | Capture _ -> "Verify and capture a self-contained documentation release capsule."
             | Inspect _ -> "Verify and describe a documentation release capsule."
             | History_Add _ -> "Add an immutable capsule reference to a release history index."
+            | History_Sync _ -> "Synchronize immutable LiveDocs capsules from GitHub Releases."
+            | Verify_Output _ -> "Verify generated release history routes, switcher ordering, and local links."
             | Test _ -> "Verify documentation without generating a test project: audits every F# block, then runs each snapshot-selected example."
             | Audit _ -> "Audit coverage, modes, and compilation for every expanded F# documentation block."
             | Build _ -> "Render the final static site for the given projects."
@@ -89,7 +97,8 @@ type Arguments =
             | Output _ -> "Set the output path for extract, capture, or history-add."
             | Capsule _ -> "With history-add, read the release capsule from a local path."
             | Url _ -> "With history-add, download the release capsule from an HTTPS URL."
-            | Sha256 _ -> "With history-add --url, require this capsule SHA-256."
+            | Sha256 _ -> "Require this capsule SHA-256 for history-add or expected history-sync metadata."
+            | Retry _ -> "Set transient capsule download attempts for build-history (default: 3)."
             | Host _ -> "Set the watch preview's bind host (default: 0.0.0.0)."
             | Port _ -> "Set the watch preview's port (default: 5000)."
             | Ignore _ -> "With watch, ignore these comma-separated directory names. Repeatable."

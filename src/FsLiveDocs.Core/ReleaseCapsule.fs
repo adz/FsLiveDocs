@@ -325,6 +325,72 @@ module ReleaseCapsule =
             File.WriteAllBytes(output, required ("assets/" + relative) entries)
         api.Package, semantic, content.Site
 
+    let private parseVersion (value: string) =
+        let invalid () = invalidOp $"Release version '{value}' is not a semantic version."
+        if String.IsNullOrWhiteSpace value then invalid ()
+        if value.Contains '+' then invalid ()
+        let parts = value.Split('-', 2)
+        let core = parts[0].Split('.')
+        if core.Length <> 3 then invalid ()
+        let number (text: string) =
+            match Int64.TryParse text with
+            | true, parsed when parsed >= 0L && (text = "0" || not (text.StartsWith '0')) -> parsed
+            | _ -> invalid ()
+        let prerelease =
+            if parts.Length = 1 then None
+            else
+                let identifiers = parts[1].Split('.') |> Array.toList
+                if identifiers.IsEmpty || identifiers |> List.exists String.IsNullOrWhiteSpace then invalid ()
+                for identifier in identifiers do
+                    match Int64.TryParse identifier with
+                    | true, _ when identifier <> "0" && identifier.StartsWith '0' -> invalid ()
+                    | _ -> ()
+                Some identifiers
+        number core[0], number core[1], number core[2], prerelease
+
+    let private comparePrerelease left right =
+        let compareIdentifier (left: string) (right: string) =
+            match Int64.TryParse left, Int64.TryParse right with
+            | (true, leftNumber), (true, rightNumber) -> compare leftNumber rightNumber
+            | (true, _), (false, _) -> -1
+            | (false, _), (true, _) -> 1
+            | _ -> StringComparer.Ordinal.Compare(left, right)
+        let rec loop left right =
+            match left, right with
+            | [], [] -> 0
+            | [], _ -> -1
+            | _, [] -> 1
+            | leftHead :: leftTail, rightHead :: rightTail ->
+                let compared = compareIdentifier leftHead rightHead
+                if compared = 0 then loop leftTail rightTail else compared
+        match left, right with
+        | None, None -> 0
+        | None, Some _ -> 1
+        | Some _, None -> -1
+        | Some leftIds, Some rightIds -> loop leftIds rightIds
+
+    /// Compares semantic versions according to SemVer precedence.
+    let compareVersions left right =
+        let leftMajor, leftMinor, leftPatch, leftPrerelease = parseVersion left
+        let rightMajor, rightMinor, rightPatch, rightPrerelease = parseVersion right
+        let core = compare (leftMajor, leftMinor, leftPatch) (rightMajor, rightMinor, rightPatch)
+        if core = 0 then comparePrerelease leftPrerelease rightPrerelease else core
+
+    /// Sorts a history newest-first and makes its newest entry current.
+    let normalizeHistoryIndex (index: ReleaseHistoryIndex) =
+        let entries = index.Entries |> List.sortWith (fun left right -> compareVersions right.Version left.Version)
+        if entries.IsEmpty then invalidOp "Release history index must contain at least one entry."
+        if entries |> List.countBy _.Version |> List.exists (fun (_, count) -> count > 1) then
+            invalidOp "Release history index contains duplicate versions."
+        { index with CurrentVersion = entries.Head.Version; Entries = entries }
+
+    /// Writes a history index in normalized semantic-version order.
+    let saveHistoryIndex path index =
+        let normalized = normalizeHistoryIndex index
+        let directory = Path.GetDirectoryName(Path.GetFullPath path)
+        Directory.CreateDirectory directory |> ignore
+        File.WriteAllText(path, JsonConvert.SerializeObject(normalized, Formatting.Indented, Serialization.jsonSettings) + Environment.NewLine)
+
     /// Loads a capsule history index and validates its structural invariants.
     let loadHistoryIndex path =
         if not (File.Exists path) then invalidOp $"Release history index is missing: {path}"
@@ -333,10 +399,16 @@ module ReleaseCapsule =
             let actual = if isNull (box index) then 0 else index.SchemaVersion
             invalidOp $"Unsupported release history index schema {actual}; expected {HistoryIndexSchemaVersion}."
         if index.Entries.IsEmpty then invalidOp "Release history index must contain at least one entry."
+        index.Entries |> List.iter (fun entry -> parseVersion entry.Version |> ignore)
         if index.Entries |> List.countBy _.Version |> List.exists (fun (_, count) -> count > 1) then
             invalidOp "Release history index contains duplicate versions."
         if index.Entries |> List.exists (fun entry -> entry.Version = index.CurrentVersion) |> not then
             invalidOp $"Current history version {index.CurrentVersion} has no capsule entry."
+        let normalized = normalizeHistoryIndex index
+        if normalized.Entries |> List.map _.Version <> (index.Entries |> List.map _.Version) then
+            invalidOp "Release history entries must be ordered newest-first."
+        if index.CurrentVersion <> normalized.CurrentVersion then
+            invalidOp $"Current history version {index.CurrentVersion} is not the newest release {normalized.CurrentVersion}."
         for entry in index.Entries do
             match entry.CapsulePath, entry.CapsuleUrl with
             | Some path, None when not (String.IsNullOrWhiteSpace path) -> ()
@@ -348,7 +420,8 @@ module ReleaseCapsule =
         index
 
     /// Resolves a local or remote capsule into the checksum-addressed download cache.
-    let acquire indexRoot cacheRoot (entry: ReleaseHistoryEntry) =
+    let acquireWithRetries attempts indexRoot cacheRoot (entry: ReleaseHistoryEntry) =
+        if attempts < 1 then invalidArg "attempts" "Capsule download attempts must be at least one."
         let verify path =
             let actual = History.sha256 path
             if not (actual.Equals(entry.CapsuleSha256, StringComparison.OrdinalIgnoreCase)) then
@@ -366,18 +439,40 @@ module ReleaseCapsule =
             let cached = Path.Combine(cacheRoot, entry.CapsuleSha256.ToLowerInvariant() + ".livedocs.zip")
             if File.Exists cached then verify cached
             else
-                let temporary = cached + ".download-" + Guid.NewGuid().ToString("N")
-                try
-                    use client = new HttpClient()
-                    use response = client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult()
-                    response.EnsureSuccessStatusCode() |> ignore
-                    use sourceStream = response.Content.ReadAsStream()
-                    use destination = File.Create temporary
-                    sourceStream.CopyTo destination
-                    destination.Dispose()
-                    verify temporary |> ignore
-                    File.Move(temporary, cached)
-                    cached
-                finally
-                    if File.Exists temporary then File.Delete temporary
+                let transientHttp (error: HttpRequestException) =
+                    if not error.StatusCode.HasValue then true
+                    else
+                        let status = int error.StatusCode.Value
+                        status = 408 || status = 429 || status >= 500
+                let rec download attempt =
+                    let temporary = cached + ".download-" + Guid.NewGuid().ToString("N")
+                    try
+                        try
+                            use client = new HttpClient()
+                            use response = client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult()
+                            response.EnsureSuccessStatusCode() |> ignore
+                            use sourceStream = response.Content.ReadAsStream()
+                            use destination = File.Create temporary
+                            sourceStream.CopyTo destination
+                            destination.Dispose()
+                            // A checksum mismatch is deterministic and must not be retried.
+                            verify temporary |> ignore
+                            File.Move(temporary, cached)
+                            cached
+                        with
+                        | :? HttpRequestException as error when attempt < attempts && transientHttp error ->
+                            Threading.Thread.Sleep(TimeSpan.FromSeconds(float attempt * 2.0))
+                            download (attempt + 1)
+                        | :? IOException when attempt < attempts ->
+                            Threading.Thread.Sleep(TimeSpan.FromSeconds(float attempt * 2.0))
+                            download (attempt + 1)
+                        | :? Threading.Tasks.TaskCanceledException when attempt < attempts ->
+                            Threading.Thread.Sleep(TimeSpan.FromSeconds(float attempt * 2.0))
+                            download (attempt + 1)
+                    finally
+                        if File.Exists temporary then File.Delete temporary
+                download 1
         | _ -> invalidOp $"Release {entry.Version} must declare exactly one capsule source."
+
+    /// Resolves a capsule with the default transient download policy.
+    let acquire indexRoot cacheRoot entry = acquireWithRetries 3 indexRoot cacheRoot entry

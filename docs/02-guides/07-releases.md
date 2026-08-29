@@ -92,7 +92,18 @@ To enable deployment in GitHub:
 
 A project repository named `Example.Library` is published at `https://<owner>.github.io/Example.Library/`. FsLiveDocs emits relative links, so no repository-path option is required.
 
-The generated workflow publishes the current site. To publish release history, keep `.livedocs/history.json` in the repository and run `build-history` before uploading the Pages artifact.
+The generated workflow publishes the current site. When `.livedocs/history.json` exists, it synchronizes immutable capsules from GitHub Releases, renders the compatible history, and verifies its entry points, version switcher, and local links before uploading the Pages artifact.
+
+## Synchronize GitHub releases
+
+```bash
+dotnet livedocs history-sync example/your-library \
+  --output .livedocs/history.json
+```
+
+Synchronization discovers release assets named `your-library-<version>-livedocs.zip`, requires GitHub's SHA-256 digest, preserves immutable existing entries, and orders semantic versions newest-first. The oldest committed entry is the compatibility floor: synchronization extends that history without silently admitting older capsule formats.
+
+In GitHub Actions, pass `github.token` as `GH_TOKEN`. A release deployment can additionally supply `--version`, `--url`, and `--sha256`; all three must identify the newly released capsule, and that version must be current.
 
 ## Add a local release to history
 
@@ -116,10 +127,13 @@ Remote sources must use HTTPS. FsLiveDocs stores downloads by checksum under `.l
 ## Build all versions
 
 ```bash
-dotnet livedocs build-history .livedocs/history.json
+dotnet livedocs build-history .livedocs/history.json --retry 3
+dotnet livedocs verify-output .livedocs/history.json --output output
 ```
 
-FsLiveDocs verifies each outer capsule checksum and every internal checksum before rendering.
+FsLiveDocs retries transient downloads, verifies each outer capsule checksum and every internal checksum before rendering. Checksum mismatches are deterministic and are never retried.
+
+`verify-output` then requires every version entry point, checks every generated local `href` and `src`, and confirms that the version switcher contains all releases newest-first.
 
 The current version appears at the site root. Older versions appear below `history/<version>/`.
 

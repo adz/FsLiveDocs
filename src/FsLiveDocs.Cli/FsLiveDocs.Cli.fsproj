@@ -26,6 +26,7 @@
     <Compile Include="PackageExtraction.fs" />
     <Compile Include="DocAnalysis.fs" />
     <Compile Include="ReleaseCapture.fs" />
+    <Compile Include="ReleaseHistoryCommands.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

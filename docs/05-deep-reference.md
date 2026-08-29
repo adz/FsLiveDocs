@@ -193,9 +193,9 @@ A history index uses this shape:
 }
 ```
 
-Each entry declares exactly one local path or HTTPS URL. Versions are unique, and one entry must match `CurrentVersion`.
+Each entry declares exactly one local path or HTTPS URL. Versions are unique semantic versions, entries are newest-first according to SemVer precedence, and `CurrentVersion` is exactly the newest entry.
 
-`history-add` rejects an existing version because published entries are immutable.
+`history-add` rejects an existing version because published entries are immutable. `history-sync` rejects conflicting metadata for an existing version and requires GitHub's asset digest; it never replaces an immutable entry. When an index already exists, its oldest entry defines the compatibility floor for newly discovered releases.
 
 ## Remote acquisition
 
@@ -203,7 +203,7 @@ Remote capsules must use HTTPS and include an expected SHA-256.
 
 FsLiveDocs downloads to a temporary file, verifies it, and moves it into `.livedocs/releases/<sha256>.livedocs.zip`.
 
-An existing cache entry is verified before reuse. A checksum mismatch never enters the cache.
+An existing cache entry is verified before reuse. `build-history --retry <count>` retries transient HTTP and filesystem failures with bounded backoff. A checksum mismatch is deterministic, is not retried, and never enters the cache.
 
 ## History rendering
 
@@ -212,6 +212,8 @@ An existing cache entry is verified before reuse. A checksum mismatch never ente
 It never restores, loads, or compiles the historical project. The temporary content directory is removed after the build.
 
 The current release provides site configuration. Current output uses the site root; older versions use `history/<version>/`.
+
+`verify-output` validates the rendered seam: every version has an entry point, every generated local link and asset reference resolves, and the root version switcher contains every indexed version newest-first.
 
 ## Legacy manifest compatibility
 

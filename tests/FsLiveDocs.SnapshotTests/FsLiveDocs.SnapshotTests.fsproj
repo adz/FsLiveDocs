@@ -18,13 +18,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj" />
-    <ProjectReference Include="../../src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj" />
-    <ProjectReference Include="../../src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj" />
-    <ProjectReference Include="../../src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj" />
     <ProjectReference Include="../../samples/DeepReference/Acme.Docs/Acme.Docs.fsproj" />
-    <Reference Include="FsLiveDocs.Core"><HintPath>/home/adam/projects/FsLiveDocs/main/artifacts/bin/FsLiveDocs.Cli/debug/FsLiveDocs.Core.dll</HintPath></Reference>
-    <Reference Include="FsLiveDocs.Runner"><HintPath>/home/adam/projects/FsLiveDocs/main/artifacts/bin/FsLiveDocs.Cli/debug/FsLiveDocs.Runner.dll</HintPath></Reference>
+    <ProjectReference Include="../../src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj" />
+    <ProjectReference Include="../../src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj" />
+    <ProjectReference Include="../../src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj" />
+    <ProjectReference Include="../../src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj" />
+    <Reference Include="FsLiveDocs.Core"><HintPath>/home/adam/projects/FsLiveDocs/feature/release-history-validation/artifacts/bin/FsLiveDocs.Cli/release/FsLiveDocs.Core.dll</HintPath></Reference>
+    <Reference Include="FsLiveDocs.Runner"><HintPath>/home/adam/projects/FsLiveDocs/feature/release-history-validation/artifacts/bin/FsLiveDocs.Cli/release/FsLiveDocs.Runner.dll</HintPath></Reference>
   </ItemGroup>
 
 </Project>

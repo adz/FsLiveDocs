@@ -89,26 +89,23 @@ jobs:
       - name: Capture release documentation
         run: .tools/livedocs capture --version "$VERSION" --output "artifacts/FsLiveDocs-$VERSION-livedocs.zip"
 
-      - name: Authenticate to NuGet.org
-        id: nuget-login
-        uses: NuGet/login@v1
-        with:
-          user: ${{ vars.NUGET_USER }}
-
-      - name: Publish packages to NuGet.org
-        shell: bash
+      - name: Verify candidate in the complete release history
         env:
-          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          packages=(
-            FsLiveDocs.Annotations
-            FsLiveDocs
-          )
-          for package in "${packages[@]}"; do
-            dotnet nuget push "artifacts/packages/$package.$VERSION.nupkg" \
-              --api-key "$NUGET_API_KEY" \
-              --source https://api.nuget.org/v3/index.json
-          done
+          manifest="$RUNNER_TEMP/candidate-history.json"
+          cp .livedocs/history.json "$manifest"
+          .tools/livedocs history-sync "$GITHUB_REPOSITORY" --output "$manifest" --interactive false --banner false
+          .tools/livedocs history-add "$VERSION" --capsule "$PWD/artifacts/FsLiveDocs-$VERSION-livedocs.zip" --output "$manifest" --interactive false --banner false
+          .tools/livedocs build-history "$manifest" --retry 3 --interactive false --banner false
+          .tools/livedocs verify-output "$manifest" --output output --interactive false --banner false
+
+      - name: Preserve tested packages for publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packages-${{ github.run_id }}
+          path: artifacts/packages/*.*nupkg
+          if-no-files-found: error
 
       - name: Create immutable GitHub release
         env:
@@ -122,15 +119,52 @@ jobs:
             --verify-tag \
             --notes-file "dev-docs/releases/$VERSION.md"
 
-      - name: Publish release documentation to GitHub Pages
+      - name: Publish and await release documentation
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           capsule="artifacts/FsLiveDocs-$VERSION-livedocs.zip"
           capsule_url="https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/FsLiveDocs-$VERSION-livedocs.zip"
           capsule_sha256="$(sha256sum "$capsule" | cut -d ' ' -f 1)"
+          before="$(gh run list --workflow pages.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')"
           gh workflow run pages.yml \
             --ref "${{ github.event.repository.default_branch }}" \
             -f version="$VERSION" \
             -f capsule_url="$capsule_url" \
             -f capsule_sha256="$capsule_sha256"
+          for attempt in $(seq 1 30); do
+            run_id="$(gh run list --workflow pages.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')"
+            [[ "$run_id" != "$before" ]] && break
+            sleep 2
+          done
+          [[ "$run_id" != "$before" ]] || { echo "Pages dispatch was not observed." >&2; exit 1; }
+          gh run watch "$run_id" --exit-status
+
+  publish-nuget:
+    runs-on: ubuntu-latest
+    needs: release
+    environment: nuget
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-packages-${{ github.run_id }}
+          path: artifacts/packages
+      - name: Authenticate to NuGet.org
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Publish packages to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: |
+          for package in artifacts/packages/*.nupkg artifacts/packages/*.snupkg; do
+            [ -e "$package" ] || continue
+            dotnet nuget push "$package" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          done

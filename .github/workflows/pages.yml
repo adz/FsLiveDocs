@@ -57,17 +57,21 @@ jobs:
       - name: Build FsLiveDocs
         run: dotnet build src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj --configuration Release --no-restore
 
-      - name: Add the newly released capsule to this history build
-        if: inputs.version != ''
+      - name: Synchronize immutable release capsules
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll history-add "${{ inputs.version }}" \
-            --url "${{ inputs.capsule_url }}" \
-            --sha256 "${{ inputs.capsule_sha256 }}" \
-            --interactive false \
-            --banner false
+          args=()
+          if [[ -n "${{ inputs.version }}" ]]; then
+            args+=(--version "${{ inputs.version }}" --url "${{ inputs.capsule_url }}" --sha256 "${{ inputs.capsule_sha256 }}")
+          fi
+          dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll history-sync "$GITHUB_REPOSITORY" \
+            --output .livedocs/history.json "${args[@]}" --interactive false --banner false
 
-      - name: Render release history
-        run: dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll build-history .livedocs/history.json --interactive false --banner false
+      - name: Render and verify release history
+        run: |
+          dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll build-history .livedocs/history.json --retry 3 --interactive false --banner false
+          dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll verify-output .livedocs/history.json --output output --interactive false --banner false
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

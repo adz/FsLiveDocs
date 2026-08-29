@@ -4,7 +4,9 @@ This document covers publishing FsLiveDocs itself. For publishing a library's do
 
 ## Publish FsLiveDocs packages
 
-FsLiveDocs uses `.github/workflows/release.yml`. A tag named `v<semver>` is the only release trigger. The workflow removes the leading `v`, passes that version to every build and pack, verifies the package set, publishes it to NuGet.org, captures the matching documentation capsule, and creates the GitHub release. After the release exists, it dispatches `.github/workflows/pages.yml` with the capsule URL and SHA-256. That Pages build adds the new immutable capsule to its temporary history index before rendering; the committed index remains the baseline for manual and branch-triggered builds.
+FsLiveDocs uses `.github/workflows/release.yml`. A tag named `v<semver>` is the only release trigger. The workflow removes the leading `v`, passes that version to every build and pack, verifies the package set, captures the matching documentation capsule, and renders that candidate in the complete synchronized history. It creates the GitHub release only after the candidate passes. The workflow then dispatches `.github/workflows/pages.yml` with the capsule URL and SHA-256 and waits for the deployment to succeed. NuGet publication runs last, using the package artifacts already tested by the release job.
+
+The Pages build uses `history-sync`, `build-history --retry 3`, and `verify-output`. The committed index remains the compatibility baseline; its oldest entry is the floor for capsules admitted by synchronization.
 
 The published package set is:
 
@@ -20,10 +22,10 @@ Before the first tag, configure NuGet.org Trusted Publishing:
 1. Sign in to NuGet.org and open **Account settings → Trusted publishing**.
 2. Add a GitHub Actions policy owned by the NuGet account that will own the packages.
 3. Set the GitHub owner to `adz`, repository to `FsLiveDocs`, and workflow path to `.github/workflows/release.yml`.
-4. Leave the environment empty because the workflow does not use a GitHub environment.
+4. Set the environment to `nuget`; the publication job uses that GitHub environment after GitHub Release and Pages succeed.
 5. In the GitHub repository, create an Actions variable named `NUGET_USER` containing the NuGet.org username—not an email address.
 
-The workflow requests GitHub's OIDC token and exchanges it through `NuGet/login@v1` for a short-lived publishing credential. No persistent NuGet API key is stored in GitHub. The workflow does not use `--skip-duplicate`: package versions and release tags are immutable, so reusing a published version fails.
+The workflow requests GitHub's OIDC token and exchanges it through `NuGet/login@v1` for a short-lived publishing credential. No persistent NuGet API key is stored in GitHub. Publication uses `--skip-duplicate` only to make repair runs idempotent; a tag must never move after NuGet accepts its version.
 
 Create and push a release tag only from the commit to release:
 

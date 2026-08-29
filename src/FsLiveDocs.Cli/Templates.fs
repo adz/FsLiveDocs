@@ -92,9 +92,14 @@ jobs:
             "artifacts/$package-$version-livedocs.zip" \
             "artifacts/$package-$version-livedocs.zip.report.json" \
             --verify-tag --generate-notes
-      - name: Render release history
+      - name: Synchronize, render, and verify release history
         if: github.ref == 'refs/heads/main' && hashFiles('.livedocs/history.json') != ''
-        run: dotnet livedocs build-history .livedocs/history.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dotnet livedocs history-sync "$GITHUB_REPOSITORY" --output .livedocs/history.json
+          dotnet livedocs build-history .livedocs/history.json --retry 3
+          dotnet livedocs verify-output .livedocs/history.json --output output
       - uses: actions/upload-pages-artifact@v3
         if: github.ref == 'refs/heads/main'
         with:

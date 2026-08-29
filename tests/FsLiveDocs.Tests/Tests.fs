@@ -5,6 +5,7 @@ open System.IO
 open System.Text.RegularExpressions
 open Xunit
 open FsLiveDocs.Core
+open FsLiveDocs.Cli
 open FsLiveDocs.Runner
 open FsLiveDocs.Renderer
 open Newtonsoft.Json
@@ -222,6 +223,50 @@ module ReleaseCapsuleTests =
         File.WriteAllText(path, """{"SchemaVersion":1,"CurrentVersion":"1.0.0","Entries":[{"Version":"1.0.0","CapsulePath":"one.zip","CapsuleUrl":"https://example.com/one.zip","CapsuleSha256":"0000000000000000000000000000000000000000000000000000000000000000"}]}""")
         let ambiguous = Assert.Throws<InvalidOperationException>(fun () -> ReleaseCapsule.loadHistoryIndex path |> ignore)
         Assert.Contains("exactly one", ambiguous.Message)
+
+    [<Fact>]
+    let ``release histories use semantic newest-first ordering`` () =
+        let hash = String.replicate 64 "0"
+        let entry version = { Version = version; CapsulePath = None; CapsuleUrl = Some $"https://example.com/{version}.zip"; CapsuleSha256 = hash }
+        let normalized =
+            ReleaseCapsule.normalizeHistoryIndex {
+                SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion
+                CurrentVersion = "1.9.0"
+                Entries = [ entry "1.9.0"; entry "1.10.0-beta.2"; entry "1.10.0"; entry "1.10.0-beta.10" ]
+            }
+        Assert.Equal<string list>([ "1.10.0"; "1.10.0-beta.10"; "1.10.0-beta.2"; "1.9.0" ], normalized.Entries |> List.map _.Version)
+        Assert.Equal("1.10.0", normalized.CurrentVersion)
+
+    [<Fact>]
+    let ``release history rejects lexical ordering and a stale current version`` () =
+        let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
+        let hash = String.replicate 64 "0"
+        File.WriteAllText(path, $"""{{"SchemaVersion":1,"CurrentVersion":"1.9.0","Entries":[{{"Version":"1.9.0","CapsuleUrl":"https://example.com/1.9.0.zip","CapsuleSha256":"{hash}"}},{{"Version":"1.10.0","CapsuleUrl":"https://example.com/1.10.0.zip","CapsuleSha256":"{hash}"}}]}}""")
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ReleaseCapsule.loadHistoryIndex path |> ignore)
+        Assert.Contains("newest-first", error.Message)
+
+    [<Fact>]
+    let ``history output verification checks entry points switcher order and local links`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let historical = Path.Combine(root, "history", "1.9.0")
+        Directory.CreateDirectory(historical) |> ignore
+        let hash = String.replicate 64 "0"
+        let indexPath = Path.Combine(root, "history.json")
+        let index : ReleaseHistoryIndex = {
+            SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion
+            CurrentVersion = "1.10.0"
+            Entries =
+                [ { Version = "1.10.0"; CapsulePath = None; CapsuleUrl = Some "https://example.com/1.10.0.zip"; CapsuleSha256 = hash }
+                  { Version = "1.9.0"; CapsulePath = None; CapsuleUrl = Some "https://example.com/1.9.0.zip"; CapsuleSha256 = hash } ]
+        }
+        ReleaseCapsule.saveHistoryIndex indexPath index
+        File.WriteAllText(Path.Combine(root, "index.html"), "<a href=\"guide.html\">Guide</a><span>1.10.0</span><span>1.9.0</span>")
+        File.WriteAllText(Path.Combine(root, "guide.html"), "<p>Guide</p>")
+        File.WriteAllText(Path.Combine(historical, "index.html"), "<a href=\"../../guide.html\">Guide</a>")
+        Assert.Equal(3, ReleaseHistoryCommands.verify indexPath root)
+        File.WriteAllText(Path.Combine(root, "index.html"), "<span>1.9.0</span><span>1.10.0</span><a href=\"missing.html\">Missing</a>")
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ReleaseHistoryCommands.verify indexPath root |> ignore)
+        Assert.Contains("links do not resolve", error.Message)
 
 module SymbolListerTests =
 

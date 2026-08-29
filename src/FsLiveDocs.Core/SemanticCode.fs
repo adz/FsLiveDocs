@@ -123,14 +123,14 @@ module SemanticCode =
                     match block.Mode with
                     | Prepare ->
                         let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
-                        if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}."
+                        if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}: expected {persisted.SourceHash}, got {block.SourceHash}."
                         if persisted.ContextHash <> pageContextHash then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
                         htmlStartMarker + renderPreparation persisted + htmlEndMarker
                     | NoCheck _ | Transcript ->
                         htmlStartMarker + renderLexicalSource fence.Code + htmlEndMarker
                     | _ ->
                         let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
-                        if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}."
+                        if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}: expected {persisted.SourceHash}, got {block.SourceHash}."
                         let expectedContext = if block.Mode = Isolated then DocumentationDiscovery.contextHash options.Prelude [ block ] else pageContextHash
                         if persisted.ContextHash <> expectedContext then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
                         htmlStartMarker + renderPersistedBlock persisted + htmlEndMarker

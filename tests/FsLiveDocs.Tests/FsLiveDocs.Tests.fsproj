@@ -18,6 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj" />
     <ProjectReference Include="../../src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj" />
     <ProjectReference Include="../../src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj" />
     <ProjectReference Include="../../src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj" />

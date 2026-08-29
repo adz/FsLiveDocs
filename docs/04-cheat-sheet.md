@@ -33,7 +33,9 @@ Run commands from the repository root. Build documented projects before commands
 | `livedocs inspect <zip>` | Verify and describe a capsule. |
 | `livedocs history-add <v> --capsule <zip>` | Add a local capsule and calculated checksum. |
 | `livedocs history-add <v> --url <https-url> --sha256 <hash>` | Add a remote immutable capsule. |
-| `livedocs build-history <index>` | Verify and render every indexed release. |
+| `livedocs history-sync <owner/repo>` | Discover immutable capsules and normalize semantic version order. |
+| `livedocs build-history <index> --retry 3` | Verify and render every indexed release with bounded transient retries. |
+| `livedocs verify-output <index> --output output` | Verify entry points, switcher order, and generated local links. |
 | `livedocs extract [projects...]` | Write legacy loose API and semantic artifacts. |
 
 ## Common options
