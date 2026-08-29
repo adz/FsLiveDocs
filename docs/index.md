@@ -108,7 +108,7 @@ If you only need a current API site and do not need checked examples or historic
 
 ```bash
 dotnet new tool-manifest
-dotnet tool install FsLiveDocs --version 0.1.0
+dotnet tool install FsLiveDocs
 dotnet livedocs init --discover-projects
 dotnet build
 dotnet livedocs audit
@@ -119,7 +119,8 @@ dotnet livedocs watch --host 127.0.0.1 --port 5000
 Then continue with:
 
 1. [Get started](introduction.md).
-2. [Verify F# examples](guides/verified-examples.md).
-3. [Add semantic code tooltips](guides/semantic-code.md).
-4. [Capture and publish releases](guides/releases.md).
-5. [Use the command reference](cheat-sheet.md).
+2. [Write primary API pages](guides/api-pages.md).
+3. [Verify F# examples](guides/verified-examples.md).
+4. [Add semantic code tooltips](guides/semantic-code.md).
+5. [Capture and publish releases](guides/releases.md).
+6. [Use the command reference](cheat-sheet.md).

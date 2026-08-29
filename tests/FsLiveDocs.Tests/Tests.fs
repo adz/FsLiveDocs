@@ -10,6 +10,24 @@ open FsLiveDocs.Runner
 open FsLiveDocs.Renderer
 open Newtonsoft.Json
 
+module DocumentationSourceTests =
+
+    let rec private repositoryRoot directory =
+        if File.Exists(Path.Combine(directory, "FsLiveDocs.slnx")) then directory
+        else
+            let parent = Directory.GetParent directory
+            if isNull parent then invalidOp "Could not locate the FsLiveDocs repository root."
+            repositoryRoot parent.FullName
+
+    [<Fact>]
+    let ``installation docs do not pin the first published version`` () =
+        let root = repositoryRoot AppContext.BaseDirectory
+        let sources =
+            Path.Combine(root, "README.md")
+            :: (Directory.GetFiles(Path.Combine(root, "docs"), "*.md", SearchOption.AllDirectories) |> Array.toList)
+        for path in sources do
+            Assert.DoesNotContain("tool install FsLiveDocs --version", File.ReadAllText path)
+
 module HistoryTests =
 
     [<Fact>]

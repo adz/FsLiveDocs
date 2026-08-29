@@ -22,7 +22,7 @@ If the API changes, the documentation build fails at the page and line that need
 
 ```bash
 dotnet new tool-manifest
-dotnet tool install FsLiveDocs --version 0.1.0
+dotnet tool install FsLiveDocs
 dotnet livedocs init --discover-projects
 dotnet build
 dotnet livedocs audit

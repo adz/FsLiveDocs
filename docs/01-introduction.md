@@ -21,7 +21,7 @@ Create a tool manifest and install FsLiveDocs:
 
 ```bash
 dotnet new tool-manifest
-dotnet tool install FsLiveDocs --version 0.1.0
+dotnet tool install FsLiveDocs
 ```
 
 ## Initialize the repository
@@ -42,6 +42,12 @@ The command creates:
 - cache and release-download entries in `.gitignore`.
 
 The command does not replace existing files. Project arguments passed to later commands override the configured list; without either, FsLiveDocs discovers projects for that run.
+
+## Write the primary API pages
+
+Use Markdown under `docs/api/` for the main documentation of public namespaces, modules, and types. XML comments remain useful for concise member documentation and editor tooltips, but they do not need to carry an entire guide.
+
+Start with [Write primary API pages](guides/api-pages.md), then add task-oriented guides for workflows that cross several API entities.
 
 ## Add a guide page
 
@@ -99,6 +105,7 @@ The watcher rebuilds after source, project, configuration, or documentation chan
 
 ## Continue
 
+- [Write primary API pages](guides/api-pages.md).
 - [Verify examples](guides/verified-examples.md).
 - [Configure navigation](guides/navigation.md).
 - [Capture a release](guides/releases.md).
