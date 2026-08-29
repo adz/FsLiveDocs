@@ -141,7 +141,7 @@ jobs:
           dotnet livedocs history-add --version "$version" --url "$url" \
             --sha256-file "artifacts/$name-$version-livedocs.zip.sha256" \
             --interactive false --banner false
-          dotnet livedocs history-check --version "$version" --interactive false --banner false
+          dotnet livedocs history-check --interactive false --banner false
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .livedocs/history.json

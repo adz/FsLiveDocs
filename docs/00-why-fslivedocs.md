@@ -78,9 +78,8 @@ avoids.
 
 Each step is a `livedocs` command — `capture`, `history-check`, `history-add`,
 `build-history`, `verify-output` — and the committed `.livedocs/history.json` is the
-record of what has shipped. The tool never talks to a host: uploading the capsule and
-committing the index are explicit CI steps you write, so GitHub, GitLab, or your own
-server all work. See [Capture and publish releases](guides/releases.md) and
+record of what has shipped. The tool does not upload capsules or push the index. Those are explicit CI steps, so
+the publication flow works with GitHub, GitLab, or your own server. See [Capture and publish releases](guides/releases.md) and
 [Verify documentation in CI](guides/continuous-integration.md).
 
 ## Where FSharp.Formatting fits

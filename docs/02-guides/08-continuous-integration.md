@@ -72,7 +72,7 @@ dotnet livedocs history-check --capsule "artifacts/$NAME-$V-livedocs.zip" --vers
 # tool
 dotnet livedocs history-add --version "$V" \
   --url "$CAPSULE_URL" --sha256-file "artifacts/$NAME-$V-livedocs.zip.sha256"
-dotnet livedocs history-check --version "$V"
+dotnet livedocs history-check
 # CI — commit .livedocs/history.json to the default branch
 ```
 
@@ -119,7 +119,7 @@ release:
       url="$CI_PROJECT_URL/-/releases/v$V/downloads/$NAME-$V-livedocs.zip"
       dotnet livedocs history-add --version "$V" --url "$url" \
         --sha256-file "artifacts/$NAME-$V-livedocs.zip.sha256" --interactive false --banner false
-      dotnet livedocs history-check --version "$V" --interactive false --banner false
+      dotnet livedocs history-check --interactive false --banner false
     - |
       git add .livedocs/history.json
       git commit -m "Record $V in the release history"

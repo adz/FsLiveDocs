@@ -127,7 +127,7 @@ jobs:
             --version "$VERSION" --url "$url" \
             --sha256 "$(cat "artifacts/FsLiveDocs-$VERSION-livedocs.zip.sha256")" \
             --output .livedocs/history.json --interactive false --banner false
-          .tools/livedocs history-check --version "$VERSION" --interactive false --banner false
+          .tools/livedocs history-check --interactive false --banner false
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .livedocs/history.json

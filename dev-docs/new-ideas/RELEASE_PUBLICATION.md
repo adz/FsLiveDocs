@@ -41,7 +41,7 @@ livedocs capture --version $V --output artifacts/$NAME-$V-livedocs.zip
 livedocs history check --capsule artifacts/$NAME-$V-livedocs.zip --version $V
 # provider: gh release create v$V artifacts/$NAME-$V-livedocs.zip{,.report.json} --verify-tag ...
 livedocs history add --version $V --sha256-file artifacts/$NAME-$V-livedocs.zip.sha256
-livedocs history check --version $V
+livedocs history check
 # provider: git commit .livedocs/history.json and push to the default branch (or open a PR)
 ```
 

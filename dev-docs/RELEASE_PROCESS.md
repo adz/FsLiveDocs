@@ -8,8 +8,6 @@ FsLiveDocs uses `.github/workflows/release.yml`. A tag named `v<semver>` is the 
 
 `.livedocs/history.json` is the source of truth. `pages.yml` builds straight from the committed index with `build-history --retry 3` and `verify-output` — it no longer synchronizes. The committed index's oldest entry is the compatibility floor for capsules admitted by any later `history-sync`.
 
-**Migration:** before the first release under this flow, run `livedocs history-sync adz/FsLiveDocs --output .livedocs/history.json` locally and commit the result so the committed index lists every published capsule (it currently lists only the 0.3.0 floor).
-
 The published package set is:
 
 | Package | Purpose |

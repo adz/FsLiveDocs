@@ -83,12 +83,14 @@ dotnet livedocs history-check --capsule artifacts/YourLibrary-1.4.0-livedocs.zip
 
 `history-check` loads the committed `.livedocs/history.json`, splices the local capsule in as
 the release under test, renders the whole history into a temporary directory, and runs the
-same entry-point, switcher, and local-link checks as `verify-output`. It writes nothing and
-never contacts a host. Run it with no arguments to re-check the committed history as-is.
+same entry-point, switcher, and local-link checks as `verify-output`. It does not modify the
+index or call a hosting provider's API, but it downloads remote capsules listed in the index.
+Run it with no arguments to re-check the committed history as-is.
 
 ## The publisher contract
 
-FsLiveDocs never uploads an asset or moves a Git ref. To publish a release you:
+FsLiveDocs never uploads an asset or moves a Git ref. It may read provider APIs during
+`history-sync` and download indexed capsules. To publish a release you:
 
 1. put the capsule and its `.report.json` at a durable HTTPS URL — a GitHub or GitLab release
    asset, an S3 object, your own server;
