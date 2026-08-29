@@ -138,21 +138,70 @@ Scenario rules:
 
 Do not add `FsLiveDocs` itself as a library dependency. It is a .NET tool package. `FsLiveDocs.Annotations` is the compile-time contract for attributes used by documented projects.
 
-## Generate stable tests
+## Verify without a test project
+
+```bash
+dotnet livedocs test
+```
+
+`test` runs the full verification transiently: it audits every F# block, compiles
+each page and isolated unit, then runs every `run` block and `transcript`. Nothing
+is written. This is all most repositories need in CI.
+
+## Generate a committed test project
 
 ```bash
 dotnet livedocs generate-tests
 dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj
 ```
 
-The command produces stable xUnit cases from the same documentation discovery result used by audit, build, and capture.
+Use this when you want documentation verification to appear in your normal test
+run, IDE test explorer, and coverage reports.
 
-Run the generated test project in CI. FsLiveDocs handles coverage validation, compile-before-execute ordering, transcript behavior, and stale-case detection.
+### What is generated
 
-## Audit without generated tests
+`generate-tests` writes `tests/FsLiveDocs.SnapshotTests/` — a `.fsproj` and a
+`SnapshotTests.fs` containing one xUnit `[<Fact>]` **per discovered case**,
+enumerated at generation time:
+
+- one per XML `<example>` — a [Verify](https://github.com/VerifyTests/Verify)
+  snapshot when the example carries `data-livedocs="snapshot"`, otherwise a
+  compile check;
+- one compile fact per page compilation unit and per `isolated` block;
+- one execution fact per `run` block and per `transcript`.
+
+Discovery is the same pass `audit`, `build`, and `capture` use: top-level `fsharp`
+fences in the Markdown *after* transclusion and shortcode expansion, plus every
+XML `<example>` on the documented API.
+
+### It does not rediscover on its own
+
+The generated file lists cases by name. When it runs, each fact re-runs discovery
+for its own page and fails if that case has disappeared, so drift is caught — but a
+**new** example or fence is only picked up when you regenerate.
+
+Re-run `generate-tests` whenever you add, remove, or rename an example or an F#
+block, then commit the diff. Re-running when nothing changed produces no diff (the
+files are rewritten only when their content changes), so it is safe in a pre-commit
+hook or a CI freshness check:
+
+```bash
+dotnet livedocs generate-tests --interactive false --banner false
+git diff --exit-code tests/FsLiveDocs.SnapshotTests
+```
+
+FsLiveDocs still owns coverage validation, compile-before-execute ordering,
+transcript behavior, and stale-case detection — the generated facts only expose
+that work to `dotnet test`.
+
+See [Verify documentation in CI](continuous-integration.md) for where these commands fit.
+
+## Audit only
 
 ```bash
 dotnet livedocs audit
 ```
 
-Audit classifies every block as passed, excluded, or failed. A successful release capture requires complete coverage.
+Audit checks coverage, modes, and compilation for every block, and classifies each
+as passed, excluded, or failed. It does not execute `run` blocks or transcripts —
+that is what `test` adds. A successful release capture requires complete coverage.

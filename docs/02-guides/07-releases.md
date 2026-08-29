@@ -58,9 +58,12 @@ For example:
 ```text
 Example.Library-1.4.0-livedocs.zip
 Example.Library-1.4.0-livedocs.zip.report.json
+Example.Library-1.4.0-livedocs.zip.sha256
 ```
 
-Keep the generated report beside the capsule. The `generate-ci` workflow uses the GitHub repository name as the package prefix.
+Capture writes three files: the capsule, its JSON report, and a `.sha256` file holding the
+bare checksum. Keep all three beside each other. The `generate-ci` workflow uses the GitHub
+repository name as the package prefix.
 
 ## Inspect a capsule
 
@@ -70,59 +73,80 @@ dotnet livedocs inspect artifacts/YourLibrary-1.4.0-livedocs.zip
 
 Inspection verifies the archive and every component. It reports provenance, schema versions, checksums, compressed and uncompressed sizes, and inventory counts.
 
-## Publish the capsule
+## Check the candidate
 
-Attach the ZIP and its `.report.json` file to the matching immutable GitHub release.
-
-Generate a starter workflow:
+Before publishing anywhere, verify the capsule renders alongside every prior version:
 
 ```bash
-dotnet livedocs generate-ci
+dotnet livedocs history-check --capsule artifacts/YourLibrary-1.4.0-livedocs.zip --version 1.4.0
 ```
 
-The generated workflow verifies documentation, publishes tagged capsules using the recommended filename, and deploys the current site from `main`. It fails instead of replacing an existing release.
+`history-check` loads the committed `.livedocs/history.json`, splices the local capsule in as
+the release under test, renders the whole history into a temporary directory, and runs the
+same entry-point, switcher, and local-link checks as `verify-output`. It writes nothing and
+never contacts a host. Run it with no arguments to re-check the committed history as-is.
 
-To enable deployment in GitHub:
+## The publisher contract
 
-1. Open the repository's **Settings → Pages**.
-2. Under **Build and deployment**, select **GitHub Actions** as the source.
-3. Push the generated `.github/workflows/livedocs.yml` workflow to the default branch.
-4. Allow the first deployment to create the `github-pages` environment.
-5. If the environment has protection rules, permit the default branch to deploy.
+FsLiveDocs never uploads an asset or moves a Git ref. To publish a release you:
 
-A project repository named `Example.Library` is published at `https://<owner>.github.io/Example.Library/`. FsLiveDocs emits relative links, so no repository-path option is required.
+1. put the capsule and its `.report.json` at a durable HTTPS URL — a GitHub or GitLab release
+   asset, an S3 object, your own server;
+2. record it with `history-add --url <that URL> --sha256-file <the .sha256>`;
+3. commit the updated `.livedocs/history.json`.
 
-The generated workflow publishes the current site. When `.livedocs/history.json` exists, it synchronizes immutable capsules from GitHub Releases, renders the compatible history, and verifies its entry points, version switcher, and local links before uploading the Pages artifact.
+The committed index is the source of truth. Anything that satisfies those three steps works —
+[Verify documentation in CI](continuous-integration.md) has ready-made snippets for GitHub and
+GitLab.
 
-## Synchronize GitHub releases
+## Record a release in history
+
+From a URL (the normal path — the asset is already uploaded):
 
 ```bash
-dotnet livedocs history-sync example/your-library \
+dotnet livedocs history-add --version 1.4.0 \
+  --url https://github.com/example/your-library/releases/download/v1.4.0/YourLibrary-1.4.0-livedocs.zip \
+  --sha256-file artifacts/YourLibrary-1.4.0-livedocs.zip.sha256
+```
+
+`--sha256 <hex>` works in place of `--sha256-file`. If `.livedocs/config.json` sets a URL
+pattern you can omit `--url`:
+
+```json
+{
+  "history": {
+    "urlPattern": "https://github.com/example/your-library/releases/download/v{version}/YourLibrary-{version}-livedocs.zip"
+  }
+}
+```
+
+`{version}` and `{tag}` (`v{version}`) are the placeholders. From a local file — for offline
+history builds — use `--capsule <path>` instead; the checksum is then computed.
+
+Published entries are immutable: `history-add` refuses a version already in the index.
+
+## Synchronize from a host
+
+`history-sync` is optional — a convenience for backfilling entries you have not committed, or a
+one-time migration. It is **one-way**: it reads published releases and merges them into the
+index, and never changes a release.
+
+```bash
+dotnet livedocs history-sync example/your-library --output .livedocs/history.json
+```
+
+The positional argument is a GitHub `owner/repo`; it discovers assets named
+`your-library-<version>-livedocs.zip` and requires GitHub's SHA-256 digest. For any other host,
+supply a lister command that prints `version url sha256` lines:
+
+```bash
+dotnet livedocs history-sync --from "glab release list -R example/your-library ..." \
   --output .livedocs/history.json
 ```
 
-Synchronization discovers release assets named `your-library-<version>-livedocs.zip`, requires GitHub's SHA-256 digest, preserves immutable existing entries, and orders semantic versions newest-first. The oldest committed entry is the compatibility floor: synchronization extends that history without silently admitting older capsule formats.
-
-In GitHub Actions, pass `github.token` as `GH_TOKEN`. A release deployment can additionally supply `--version`, `--url`, and `--sha256`; all three must identify the newly released capsule, and that version must be current.
-
-## Add a local release to history
-
-```bash
-dotnet livedocs history-add 1.4.0 \
-  --capsule artifacts/YourLibrary-1.4.0-livedocs.zip
-```
-
-FsLiveDocs calculates the checksum and writes `.livedocs/history.json`.
-
-## Add a remote release to history
-
-```bash
-dotnet livedocs history-add 1.4.0 \
-  --url https://github.com/example/your-library/releases/download/v1.4.0/YourLibrary-1.4.0-livedocs.zip \
-  --sha256 <sha256>
-```
-
-Remote sources must use HTTPS. FsLiveDocs stores downloads by checksum under `.livedocs/releases/` and reuses verified files.
+or set `history.discover` in `.livedocs/config.json`. Either way, the oldest committed entry is
+the compatibility floor: synchronization extends history without admitting older capsule
+formats. In GitHub Actions, pass `github.token` as `GH_TOKEN`.
 
 ## Build all versions
 
@@ -131,9 +155,12 @@ dotnet livedocs build-history .livedocs/history.json --retry 3
 dotnet livedocs verify-output .livedocs/history.json --output output
 ```
 
-FsLiveDocs retries transient downloads, verifies each outer capsule checksum and every internal checksum before rendering. Checksum mismatches are deterministic and are never retried.
+`build-history` retries transient downloads and verifies each outer capsule checksum and every
+internal checksum before rendering. Checksum mismatches are deterministic and never retried.
 
-`verify-output` then requires every version entry point, checks every generated local `href` and `src`, and confirms that the version switcher contains all releases newest-first.
+`verify-output` then requires every version entry point, checks every generated local `href`
+and `src` (excluding the search tool's `pagefind/` directory), and confirms the version
+switcher lists all releases newest-first.
 
 The current version appears at the site root. Older versions appear below `history/<version>/`.
 

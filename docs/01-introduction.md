@@ -95,6 +95,22 @@ dotnet livedocs build
 
 The generated site is in `output/`.
 
+## Add source links
+
+`init` writes an empty `.livedocs/config.json`. Set `repoUrl` so API members link to
+their source:
+
+```json
+{
+  "repoUrl": "https://github.com/your-org/your-library"
+}
+```
+
+FsLiveDocs builds links as `<repoUrl>/blob/main/<file>#L<line>`, so this assumes the
+default branch is `main` and that source paths resolve from the repository root.
+[Configure navigation and branding](guides/navigation.md) covers `siteName`, logos,
+themes, and the rest of the file.
+
 ## Preview changes
 
 ```bash
@@ -108,4 +124,5 @@ The watcher rebuilds after source, project, configuration, or documentation chan
 - [Write primary API pages](guides/api-pages.md).
 - [Verify examples](guides/verified-examples.md).
 - [Configure navigation](guides/navigation.md).
+- [Verify documentation in CI](guides/continuous-integration.md).
 - [Capture a release](guides/releases.md).

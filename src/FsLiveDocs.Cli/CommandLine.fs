@@ -28,9 +28,11 @@ type Arguments =
     /// <summary>Verifies and describes a release capsule.</summary>
     | [<CliPrefix(CliPrefix.None)>] Inspect of capsulePath:string
     /// <summary>Adds an immutable capsule reference to a release history index.</summary>
-    | [<CliPrefix(CliPrefix.None)>] History_Add of version:string
-    /// <summary>Synchronizes immutable release capsules from GitHub Releases.</summary>
-    | [<CliPrefix(CliPrefix.None)>] History_Sync of repository:string
+    | [<CliPrefix(CliPrefix.None)>] History_Add of version:string list
+    /// <summary>Renders and verifies the release history, optionally with a local candidate capsule.</summary>
+    | [<CliPrefix(CliPrefix.None)>] History_Check
+    /// <summary>One-way: discovers published capsules and merges them into the local history index. Never changes releases.</summary>
+    | [<CliPrefix(CliPrefix.None)>] History_Sync of repository:string list
     /// <summary>Verifies generated history entry points, version ordering, and local links.</summary>
     | [<CliPrefix(CliPrefix.None)>] Verify_Output of manifestPath:string
     /// <summary>Runs verified code examples found in docstrings.</summary>
@@ -55,6 +57,12 @@ type Arguments =
     | [<Inherit>] Url of string
     /// <summary>Sets the expected capsule SHA-256 for history operations.</summary>
     | [<Inherit>] Sha256 of string
+    /// <summary>Reads the expected capsule SHA-256 from a file written by capture.</summary>
+    | [<Inherit>] Sha256_File of string
+    /// <summary>Sets a shell command that lists published capsules for history-sync.</summary>
+    | [<Inherit>] From of string
+    /// <summary>Selects the CI host for generate-ci.</summary>
+    | [<Inherit>] Provider of string
     /// <summary>Sets the number of transient download attempts for build-history.</summary>
     | [<Inherit>] Retry of int
     /// <summary>Sets the network interface used by the preview server.</summary>
@@ -84,8 +92,9 @@ type Arguments =
             | Extract _ -> "Extract symbols from one or more projects into a JSON blob."
             | Capture _ -> "Verify and capture a self-contained documentation release capsule."
             | Inspect _ -> "Verify and describe a documentation release capsule."
-            | History_Add _ -> "Add an immutable capsule reference to a release history index."
-            | History_Sync _ -> "Synchronize immutable LiveDocs capsules from GitHub Releases."
+            | History_Add _ -> "Add an immutable capsule reference to a release history index. Takes the version positionally or as --version, plus one of --url, --capsule, or a configured history.urlPattern."
+            | History_Check -> "Render and verify the release history; pass --capsule and --version to test an unpublished candidate."
+            | History_Sync _ -> "One-way: discover published capsules (GitHub Releases, or a --from command) and merge them into .livedocs/history.json. Reads only; never modifies releases."
             | Verify_Output _ -> "Verify generated release history routes, switcher ordering, and local links."
             | Test _ -> "Verify documentation without generating a test project: audits every F# block, then runs each snapshot-selected example."
             | Audit _ -> "Audit coverage, modes, and compilation for every expanded F# documentation block."
@@ -98,6 +107,9 @@ type Arguments =
             | Capsule _ -> "With history-add, read the release capsule from a local path."
             | Url _ -> "With history-add, download the release capsule from an HTTPS URL."
             | Sha256 _ -> "Require this capsule SHA-256 for history-add or expected history-sync metadata."
+            | Sha256_File _ -> "Read the expected capsule SHA-256 from this file (written beside the capsule by capture)."
+            | From _ -> "With history-sync, run this shell command to list published capsules as 'version url sha256' lines."
+            | Provider _ -> "With generate-ci, the CI host to target (default: github)."
             | Retry _ -> "Set transient capsule download attempts for build-history (default: 3)."
             | Host _ -> "Set the watch preview's bind host (default: 0.0.0.0)."
             | Port _ -> "Set the watch preview's port (default: 5000)."

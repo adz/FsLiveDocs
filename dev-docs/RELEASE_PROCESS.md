@@ -4,9 +4,11 @@ This document covers publishing FsLiveDocs itself. For publishing a library's do
 
 ## Publish FsLiveDocs packages
 
-FsLiveDocs uses `.github/workflows/release.yml`. A tag named `v<semver>` is the only release trigger. The workflow removes the leading `v`, passes that version to every build and pack, verifies the package set, captures the matching documentation capsule, and renders that candidate in the complete synchronized history. It creates the GitHub release only after the candidate passes. The workflow then dispatches `.github/workflows/pages.yml` with the capsule URL and SHA-256 and waits for the deployment to succeed. NuGet publication runs last, using the package artifacts already tested by the release job.
+FsLiveDocs uses `.github/workflows/release.yml`. A tag named `v<semver>` is the only release trigger. The workflow removes the leading `v`, passes that version to every build and pack, verifies the package set, captures the matching documentation capsule, and runs `history-check` on the candidate against the committed release history. It creates the GitHub release only after that passes. It then switches to the default branch, runs `history-sync` to record the just-published capsule, verifies the full history again with `history-check`, commits `.livedocs/history.json`, and pushes. That push triggers `.github/workflows/pages.yml`; the release job watches that run and waits for its deployment before NuGet publication, which uses the package artifacts already tested by the release job.
 
-The Pages build uses `history-sync`, `build-history --retry 3`, and `verify-output`. The committed index remains the compatibility baseline; its oldest entry is the floor for capsules admitted by synchronization.
+`.livedocs/history.json` is the source of truth. `pages.yml` builds straight from the committed index with `build-history --retry 3` and `verify-output` — it no longer synchronizes. The committed index's oldest entry is the compatibility floor for capsules admitted by any later `history-sync`.
+
+**Migration:** before the first release under this flow, run `livedocs history-sync adz/FsLiveDocs --output .livedocs/history.json` locally and commit the result so the committed index lists every published capsule (it currently lists only the 0.3.0 floor).
 
 The published package set is:
 

@@ -122,4 +122,7 @@ module internal ReleaseCapture =
         else
             let reportPath = outputPath + ".report.json"
             File.WriteAllText(reportPath, Newtonsoft.Json.JsonConvert.SerializeObject(publicReport, Newtonsoft.Json.Formatting.Indented, Serialization.jsonSettings))
+            // A bare-checksum sidecar lets a CI publish step register the capsule with
+            // `history add --sha256-file` instead of parsing tool output.
+            File.WriteAllText(outputPath + ".sha256", publicReport.Sha256.ToLowerInvariant() + "\n")
             { Report = publicReport; ReportPath = Some(Path.GetFullPath reportPath); PlannedOutputPath = plannedOutputPath; DryRun = false }

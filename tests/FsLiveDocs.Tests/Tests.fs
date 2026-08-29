@@ -286,6 +286,61 @@ module ReleaseCapsuleTests =
         let error = Assert.Throws<InvalidOperationException>(fun () -> ReleaseHistoryCommands.verify indexPath root |> ignore)
         Assert.Contains("links do not resolve", error.Message)
 
+    [<Fact>]
+    let ``history verification ignores pagefind assets`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let hash = String.replicate 64 "0"
+        let indexPath = Path.Combine(root, "history.json")
+        ReleaseCapsule.saveHistoryIndex indexPath {
+            SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion
+            CurrentVersion = "1.0.0"
+            Entries = [ { Version = "1.0.0"; CapsulePath = None; CapsuleUrl = Some "https://example.com/1.0.0.zip"; CapsuleSha256 = hash } ]
+        }
+        File.WriteAllText(Path.Combine(root, "index.html"), "<span>1.0.0</span><link href=\"pagefind/pagefind-ui.css\"><script src=\"pagefind/pagefind-ui.js\"></script>")
+        Assert.Equal(1, ReleaseHistoryCommands.verify indexPath root)
+
+    [<Fact>]
+    let ``history-sync merges entries from a discovery command`` () =
+        let indexPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
+        let hash = String.replicate 64 "a"
+        let command = ReleaseHistoryCommands.Command $"printf '1.2.0 https://example.com/pkg-1.2.0-livedocs.zip {hash}\\n1.3.0 https://example.com/pkg-1.3.0-livedocs.zip {hash}\\n'"
+        let updated = ReleaseHistoryCommands.sync command indexPath None None None
+        Assert.Equal<string list>([ "1.3.0"; "1.2.0" ], updated.Entries |> List.map _.Version)
+        Assert.Equal("1.3.0", updated.CurrentVersion)
+        Assert.All(updated.Entries, fun entry -> Assert.Equal(hash, entry.CapsuleSha256))
+
+    [<Fact>]
+    let ``history-add reads its checksum from a sha256 file`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let capsule = Path.Combine(root, "pkg-1.0.0-livedocs.zip")
+        File.WriteAllBytes(capsule, [| 1uy; 2uy; 3uy |])
+        let hash = String.replicate 64 "b"
+        let shaFile = capsule + ".sha256"
+        File.WriteAllText(shaFile, hash.ToUpperInvariant() + "\n")
+        let indexPath = Path.Combine(root, "history.json")
+        Program.historyAddAction indexPath "1.0.0" None (Some "https://example.com/pkg-1.0.0-livedocs.zip") None (Some shaFile) |> ignore
+        let index = ReleaseCapsule.loadHistoryIndex indexPath
+        Assert.Equal(hash, index.Entries.Head.CapsuleSha256)
+
+    [<Fact>]
+    let ``history-check rejects a candidate capsule without a version`` () =
+        let indexPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
+        ReleaseCapsule.saveHistoryIndex indexPath {
+            SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion
+            CurrentVersion = "1.0.0"
+            Entries = [ { Version = "1.0.0"; CapsulePath = None; CapsuleUrl = Some "https://example.com/1.0.0.zip"; CapsuleSha256 = String.replicate 64 "0" } ]
+        }
+        let error = Assert.Throws<InvalidOperationException>(fun () -> Program.historyCheckAction indexPath (Some "candidate.zip") None "light" 3 |> ignore)
+        Assert.Contains("requires --version", error.Message)
+
+    [<Fact>]
+    let ``url pattern expansion fills version and tag`` () =
+        Assert.Equal(
+            "https://h/x/v1.4.0/pkg-1.4.0.zip",
+            Program.expandUrlPattern "https://h/x/{tag}/pkg-{version}.zip" "1.4.0")
+
 module SymbolListerTests =
 
     [<Fact>]

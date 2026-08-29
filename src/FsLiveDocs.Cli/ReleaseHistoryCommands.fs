@@ -28,6 +28,53 @@ type internal GitHubRelease =
 
 module ReleaseHistoryCommands =
 
+    /// Where `history-sync` discovers published capsules. GitHub is built in; any other host
+    /// is reached through a shell command, keeping the tool free of provider integrations.
+    type DiscoverySource =
+        | GithubRepo of string
+        | Command of string
+
+    let private normalizedSha (context: string) (value: string) =
+        let sha = value.Trim().ToLowerInvariant()
+        if sha.Length <> 64 || sha |> Seq.exists (Uri.IsHexDigit >> not) then
+            invalidOp $"{context}: '{value}' is not a SHA-256 hex digest."
+        sha
+
+    /// Runs a discovery command and parses each non-empty line as `version url sha256`.
+    let private commandEntries (command: string) =
+        let startInfo = Diagnostics.ProcessStartInfo()
+        if Runtime.InteropServices.RuntimeInformation.IsOSPlatform Runtime.InteropServices.OSPlatform.Windows then
+            startInfo.FileName <- "cmd"
+            startInfo.ArgumentList.Add "/c"
+        else
+            startInfo.FileName <- "/bin/sh"
+            startInfo.ArgumentList.Add "-c"
+        startInfo.ArgumentList.Add command
+        startInfo.RedirectStandardOutput <- true
+        startInfo.RedirectStandardError <- true
+        startInfo.UseShellExecute <- false
+        use proc = Diagnostics.Process.Start startInfo
+        let output = proc.StandardOutput.ReadToEnd()
+        let errors = proc.StandardError.ReadToEnd()
+        proc.WaitForExit()
+        if proc.ExitCode <> 0 then
+            invalidOp $"Discovery command failed with exit code {proc.ExitCode}: {errors.Trim()}"
+        output.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+        |> Array.map (fun line -> line.Split([| ' '; '\t' |], StringSplitOptions.RemoveEmptyEntries))
+        |> Array.choose (fun parts ->
+            match parts with
+            | [| version; url; sha |] ->
+                let version = if version.StartsWith 'v' then version.Substring 1 else version
+                if not (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) then
+                    invalidOp $"Discovery command returned a non-HTTPS capsule URL for {version}: {url}"
+                Some ({ Version = version
+                        CapsulePath = None
+                        CapsuleUrl = Some url
+                        CapsuleSha256 = normalizedSha $"Discovered capsule {version}" sha }: ReleaseHistoryEntry)
+            | _ -> invalidOp $"""Discovery command lines must be "version url sha256"; got: {String.Join(" ", parts)}"""
+        )
+        |> Array.toList
+
     let private requiredSha (digest: string) =
         if String.IsNullOrWhiteSpace digest || not (digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)) then
             invalidOp "A LiveDocs release asset is missing its GitHub SHA-256 digest."
@@ -73,7 +120,17 @@ module ReleaseHistoryCommands =
             with :? InvalidOperationException -> None)
         |> Array.toList
 
-    let sync (repository: string) (indexPath: string) (expectedVersion: string option) (expectedUrl: string option) (expectedSha: string option) =
+    let private discoveredEntries source =
+        match source with
+        | GithubRepo repository -> releasedEntries repository
+        | Command command -> commandEntries command
+
+    let private sourceLabel source =
+        match source with
+        | GithubRepo repository -> repository
+        | Command command -> $"'{command}'"
+
+    let sync (source: DiscoverySource) (indexPath: string) (expectedVersion: string option) (expectedUrl: string option) (expectedSha: string option) =
         let existing =
             if File.Exists indexPath then (ReleaseCapsule.loadHistoryIndex indexPath).Entries
             else []
@@ -82,9 +139,9 @@ module ReleaseHistoryCommands =
         // not support; synchronization extends history and never silently widens that promise.
         let compatibilityFloor = existing |> List.tryLast |> Option.map _.Version
         let discovered =
-            releasedEntries repository
+            discoveredEntries source
             |> List.filter (fun entry -> compatibilityFloor |> Option.forall (fun floor -> ReleaseCapsule.compareVersions entry.Version floor >= 0))
-        if discovered.IsEmpty then invalidOp $"No compatible immutable LiveDocs release capsules were found for {repository}."
+        if discovered.IsEmpty then invalidOp $"No compatible immutable LiveDocs release capsules were found for {sourceLabel source}."
         let merged =
             discovered
             |> List.fold (fun (entries: ReleaseHistoryEntry list) (discoveredEntry: ReleaseHistoryEntry) ->
@@ -148,9 +205,13 @@ module ReleaseHistoryCommands =
         for page in Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories) do
             let relativePage = Path.GetRelativePath(root, page)
             for found in links.Matches(File.ReadAllText page) do
-                match localTarget root relativePage found.Groups[1].Value with
-                | Some target when not (File.Exists target) -> failures.Add($"{relativePage} -> {found.Groups[1].Value}")
-                | _ -> ()
+                let href = found.Groups[1].Value
+                // Pagefind owns its own `pagefind/` directory and runs as a separate index step;
+                // its assets are not FsLiveDocs-generated links for this check to resolve.
+                if not (href.Contains "pagefind/") then
+                    match localTarget root relativePage href with
+                    | Some target when not (File.Exists target) -> failures.Add($"{relativePage} -> {href}")
+                    | _ -> ()
         if failures.Count > 0 then
             let detail = failures |> Seq.truncate 50 |> String.concat Environment.NewLine
             invalidOp $"Generated links do not resolve:{Environment.NewLine}{detail}"

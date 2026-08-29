@@ -4,8 +4,20 @@ open System
 open System.IO
 open FsLiveDocs.Core
 
+/// Repository-local release publication settings, read from the top-level `history`
+/// object in `.livedocs/config.json`. These configure how CI locates and names
+/// release capsules; they are never persisted in a capsule or the history index.
+type internal HistoryConfig = {
+    /// Format string for a capsule download URL. Placeholders: {version}, {name}, {tag}.
+    UrlPattern: string option
+    /// Shell command that lists published capsules as `version url sha256` lines.
+    Discover: string option
+}
+
 /// Owns repository-local FsLiveDocs configuration, project selection, and initial scaffolding.
 module internal Workspace =
+
+    let emptyHistoryConfig = { UrlPattern = None; Discover = None }
 
     let private defaultSiteConfig =
         { RepoUrl = None
@@ -70,6 +82,24 @@ module internal Workspace =
         config["projects"] <- Newtonsoft.Json.Linq.JArray(projects |> List.map Newtonsoft.Json.Linq.JValue)
         File.WriteAllText(configPath, config.ToString(Newtonsoft.Json.Formatting.Indented) + Environment.NewLine)
         projects.Length, configPath
+
+    let loadHistoryConfig () =
+        let configPath = Path.Combine(".livedocs", "config.json")
+        if not (File.Exists configPath) then emptyHistoryConfig
+        else
+            try
+                let config = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText configPath)
+                match config.GetValue("history", StringComparison.OrdinalIgnoreCase) with
+                | :? Newtonsoft.Json.Linq.JObject as history ->
+                    let read name =
+                        match history.GetValue(name, StringComparison.OrdinalIgnoreCase) with
+                        | null -> None
+                        | token ->
+                            let value = token.ToString()
+                            if String.IsNullOrWhiteSpace value then None else Some value
+                    { UrlPattern = read "urlPattern"; Discover = read "discover" }
+                | _ -> emptyHistoryConfig
+            with _ -> emptyHistoryConfig
 
     let loadSiteConfig () =
         let configPath = Path.Combine(".livedocs", "config.json")

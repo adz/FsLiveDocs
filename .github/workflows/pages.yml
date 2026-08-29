@@ -11,19 +11,6 @@ on:
       - Directory.Build.props
       - FsLiveDocs.slnx
   workflow_dispatch:
-    inputs:
-      version:
-        description: Released semantic version to add to the history build
-        required: false
-        type: string
-      capsule_url:
-        description: HTTPS URL of the released documentation capsule
-        required: false
-        type: string
-      capsule_sha256:
-        description: SHA-256 of the released documentation capsule
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -56,17 +43,6 @@ jobs:
 
       - name: Build FsLiveDocs
         run: dotnet build src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj --configuration Release --no-restore
-
-      - name: Synchronize immutable release capsules
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          args=()
-          if [[ -n "${{ inputs.version }}" ]]; then
-            args+=(--version "${{ inputs.version }}" --url "${{ inputs.capsule_url }}" --sha256 "${{ inputs.capsule_sha256 }}")
-          fi
-          dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll history-sync "$GITHUB_REPOSITORY" \
-            --output .livedocs/history.json "${args[@]}" --interactive false --banner false
 
       - name: Render and verify release history
         run: |

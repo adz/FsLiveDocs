@@ -193,23 +193,42 @@ module Program =
         AnsiConsole.MarkupLine($"  SHA-256: {report.Sha256}")
         0
 
-    let historyAddAction indexPath version capsulePath capsuleUrl checksum =
+    /// Expands `{version}` and `{tag}` in a configured capsule URL pattern. The pattern is a
+    /// plain format string the repository owns; the tool has no provider knowledge.
+    let expandUrlPattern (pattern: string) (version: string) =
+        pattern.Replace("{version}", version).Replace("{tag}", "v" + version)
+
+    let private resolveChecksum (checksum: string option) (sha256File: string option) (localCapsule: string option) =
+        match checksum, sha256File with
+        | Some value, _ -> value.Trim().ToLowerInvariant()
+        | None, Some file ->
+            if not (File.Exists file) then invalidOp $"SHA-256 file is missing: {Path.GetFullPath file}"
+            (File.ReadAllText file).Trim().ToLowerInvariant()
+        | None, None ->
+            match localCapsule with
+            | Some path -> History.sha256 path
+            | None -> invalidOp "A capsule URL requires --sha256 or --sha256-file."
+
+    let historyAddAction indexPath version capsulePath capsuleUrl checksum sha256File =
         let index =
             if File.Exists indexPath then ReleaseCapsule.loadHistoryIndex indexPath
             else { SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion; CurrentVersion = version; Entries = [] }
         if index.Entries |> List.exists (fun entry -> entry.Version = version) then
             invalidOp $"Release history already contains version {version}. Published entries are immutable."
+        let indexRoot = Path.GetDirectoryName(Path.GetFullPath indexPath)
+        let configuredUrl =
+            Workspace.loadHistoryConfig().UrlPattern
+            |> Option.map (fun pattern -> expandUrlPattern pattern version)
         let path, url, sha256 =
-            match capsulePath, capsuleUrl with
-            | Some path, None ->
+            match capsulePath, (capsuleUrl |> Option.orElse configuredUrl) with
+            | Some path, _ ->
                 let fullPath = Path.GetFullPath path
                 if not (File.Exists fullPath) then invalidOp $"Release capsule is missing: {fullPath}"
-                let indexRoot = Path.GetDirectoryName(Path.GetFullPath indexPath)
-                Some(Path.GetRelativePath(indexRoot, fullPath)), None, checksum |> Option.defaultValue (History.sha256 fullPath)
+                Some(Path.GetRelativePath(indexRoot, fullPath)), None, resolveChecksum checksum sha256File (Some fullPath)
             | None, Some url ->
-                let expected = checksum |> Option.defaultWith (fun () -> invalidOp "A remote capsule requires --sha256.")
-                None, Some url, expected
-            | _ -> invalidOp "Specify exactly one of --capsule or --url."
+                None, Some url, resolveChecksum checksum sha256File None
+            | None, None ->
+                invalidOp "Specify --capsule, --url, or configure history.urlPattern in .livedocs/config.json."
         let updated =
             {
                 index with
@@ -452,7 +471,9 @@ module Program =
         printApiDiagnostics false deferredApiDiagnostics |> ignore
         AnsiConsole.MarkupLine("[green]✔ Build complete:[/] output/")
 
-    let buildHistoryAction manifestPath theme retryAttempts =
+    /// Renders every version in a manifest into <paramref name="outputDir"/>. Shared by
+    /// `build-history` (which then indexes the site) and `history check` (which verifies it).
+    let renderHistoryInto (manifestPath: string) (theme: string) (retryAttempts: int) (outputDir: string) =
         if retryAttempts < 1 then invalidArg "retry" "Retry attempts must be at least one."
         let raw = File.ReadAllText manifestPath
         let isCapsuleIndex =
@@ -482,7 +503,7 @@ module Program =
                     |> List.find (fun (version, _, _, _, _) -> version = index.CurrentVersion)
                     |> fun (_, _, _, _, site) -> site
                 let sites = loaded |> List.map (fun (version, package, pages, docsDir, _) -> version, package, pages, docsDir)
-                SiteBuilder.buildHistory index.CurrentVersion sites config theme "output"
+                SiteBuilder.buildHistory index.CurrentVersion sites config theme outputDir
             finally
                 if Directory.Exists temporaryRoot then Directory.Delete(temporaryRoot, true)
         else
@@ -507,14 +528,66 @@ module Program =
                     let pages = ContentProvider.scanDocsWithOptions docsDir sourceDir package rootPath semanticCode
                     entry.Version, package, pages, docsDir)
 
-            SiteBuilder.buildHistory manifest.CurrentVersion sites config theme "output"
+            SiteBuilder.buildHistory manifest.CurrentVersion sites config theme outputDir
 
-        let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
+    let private runPagefind (siteDir: string) =
+        let psi = System.Diagnostics.ProcessStartInfo("npx", $"-y pagefind --site {siteDir}")
         psi.UseShellExecute <- false
         use proc = System.Diagnostics.Process.Start(psi)
         proc.WaitForExit()
         if proc.ExitCode <> 0 then invalidOp $"Pagefind failed with exit code {proc.ExitCode}."
+
+    let buildHistoryAction manifestPath theme retryAttempts =
+        renderHistoryInto manifestPath theme retryAttempts "output"
+        runPagefind "output"
         AnsiConsole.MarkupLine("[green]✔ History build complete:[/] output/")
+
+    /// Renders the committed history — optionally with a local candidate capsule spliced in as
+    /// the release under test — into a temporary directory and verifies it. Never writes the index.
+    let historyCheckAction (indexPath: string) (candidateCapsule: string option) (candidateVersion: string option) (theme: string) (retryAttempts: int) =
+        if not (File.Exists indexPath) then
+            invalidOp $"Release history index is missing: {Path.GetFullPath indexPath}"
+        let index = ReleaseCapsule.loadHistoryIndex indexPath
+        let indexRoot = Path.GetDirectoryName(Path.GetFullPath indexPath)
+        // Resolve committed relative capsule paths to absolute so a temp index elsewhere still finds them.
+        let absoluteEntries =
+            index.Entries
+            |> List.map (fun entry ->
+                match entry.CapsulePath with
+                | Some relative -> { entry with CapsulePath = Some(Path.GetFullPath(Path.Combine(indexRoot, relative))) }
+                | None -> entry)
+        let candidate =
+            match candidateCapsule, candidateVersion with
+            | Some capsule, Some version ->
+                let fullPath = Path.GetFullPath capsule
+                if not (File.Exists fullPath) then invalidOp $"Release capsule is missing: {fullPath}"
+                if index.Entries |> List.exists (fun entry -> entry.Version = version) then
+                    invalidOp $"Release history already contains version {version}. Published entries are immutable."
+                Some { Version = version; CapsulePath = Some fullPath; CapsuleUrl = None; CapsuleSha256 = History.sha256 fullPath }
+            | Some _, None -> invalidOp "history check --capsule requires --version."
+            | None, Some _ -> invalidOp "history check --version requires --capsule."
+            | None, None -> None
+        let merged =
+            ReleaseCapsule.normalizeHistoryIndex
+                { index with Entries = (candidate |> Option.toList) @ absoluteEntries }
+        let workRoot = Path.Combine(Path.GetTempPath(), "fslivedocs-check-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory workRoot |> ignore
+        let tempIndex = Path.Combine(workRoot, "history.json")
+        let tempOutput = Path.Combine(workRoot, "output")
+        try
+            ReleaseCapsule.saveHistoryIndex tempIndex merged
+            renderHistoryInto tempIndex theme retryAttempts tempOutput
+            // The search index is a separate downstream step; `verify` skips `pagefind/` links.
+            let pageCount = ReleaseHistoryCommands.verify tempIndex tempOutput
+            match candidate with
+            | Some entry ->
+                AnsiConsole.MarkupLine($"[green]✔ Candidate {Markup.Escape entry.Version} renders and verifies in the full release history.[/]")
+            | None ->
+                AnsiConsole.MarkupLine("[green]✔ Release history renders and verifies.[/]")
+            AnsiConsole.MarkupLine($"  Releases: {merged.Entries.Length}, pages: {pageCount}")
+            0
+        finally
+            if Directory.Exists workRoot then Directory.Delete(workRoot, true)
 
     /// <summary>CLI entry point.</summary>
     [<EntryPoint>]
@@ -553,11 +626,16 @@ module Program =
 
                 elif results.Contains Generate_CI then
                     printBanner()
-                    AnsiConsole.MarkupLine("[blue]Generating GitHub Actions workflow...[/]")
-                    if not (Directory.Exists(".github/workflows")) then Directory.CreateDirectory(".github/workflows") |> ignore
-                    File.WriteAllText(".github/workflows/livedocs.yml", Templates.GitHubWorkflow)
-                    AnsiConsole.MarkupLine("[green]✔ Done:[/] .github/workflows/livedocs.yml")
-                    0
+                    match results.GetResult(Provider, defaultValue = "github").ToLowerInvariant() with
+                    | "github" ->
+                        AnsiConsole.MarkupLine("[blue]Generating GitHub Actions workflow...[/]")
+                        if not (Directory.Exists(".github/workflows")) then Directory.CreateDirectory(".github/workflows") |> ignore
+                        if File.Exists(".github/workflows/livedocs.yml") then
+                            invalidOp ".github/workflows/livedocs.yml already exists. Delete it to regenerate."
+                        File.WriteAllText(".github/workflows/livedocs.yml", Templates.GitHubWorkflow)
+                        AnsiConsole.MarkupLine("[green]✔ Done:[/] .github/workflows/livedocs.yml")
+                        0
+                    | other -> invalidOp $"Unknown --provider '{other}'. Supported: github. Other hosts follow the generic recipe in docs/guides/continuous-integration.md."
 
                 elif results.Contains Generate_Tests then
                     let projectPaths = results.GetResult Generate_Tests |> resolveProjects "generate-tests"
@@ -587,7 +665,12 @@ module Program =
                     0
 
                 elif results.Contains History_Add then
-                    let version = results.GetResult History_Add
+                    let version =
+                        match results.GetResult History_Add, results.TryGetResult Arguments.Version with
+                        | [ positional ], _ -> positional
+                        | [], Some flag -> flag
+                        | [], None -> invalidOp "history-add needs a version, positionally or as --version."
+                        | _ -> invalidOp "history-add takes one version."
                     let indexPath = results.GetResult(Output, defaultValue = ".livedocs/history.json")
                     historyAddAction
                         indexPath
@@ -595,12 +678,29 @@ module Program =
                         (results.TryGetResult Capsule)
                         (results.TryGetResult Url)
                         (results.TryGetResult Sha256)
+                        (results.TryGetResult Sha256_File)
+
+                elif results.Contains History_Check then
+                    let indexPath = results.GetResult(Output, defaultValue = ".livedocs/history.json")
+                    historyCheckAction
+                        indexPath
+                        (results.TryGetResult Capsule)
+                        (results.TryGetResult Arguments.Version)
+                        theme
+                        (results.GetResult(Retry, defaultValue = 3))
 
                 elif results.Contains History_Sync then
-                    let repository = results.GetResult History_Sync
                     let indexPath = results.GetResult(Output, defaultValue = ".livedocs/history.json")
+                    let source =
+                        match results.GetResult History_Sync, results.TryGetResult From, Workspace.loadHistoryConfig().Discover with
+                        | [ repository ], _, _ -> ReleaseHistoryCommands.GithubRepo repository
+                        | [], Some command, _ -> ReleaseHistoryCommands.Command command
+                        | [], None, Some command -> ReleaseHistoryCommands.Command command
+                        | [], None, None ->
+                            invalidOp "history-sync needs a GitHub owner/repo argument, --from \"<command>\", or history.discover in .livedocs/config.json."
+                        | _ -> invalidOp "history-sync accepts at most one repository argument."
                     let updated =
-                        ReleaseHistoryCommands.sync repository indexPath
+                        ReleaseHistoryCommands.sync source indexPath
                             (results.TryGetResult Arguments.Version)
                             (results.TryGetResult Url)
                             (results.TryGetResult Sha256)

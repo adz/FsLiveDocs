@@ -48,6 +48,12 @@ livedocs capture --version 1.0.0
 
     [<Literal>]
     let GitHubWorkflow = """
+# FsLiveDocs verifies documentation on every change, and on a v<semver> tag captures
+# an immutable release capsule and records it in .livedocs/history.json.
+#
+# The tool never talks to a host. The steps marked "provider step" below do that with
+# `gh` and `git`; replace them if you publish elsewhere. See:
+#   docs/guides/continuous-integration.md
 name: LiveDocs
 on:
   pull_request:
@@ -58,11 +64,16 @@ permissions:
   contents: write
   pages: write
   id-token: write
+concurrency:
+  group: livedocs-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  build:
+  documentation:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
@@ -70,43 +81,76 @@ jobs:
         with:
           node-version: 22
       - run: dotnet tool restore
-      - name: Verify and build documentation
+      - run: dotnet build --nologo
+
+      - name: Verify documentation
+        run: dotnet livedocs test --interactive false --banner false
+
+      - name: Render the current site and release history
+        if: github.ref == 'refs/heads/main'
         run: |
-          dotnet build --nologo
-          dotnet livedocs test
-          dotnet livedocs build
-      - name: Capture release documentation
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          package="${GITHUB_REPOSITORY#*/}"
-          dotnet livedocs capture --version "$version" --output "artifacts/$package-$version-livedocs.zip"
-      - name: Publish immutable release capsule
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          package="${GITHUB_REPOSITORY#*/}"
-          gh release create "$GITHUB_REF_NAME" \
-            "artifacts/$package-$version-livedocs.zip" \
-            "artifacts/$package-$version-livedocs.zip.report.json" \
-            --verify-tag --generate-notes
-      - name: Synchronize, render, and verify release history
-        if: github.ref == 'refs/heads/main' && hashFiles('.livedocs/history.json') != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          dotnet livedocs history-sync "$GITHUB_REPOSITORY" --output .livedocs/history.json
-          dotnet livedocs build-history .livedocs/history.json --retry 3
-          dotnet livedocs verify-output .livedocs/history.json --output output
+          dotnet livedocs build --interactive false --banner false
+          if [ -s .livedocs/history.json ]; then
+            dotnet livedocs build-history .livedocs/history.json --retry 3 --interactive false --banner false
+            dotnet livedocs verify-output .livedocs/history.json --output output --interactive false --banner false
+          fi
       - uses: actions/upload-pages-artifact@v3
         if: github.ref == 'refs/heads/main'
         with:
           path: output
+
+      - name: Capture the release capsule
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="${GITHUB_REPOSITORY#*/}"
+          dotnet livedocs capture --version "$version" \
+            --output "artifacts/$name-$version-livedocs.zip" \
+            --interactive false --banner false
+
+      - name: Check the candidate against the full release history
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="${GITHUB_REPOSITORY#*/}"
+          dotnet livedocs history-check \
+            --capsule "artifacts/$name-$version-livedocs.zip" --version "$version" \
+            --interactive false --banner false
+
+      - name: Publish the capsule to the GitHub release   # provider step
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="${GITHUB_REPOSITORY#*/}"
+          gh release create "$GITHUB_REF_NAME" \
+            "artifacts/$name-$version-livedocs.zip" \
+            "artifacts/$name-$version-livedocs.zip.report.json" \
+            --verify-tag --generate-notes
+
+      - name: Record the release in history and commit it   # provider step (git)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="${GITHUB_REPOSITORY#*/}"
+          branch="${{ github.event.repository.default_branch }}"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$name-$version-livedocs.zip"
+          git fetch origin "$branch"
+          git switch "$branch"
+          dotnet livedocs history-add --version "$version" --url "$url" \
+            --sha256-file "artifacts/$name-$version-livedocs.zip.sha256" \
+            --interactive false --banner false
+          dotnet livedocs history-check --version "$version" --interactive false --banner false
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .livedocs/history.json
+          git commit -m "Record $version in the release history"
+          git push origin "$branch"
+
   deploy-pages:
     if: github.ref == 'refs/heads/main'
-    needs: build
+    needs: documentation
     runs-on: ubuntu-latest
     environment:
       name: github-pages
