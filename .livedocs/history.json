@@ -1,7 +1,67 @@
 {
   "SchemaVersion": 1,
-  "CurrentVersion": "0.3.0",
+  "CurrentVersion": "0.4.1",
   "Entries": [
+    {
+      "Version": "0.4.1",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.4.1/FsLiveDocs-0.4.1-livedocs.zip",
+      "CapsuleSha256": "604ac66e2925dfeb1511cc73b1f75e978c613b89384c462e13efa7fdbcd24c75"
+    },
+    {
+      "Version": "0.4.0",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.4.0/FsLiveDocs-0.4.0-livedocs.zip",
+      "CapsuleSha256": "2fdc275f296bc3d3dc28f91e7cbc4100986ea5492b619bb094ca31ff8e8544c5"
+    },
+    {
+      "Version": "0.3.8",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.3.8/FsLiveDocs-0.3.8-livedocs.zip",
+      "CapsuleSha256": "e32971049cfe9ccfaae378797d34b31cd9f04c6d423e808af76968a47ffef29c"
+    },
+    {
+      "Version": "0.3.7",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.3.7/FsLiveDocs-0.3.7-livedocs.zip",
+      "CapsuleSha256": "65f9822f21f3654c0893667026e425f95e2ff372df0af606a43b91ebb5e361c3"
+    },
+    {
+      "Version": "0.3.6",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.3.6/FsLiveDocs-0.3.6-livedocs.zip",
+      "CapsuleSha256": "053ee8708b11a5e88dc0a0b2292a122f8cfdc7aa91d6842eef9c4c9e988cfc61"
+    },
+    {
+      "Version": "0.3.5",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.3.5/FsLiveDocs-0.3.5-livedocs.zip",
+      "CapsuleSha256": "5936e909448ada0674fb934143f17ea2f6007b42170486570224d6e87df6782e"
+    },
+    {
+      "Version": "0.3.4",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.3.4/FsLiveDocs-0.3.4-livedocs.zip",
+      "CapsuleSha256": "d7877194429f3489c2e856af6328fd399ca0d6e47ef3e5796e031239024281dd"
+    },
+    {
+      "Version": "0.3.3",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.3.3/FsLiveDocs-0.3.3-livedocs.zip",
+      "CapsuleSha256": "ab6ec706c6e8c78bb4c8d2aa0d9b645e2cfd9963c207fbd385fe856288ee47f3"
+    },
+    {
+      "Version": "0.3.2",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.3.2/FsLiveDocs-0.3.2-livedocs.zip",
+      "CapsuleSha256": "e7958706eed1dbf00012c0146c2fec9468fe787447e1f0d159b9bca13620d0f6"
+    },
+    {
+      "Version": "0.3.1",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.3.1/FsLiveDocs-0.3.1-livedocs.zip",
+      "CapsuleSha256": "227692d99717b56c64d746ad4f73fdf11ce7a3e5fe5fa70b67585c3390d87385"
+    },
     {
       "Version": "0.3.0",
       "CapsulePath": null,
