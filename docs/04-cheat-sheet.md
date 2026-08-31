@@ -4,7 +4,7 @@ title: Command reference
 
 # Command reference
 
-Run commands from the repository root. Project arguments are optional: FsLiveDocs uses explicit arguments first, the `projects` list in `.livedocs/config.json` second, and automatic discovery last.
+Run commands from the repository root. Project arguments are optional: FsLiveDocs uses explicit arguments first, the union of top-level `projects` and every `docsSets[].projects` entry in `.livedocs/config.json` second, and automatic discovery last.
 
 Every command assumes it runs at the repository root with `.livedocs/` present
 (`init` creates it). Every command that reads the API — `audit`, `test`,
@@ -84,3 +84,16 @@ At the default `warnings` level, LiveDocs groups API issues by source file and i
 | `{{< example id="Name" >}}` | Transclude an XML documentation example. |
 | `xref:T:Namespace.Type` | Link to a documented entity. |
 | `xref:M:Namespace.Module.member` | Link to a documented member. |
+
+## Documentation sets
+
+| Field | Default / meaning |
+| --- | --- |
+| `id` | Required stable lower-case slug. |
+| `title` | Title-cased `id`. |
+| `source` | `docs`; overlapping roots use the most-specific owner. |
+| `path` | Site root for the default set; otherwise `id`. |
+| `projects` | Projects used for verification and the set's exposed API surface. |
+| `default` | Required on exactly one configured set. |
+| `sidebar` / `api` | `true`; `false` omits that surface. |
+| `fSharpPrelude` | Top-level `fSharpPrelude`, if present. |

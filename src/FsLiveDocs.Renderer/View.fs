@@ -327,94 +327,354 @@ module View =
             ]
         ]
 
-    let apiCard (package: PackageModel) (repoUrl: string option) (memberModel: MemberModel) =
+    /// <summary>One documentation-set destination in the shared shell.</summary>
+    type DocsSetLink =
+        { Id: string
+          Title: string
+          Path: string }
+
+    /// <summary>Set-specific shell state. The legacy <see cref="layout"/> path does not construct
+    /// this value, which keeps sites without <c>docsSets</c> byte-for-byte unchanged.</summary>
+    type SiteChrome =
+        {
+            SetId: string
+            SetTitle: string
+            SetPath: string
+            /// Site-root-relative prefix for this rendered version (for example history/1.0.0/).
+            VersionPath: string
+            Sets: DocsSetLink list
+            Sidebar: bool
+            Api: bool
+            NavigationPackage: PackageModel
+            /// Entity id to site-root-relative route prefix for cross-set API documentation links.
+            ApiRoutes: Map<string, string>
+            /// Site-root-relative destination for each version, after exact-page fallback resolution.
+            VersionTargets: (string * string) list
+        }
+
+    let private setRootTarget path =
+        if String.IsNullOrEmpty path then
+            "index.html"
+        else
+            path.Trim('/') + "/index.html"
+
+    let private setApiTarget path =
+        if String.IsNullOrEmpty path then
+            "api/index.html"
+        else
+            path.Trim('/') + "/api/index.html"
+
+    let private sidebarForSet
+        (rootPath: string)
+        (pages: ContentPage list)
+        (package: PackageModel)
+        (chrome: SiteChrome)
+        =
+        let packageGroups =
+            (if isNull (box package.Packages) then
+                 []
+             else
+                 package.Packages)
+            |> List.map (fun project ->
+                let contributed = entitiesForPackage project package.Entities
+                let groupPageId = "packages/" + Uri.EscapeDataString project.Name
+
+                match findPackageRoot project.Name contributed with
+                | Some root -> project.Name, Some groupPageId, root.Entities, None, contributed
+                | None -> project.Name, Some groupPageId, omitAncestorNamespaces contributed, None, contributed)
+            |> List.filter (fun (_, _, _, _, contributed) -> not contributed.IsEmpty)
+            |> List.map (fun (name, pageId, entities, anchor, _) -> name, pageId, entities, anchor)
+
+        let namespaceGroups =
+            package.Entities
+            |> List.groupBy (fun entity -> entity.Id.Split('.').[0])
+            |> List.sortBy fst
+
+        let versionRoot = Url.resolve rootPath chrome.VersionPath
+
+        let setRouteRoot =
+            if String.IsNullOrEmpty chrome.SetPath then
+                versionRoot
+            else
+                Url.resolve versionRoot (chrome.SetPath.Trim('/') + "/")
+
+        let prefix =
+            if String.IsNullOrEmpty chrome.SetPath then
+                ""
+            else
+                chrome.SetPath.Trim('/') + "/"
+
+        let docsPages =
+            pages
+            |> List.filter (fun page -> page.OutputPath <> setRootTarget chrome.SetPath)
+            |> List.map (fun page ->
+                if prefix <> "" && page.OutputPath.StartsWith(prefix, StringComparison.Ordinal) then
+                    { page with
+                        OutputPath = page.OutputPath.Substring(prefix.Length) }
+                else
+                    page)
+
+        div
+            [ _class "flex flex-col gap-10 pb-32"
+              _id "sidebar-root"
+              attr "data-docs-set-id" chrome.SetId ]
+            [ div
+                  [ _class
+                        "sticky top-0 z-10 bg-base-100/95 backdrop-blur border-b border-base-300 -mx-10 px-10 pb-6 pt-2" ]
+                  [ div [ _class "text-xs font-black mb-4 tracking-wide" ] [ str chrome.SetTitle ]
+                    label
+                        [ _for "sidebar-filter"
+                          _class "text-[10px] font-black uppercase tracking-[0.3em] opacity-40 block mb-3" ]
+                        [ str "Filter" ]
+                    input
+                        [ _id "sidebar-filter"
+                          _type "search"
+                          _placeholder "Filter this documentation set"
+                          _class "input input-bordered input-sm w-full rounded-2xl"
+                          attr "autocomplete" "off" ] ]
+              div
+                  [ attr "data-sidebar-section" "true" ]
+                  [ h3WithAnchor
+                        "overview"
+                        "Overview"
+                        "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
+                    ul
+                        [ _class "menu menu-sm p-0 gap-1" ]
+                        [ li
+                              [ attr "data-sidebar-item" "true" ]
+                              [ a
+                                    [ _href (Url.resolve rootPath (chrome.VersionPath + setRootTarget chrome.SetPath))
+                                      _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ]
+                                    [ str "Home" ] ]
+                          if chrome.Api then
+                              li
+                                  [ attr "data-sidebar-item" "true" ]
+                                  [ a
+                                        [ _href (
+                                              Url.resolve rootPath (chrome.VersionPath + setApiTarget chrome.SetPath)
+                                          )
+                                          _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm transition-all" ]
+                                        [ str "API Reference" ] ] ] ]
+              if not docsPages.IsEmpty then
+                  div
+                      [ attr "data-sidebar-section" "true" ]
+                      [ h3WithAnchor
+                            "docs"
+                            "Docs"
+                            "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
+                        ul [ _class "menu menu-sm p-0 gap-1" ] (sidebarDocsItems setRouteRoot "" docsPages) ]
+              if chrome.Api then
+                  div
+                      [ attr "data-sidebar-section" "true" ]
+                      [ h3WithAnchor
+                            "api-reference"
+                            "API Reference"
+                            "text-[11px] font-black uppercase text-base-content px-4 mb-4 tracking-[0.2em] opacity-50"
+                        ul
+                            [ _class "menu menu-sm p-0 gap-2" ]
+                            (if packageGroups.IsEmpty then
+                                 namespaceGroups
+                                 |> List.map (fun (area, entities) ->
+                                     let items =
+                                         match entities with
+                                         | [ entity ] when
+                                             entity.Kind = EntityKind.Namespace && not entity.Entities.IsEmpty
+                                             ->
+                                             entity.Entities
+                                         | _ -> entities
+
+                                     let pageId =
+                                         entities
+                                         |> List.tryFind (fun entity ->
+                                             entity.Kind = EntityKind.Namespace
+                                             && entity.Name.Equals(area, StringComparison.OrdinalIgnoreCase))
+                                         |> Option.map _.Id
+                                         |> Option.defaultValue area
+
+                                     sidebarApiGroup setRouteRoot area (Some pageId) None items)
+                             else
+                                 packageGroups
+                                 |> List.map (fun (name, pageId, entities, anchor) ->
+                                     sidebarApiGroup setRouteRoot name pageId anchor entities)) ] ]
+
+    let private apiCardCore renderDocumentation (repoUrl: string option) (memberModel: MemberModel) =
         let sourceLink =
             sourceLinkHref repoUrl memberModel.Location
             |> Option.map (fun href ->
-                a [
-                    _href href
-                    _target "_blank"
-                    attr "rel" "noreferrer"
-                    _class "btn btn-ghost btn-sm btn-circle border border-base-300 text-base-content/50 hover:text-primary hover:border-primary/30"
-                    attr "aria-label" $"View source for {memberModel.Name}"
-                    attr "title" $"View source for {memberModel.Name}"
-                ] [ i [ _class "bi bi-code-slash" ] [] ])
+                a
+                    [ _href href
+                      _target "_blank"
+                      attr "rel" "noreferrer"
+                      _class
+                          "btn btn-ghost btn-sm btn-circle border border-base-300 text-base-content/50 hover:text-primary hover:border-primary/30"
+                      attr "aria-label" $"View source for {memberModel.Name}"
+                      attr "title" $"View source for {memberModel.Name}" ]
+                    [ i [ _class "bi bi-code-slash" ] [] ])
 
-        div [ _class "border border-base-300 rounded-2xl bg-base-100 overflow-hidden" ] [
-            div [ _class "bg-base-200/20 px-4 py-3 border-b border-base-300 flex flex-col gap-3" ] [
-                div [ _class "flex items-start justify-between gap-4" ] [
-                    h3 [ _id memberModel.Id; attr "data-toc-title" memberModel.Name; _class "group text-xl font-black tracking-tight flex items-center gap-3 scroll-mt-24" ] [
-                        span [ _class "leading-tight" ] [ str memberModel.Name ]
-                        anchorIcon ("#" + memberModel.Id) $"Copy link to {memberModel.Name}"
-                    ]
-                    match sourceLink with
-                    | Some link -> link
-                    | None -> emptyText
-                ]
-                div [ _class "text-xs font-mono text-primary bg-primary/5 px-3 py-1.5 rounded-full border border-primary/10 shadow-inner overflow-x-auto max-w-full block" ] [
-                    rawText (Presentation.highlightSignatureHtml memberModel.Signature)
-                ]
-                span [ _class "text-[10px] font-black uppercase opacity-30 tracking-widest" ] [ str "Member" ]
-            ]
-            div [ _class "p-4 md:p-5" ] [
-                div [ _class "prose prose-sm md:prose-base max-w-none mb-5 opacity-80 leading-relaxed" ] [ rawText (Presentation.renderDocumentationHtml package memberModel.Summary) ]
+        div
+            [ _class "border border-base-300 rounded-2xl bg-base-100 overflow-hidden" ]
+            [ div
+                  [ _class "bg-base-200/20 px-4 py-3 border-b border-base-300 flex flex-col gap-3" ]
+                  [ div
+                        [ _class "flex items-start justify-between gap-4" ]
+                        [ h3
+                              [ _id memberModel.Id
+                                attr "data-toc-title" memberModel.Name
+                                _class "group text-xl font-black tracking-tight flex items-center gap-3 scroll-mt-24" ]
+                              [ span [ _class "leading-tight" ] [ str memberModel.Name ]
+                                anchorIcon ("#" + memberModel.Id) $"Copy link to {memberModel.Name}" ]
+                          match sourceLink with
+                          | Some link -> link
+                          | None -> emptyText ]
+                    div
+                        [ _class
+                              "text-xs font-mono text-primary bg-primary/5 px-3 py-1.5 rounded-full border border-primary/10 shadow-inner overflow-x-auto max-w-full block" ]
+                        [ rawText (Presentation.highlightSignatureHtml memberModel.Signature) ]
+                    span [ _class "text-[10px] font-black uppercase opacity-30 tracking-widest" ] [ str "Member" ] ]
+              div
+                  [ _class "p-4 md:p-5" ]
+                  [ div
+                        [ _class "prose prose-sm md:prose-base max-w-none mb-5 opacity-80 leading-relaxed" ]
+                        [ rawText (renderDocumentation memberModel.Summary) ]
 
-                (if not memberModel.Parameters.IsEmpty then
-                    div [ _class "mb-8" ] [
-                        h4 [ _class "text-[11px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2" ] [ 
-                            i [ _class "bi bi-list-nested" ] []; str "Parameters" 
-                        ]
-                        div [ _class "overflow-x-auto rounded-xl border border-base-300 shadow-sm not-prose" ] [
-                            table [ _class "table table-sm table-zebra w-full" ] [
-                                thead [ _class "bg-base-200/50" ] [
-                                    tr [] [
-                                        th [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.625rem !important; padding-bottom: 0.625rem !important;" ] [ str "Name" ]
-                                        th [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.625rem !important; padding-bottom: 0.625rem !important;" ] [ str "Type" ]
-                                        th [ attr "style" "padding-right: 1.5rem !important; padding-top: 0.625rem !important; padding-bottom: 0.625rem !important;" ] [ str "Description" ]
-                                    ]
-                                ]
-                                tbody [] (memberModel.Parameters |> List.map (fun p ->
-                                    tr [] [
-                                        td [ _class "font-bold font-mono text-sm text-primary"; attr "style" "padding-left: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ str p.Name ]
-                                        td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ span [ _class "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText (Presentation.highlightSignatureHtml p.Type) ] ]
-                                        td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ] [ rawText (Presentation.renderDocumentationHtml package p.Description) ]
-                                    ]
-                                ))
-                             ]
-                        ]
-                    ]
-                else emptyText)
+                    (if not memberModel.Parameters.IsEmpty then
+                         div
+                             [ _class "mb-8" ]
+                             [ h4
+                                   [ _class
+                                         "text-[11px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2" ]
+                                   [ i [ _class "bi bi-list-nested" ] []; str "Parameters" ]
+                               div
+                                   [ _class "overflow-x-auto rounded-xl border border-base-300 shadow-sm not-prose" ]
+                                   [ table
+                                         [ _class "table table-sm table-zebra w-full" ]
+                                         [ thead
+                                               [ _class "bg-base-200/50" ]
+                                               [ tr
+                                                     []
+                                                     [ th
+                                                           [ attr
+                                                                 "style"
+                                                                 "padding-left: 1.5rem !important; padding-top: 0.625rem !important; padding-bottom: 0.625rem !important;" ]
+                                                           [ str "Name" ]
+                                                       th
+                                                           [ attr
+                                                                 "style"
+                                                                 "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.625rem !important; padding-bottom: 0.625rem !important;" ]
+                                                           [ str "Type" ]
+                                                       th
+                                                           [ attr
+                                                                 "style"
+                                                                 "padding-right: 1.5rem !important; padding-top: 0.625rem !important; padding-bottom: 0.625rem !important;" ]
+                                                           [ str "Description" ] ] ]
+                                           tbody
+                                               []
+                                               (memberModel.Parameters
+                                                |> List.map (fun p ->
+                                                    tr
+                                                        []
+                                                        [ td
+                                                              [ _class "font-bold font-mono text-sm text-primary"
+                                                                attr
+                                                                    "style"
+                                                                    "padding-left: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ]
+                                                              [ str p.Name ]
+                                                          td
+                                                              [ attr
+                                                                    "style"
+                                                                    "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ]
+                                                              [ span
+                                                                    [ _class
+                                                                          "text-secondary text-xs bg-secondary/5 px-2 py-0.5 rounded" ]
+                                                                    [ rawText (
+                                                                          Presentation.highlightSignatureHtml p.Type
+                                                                      ) ] ]
+                                                          td
+                                                              [ _class "text-sm opacity-80 leading-relaxed"
+                                                                attr
+                                                                    "style"
+                                                                    "padding-right: 1.5rem !important; padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; vertical-align: top !important;" ]
+                                                              [ rawText (renderDocumentation p.Description) ] ])) ] ] ]
+                     else
+                         emptyText)
 
-                div [ _class "mb-8 p-4 bg-base-200/15 rounded-xl border border-base-300 flex flex-col gap-3" ] [
-                    h4 [ _class "text-[11px] font-black uppercase opacity-40 tracking-widest flex items-center gap-2" ] [ 
-                        i [ _class "bi bi-arrow-return-right text-accent/60" ] []; str "Returns" 
-                    ]
-                    div [ _class "text-accent font-mono text-sm font-black bg-accent/5 px-4 py-2.5 rounded-xl border border-accent/10 overflow-x-auto w-full" ] [ rawText (Presentation.highlightSignatureHtml memberModel.ReturnType) ]
-                ]
+                    div
+                        [ _class "mb-8 p-4 bg-base-200/15 rounded-xl border border-base-300 flex flex-col gap-3" ]
+                        [ h4
+                              [ _class
+                                    "text-[11px] font-black uppercase opacity-40 tracking-widest flex items-center gap-2" ]
+                              [ i [ _class "bi bi-arrow-return-right text-accent/60" ] []; str "Returns" ]
+                          div
+                              [ _class
+                                    "text-accent font-mono text-sm font-black bg-accent/5 px-4 py-2.5 rounded-xl border border-accent/10 overflow-x-auto w-full" ]
+                              [ rawText (Presentation.highlightSignatureHtml memberModel.ReturnType) ] ]
 
-                (if not memberModel.Examples.IsEmpty then
-                    div [ _class "not-prose" ] [
-                        h4 [ _class "text-[11px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2" ] [ 
-                             i [ _class "bi bi-play-circle-fill text-primary/60" ] []; str "Verification Examples" 
-                        ]
-                        (memberModel.Examples |> List.map (fun ex ->
-                            div [ _class "mb-6" ] [
-                                if ex.Name <> "Example" then p [ _class "text-[10px] font-black mb-2 opacity-50 uppercase tracking-[0.2em]" ] [ str ex.Name ]
-                                pre [ _class "bg-neutral text-neutral-content p-5 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-sm" ] [
-                                    code [ _class "language-fsharp" ] [ str ex.Content ]
-                                ]
-                            ]
-                        ) |> div [])
-                    ]
-                else emptyText)
-            ]
-        ]
+                    (if not memberModel.Examples.IsEmpty then
+                         div
+                             [ _class "not-prose" ]
+                             [ h4
+                                   [ _class
+                                         "text-[11px] font-black uppercase opacity-40 mb-4 tracking-widest flex items-center gap-2" ]
+                                   [ i [ _class "bi bi-play-circle-fill text-primary/60" ] []
+                                     str "Verification Examples" ]
+                               (memberModel.Examples
+                                |> List.map (fun ex ->
+                                    div
+                                        [ _class "mb-6" ]
+                                        [ if ex.Name <> "Example" then
+                                              p
+                                                  [ _class
+                                                        "text-[10px] font-black mb-2 opacity-50 uppercase tracking-[0.2em]" ]
+                                                  [ str ex.Name ]
+                                          pre
+                                              [ _class
+                                                    "bg-neutral text-neutral-content p-5 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-sm" ]
+                                              [ code [ _class "language-fsharp" ] [ str ex.Content ] ] ])
+                                |> div []) ]
+                     else
+                         emptyText) ] ]
 
-    let layout (pageTitle: string) (pages: ContentPage list) (package: PackageModel) (config: SiteConfig) (versions: string list) (theme: string) (rootPath: string) (content: XmlNode list) =
+    let apiCard package repoUrl memberModel =
+        apiCardCore (Presentation.renderDocumentationHtml package) repoUrl memberModel
+
+    let apiCardWithTargets package targets repoUrl memberModel =
+        apiCardCore (Presentation.renderDocumentationHtmlWithTargets package targets) repoUrl memberModel
+
+    let private layoutCore
+        (chrome: SiteChrome option)
+        (pageTitle: string)
+        (pages: ContentPage list)
+        (package: PackageModel)
+        (config: SiteConfig)
+        (versions: string list)
+        (theme: string)
+        (rootPath: string)
+        (content: XmlNode list)
+        =
         let safeRoot = Url.ensureTrailing rootPath
-        let homeHref = Url.resolve safeRoot "index.html"
-        let apiHref = Url.resolve safeRoot "api.html"
-        let siteName = config.SiteName |> Option.filter (not << String.IsNullOrWhiteSpace) |> Option.defaultValue "FsLiveDocs"
+
+        let homeTarget =
+            chrome
+            |> Option.map (fun value -> value.VersionPath + setRootTarget value.SetPath)
+            |> Option.defaultValue "index.html"
+
+        let apiTarget =
+            chrome
+            |> Option.map (fun value -> value.VersionPath + setApiTarget value.SetPath)
+            |> Option.defaultValue "api.html"
+
+        let homeHref = Url.resolve safeRoot homeTarget
+
+        let apiHref =
+            match chrome with
+            | Some value when not value.Api -> homeHref
+            | _ -> Url.resolve safeRoot apiTarget
+
+        let siteName =
+            config.SiteName
+            |> Option.filter (not << String.IsNullOrWhiteSpace)
+            |> Option.defaultValue "FsLiveDocs"
+
         let logoText =
             config.LogoText
             |> Option.filter (not << String.IsNullOrWhiteSpace)
@@ -432,24 +692,68 @@ module View =
         let navigation =
             config.Navigation
             |> Option.filter (not << List.isEmpty)
-            |> Option.defaultValue [ { Label = "Home"; Href = "index.html" }; { Label = "API"; Href = "api.html" } ]
+            |> Option.defaultValue (
+                match chrome with
+                | Some value when not value.Api -> [ { Label = "Home"; Href = homeTarget } ]
+                | Some _ -> [ { Label = "Home"; Href = homeTarget }; { Label = "API"; Href = apiTarget } ]
+                | None ->
+                    [ { Label = "Home"; Href = "index.html" }
+                      { Label = "API"; Href = "api.html" } ]
+            )
+
         let navigationHref href =
-            if Uri.IsWellFormedUriString(href, UriKind.Absolute) || href.StartsWith("#") then href
-            else Url.resolve safeRoot href
-        html [ _lang "en"; attr "data-theme" theme; _class "scroll-smooth" ] [
-            head [] [
-                meta [ _charset "utf-8" ]
-                meta [ _name "viewport"; _content "width=device-width, initial-scale=1" ]
-                link [ _rel "stylesheet"; _href "https://cdn.jsdelivr.net/npm/daisyui@4.10.2/dist/full.min.css" ]
-                script [ _src "https://cdn.tailwindcss.com?plugins=typography" ] []
-                link [ _rel "stylesheet"; _href "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" ]
-                link [ _rel "stylesheet"; _href "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" ]
-                link [ _rel "stylesheet"; _href (Url.resolve safeRoot "pagefind/pagefind-ui.css") ]
-                stylesheet
-                |> Option.map (fun href -> link [ _rel "stylesheet"; _href (navigationHref href) ])
-                |> Option.defaultValue emptyText
-                script [] [ rawText $"const allowedThemes = [{themesJavaScript}]; const storedTheme = localStorage.getItem('theme'); const theme = allowedThemes.includes(storedTheme) ? storedTheme : allowedThemes[0]; document.documentElement.setAttribute('data-theme', theme); if (storedTheme !== theme) localStorage.setItem('theme', theme);" ]
-                style [] [ rawText """
+            if Uri.IsWellFormedUriString(href, UriKind.Absolute) || href.StartsWith("#") then
+                href
+            else
+                let target =
+                    match chrome with
+                    | Some value ->
+                        let local = href.TrimStart('/')
+                        let local = if String.IsNullOrEmpty local then "index.html" else local
+                        value.VersionPath + local
+                    | None -> href
+                Url.resolve safeRoot target
+
+        html
+            ([ _lang "en"; attr "data-theme" theme; _class "scroll-smooth" ]
+             @ (chrome
+                |> Option.map (fun value ->
+                    [ attr "data-docs-set-id" value.SetId
+                      attr "data-docs-set-title" value.SetTitle ])
+                |> Option.defaultValue []))
+            [ head
+                  []
+                  [ meta [ _charset "utf-8" ]
+                    meta [ _name "viewport"; _content "width=device-width, initial-scale=1" ]
+                    match chrome with
+                    | Some value ->
+                        meta
+                            [ _name "livedocs:set"
+                              _content value.SetId
+                              attr "data-pagefind-filter" ("Documentation Set:" + value.SetTitle) ]
+                    | None -> emptyText
+                    link
+                        [ _rel "stylesheet"
+                          _href "https://cdn.jsdelivr.net/npm/daisyui@4.10.2/dist/full.min.css" ]
+                    script [ _src "https://cdn.tailwindcss.com?plugins=typography" ] []
+                    link
+                        [ _rel "stylesheet"
+                          _href "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" ]
+                    link
+                        [ _rel "stylesheet"
+                          _href "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" ]
+                    link [ _rel "stylesheet"; _href (Url.resolve safeRoot "pagefind/pagefind-ui.css") ]
+                    stylesheet
+                    |> Option.map (fun href -> link [ _rel "stylesheet"; _href (navigationHref href) ])
+                    |> Option.defaultValue emptyText
+                    script
+                        []
+                        [ rawText
+                              $"const allowedThemes = [{themesJavaScript}]; const storedTheme = localStorage.getItem('theme'); const theme = allowedThemes.includes(storedTheme) ? storedTheme : allowedThemes[0]; document.documentElement.setAttribute('data-theme', theme); if (storedTheme !== theme) localStorage.setItem('theme', theme);" ]
+                    style
+                        []
+                        [ rawText
+                              """
                     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Fira+Code:wght@400;700&display=swap');
                     body { font-family: 'Inter', sans-serif; }
                     .drawer-side::-webkit-scrollbar { width: 4px; }
@@ -710,99 +1014,228 @@ module View =
                     .fsdocs-tip-detail { margin-top: 0.4rem; line-height: 1.45; color: #dbeafe; }
                     .fsdocs-tip-detail strong { color: #f8fafc; }
                 """ ]
-                title [] [ str $"{pageTitle} - {siteName}" ]
-            ]
-            body [ _class "min-h-screen bg-base-200/30 flex flex-col" ] [
-                // Navbar
-                div [ _class "navbar bg-base-100 border-b border-base-300 sticky top-0 z-[100] h-20 shadow-sm px-4 md:px-8" ] [
-                    div [ _class "flex-none lg:hidden" ] [
-                        label [ _for "my-drawer-2"; _class "btn btn-square btn-ghost" ] [
-                            i [ _class "bi bi-list text-2xl" ] []
-                        ]
-                    ]
-                    div [ _class "flex-1" ] [
-                        a [ _href (Url.resolve safeRoot "index.html"); _class "flex items-center gap-3 no-underline group" ] [ 
-                            match logoPath with
-                            | Some path ->
-                                let lightAttributes =
-                                    [ _src (navigationHref path); _alt siteName; _class "site-logo-light h-14 w-auto max-w-52 object-contain" ]
-                                    @ (if logoDarkPath.IsSome then [ attr "data-theme-variant" "light" ] else [])
-                                yield img lightAttributes
-                                match logoDarkPath with
-                                | Some darkPath -> yield img [ _src (navigationHref darkPath); _alt siteName; attr "data-theme-variant" "dark"; _style "display: none;"; _class "site-logo-dark h-14 w-auto max-w-52 object-contain" ]
-                                | None -> ()
-                            | None ->
-                                yield div [ _class "bg-primary text-primary-content w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-xl shadow-primary/20 group-hover:rotate-12 transition-transform" ] [ str logoText ]
-                            if showSiteName then
-                                yield span [ _class "text-2xl font-black tracking-tighter" ] [ str siteName ]
-                        ]
-                    ]
-                    div [ _id "search-ui"; _class "hidden md:block not-prose" ] []
-                    div [ _class "flex-none hidden lg:flex" ] [
-                        ul [ _class "menu menu-horizontal px-1 gap-6" ] [
-                            yield! navigation |> List.map (fun item -> navItem item.Label (navigationHref item.Href))
-                            li [] [
-                                details [ _class "dropdown dropdown-end" ] [
-                                    summary [ _class "px-8 py-3 bg-base-200 hover:bg-base-300 rounded-2xl cursor-pointer transition-all font-black text-xs uppercase tracking-widest" ] [
-                                        str package.Version
-                                    ]
-                                    ul [ _class "p-3 bg-base-100 rounded-2xl shadow-2xl border border-base-300 w-56 mt-4" ] (
-                                        versions |> List.map (fun v ->
-                                            let target = if not versions.IsEmpty && v = versions.Head then "index.html" else "history/" + v + "/index.html"
-                                            li [] [ a [ _href (Url.resolve safeRoot target); _class "py-4 rounded-xl font-bold" ] [ str v ] ]
-                                        )
-                                    )
-                                ]
-                            ]
-                        ]
-                        div [ _class "divider divider-horizontal mx-6 opacity-30" ] []
-                        div [ _class "dropdown dropdown-end" ] [
-                            label [ attr "tabindex" "0"; _class "btn btn-ghost btn-md btn-circle bg-base-200 hover:bg-base-300 shadow-sm" ] [
-                                i [ _class "bi bi-palette-fill text-lg" ] []
-                            ]
-                            ul [ attr "tabindex" "0"; _class "dropdown-content z-[110] menu p-4 shadow-2xl bg-base-100 rounded-2xl w-64 mt-4 border border-base-300 grid grid-cols-2 gap-2" ] [
-                                themes
-                                |> List.map (fun t -> li [] [ a [ attr "data-set-theme" t; _class "text-[10px] font-black uppercase tracking-wider h-10 flex items-center justify-center rounded-xl hover:bg-base-200" ] [ str t ] ])
-                                |> div [ _class "contents" ]
-                            ]
-                        ]
-                    ]
-                ]
+                    title [] [ str $"{pageTitle} - {siteName}" ] ]
+              body
+                  [ _class "min-h-screen bg-base-200/30 flex flex-col" ]
+                  [
+                    // Navbar
+                    yield div
+                        [ _class
+                              "navbar bg-base-100 border-b border-base-300 sticky top-0 z-[100] h-20 shadow-sm px-4 md:px-8" ]
+                        [ div
+                              [ _class "flex-none lg:hidden" ]
+                              [ label
+                                    [ _for "my-drawer-2"; _class "btn btn-square btn-ghost" ]
+                                    [ i [ _class "bi bi-list text-2xl" ] [] ] ]
+                          div
+                              [ _class "flex-1" ]
+                              [ a
+                                    [ _href homeHref
+                                      _class "flex items-center gap-3 no-underline group" ]
+                                    [ match logoPath with
+                                      | Some path ->
+                                          let lightAttributes =
+                                              [ _src (navigationHref path)
+                                                _alt siteName
+                                                _class "site-logo-light h-14 w-auto max-w-52 object-contain" ]
+                                              @ (if logoDarkPath.IsSome then
+                                                     [ attr "data-theme-variant" "light" ]
+                                                 else
+                                                     [])
 
-                div [ _class "flex-1 flex" ] [
-                    div [ _class "drawer lg:drawer-open" ] [
-                        input [ _id "my-drawer-2"; _type "checkbox"; _class "drawer-toggle" ]
-                        div [ _class "drawer-content min-h-[calc(100vh-5rem)]" ] [
-                            div [ _class "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_14rem] gap-6 p-4 md:p-6 xl:p-8" ] [
-                                div [ _class "min-w-0" ] [
-                                    main [ _class "prose prose-base md:prose-lg max-w-none bg-base-100 p-6 md:p-8 rounded-xl shadow-xl shadow-base-300/30 border border-base-300 min-h-[85vh]" ] [
-                                            yield! content
-                                    ]
-                                ]
-                                aside [ _class "hidden xl:block sticky top-24 self-start h-[calc(100vh-7rem)] overflow-y-auto border-l border-base-300 bg-base-200/30" ] [
-                                    div [ _class "px-6 py-10" ] [
-                                        h4 [ _class "text-[10px] font-black uppercase mb-8 opacity-30 tracking-[0.3em]" ] [ str "On This Page" ]
-                                        ul [ _id "on-this-page"; _class "menu menu-sm opacity-80 border-l-4 border-primary/10 gap-3 ps-6" ] []
-                                    ]
-                                ]
-                            ]
-                        ] 
-                        div [ _class "drawer-side z-50 lg:fixed lg:top-20 lg:bottom-0 lg:h-[calc(100vh-5rem)]" ] [
-                            label [ _for "my-drawer-2"; _class "drawer-overlay" ] []
-                            div [ _class "bg-base-100 w-80 h-full border-r border-base-300 overflow-y-auto p-10 shadow-sm transition-all" ] [
-                                sidebar safeRoot pages package
-                            ]
-                        ]
-                    ]
-                ]
+                                          yield img lightAttributes
 
-                script [ _src (Url.resolve safeRoot "pagefind/pagefind-ui.js") ] []
-                script [] [ rawText "window.addEventListener('DOMContentLoaded', (event) => { if(typeof PagefindUI !== 'undefined') new PagefindUI({ element: '#search-ui', showSubResults: true }); });" ]
-                script [] [ rawText "window.Prism = window.Prism || {}; window.Prism.manual = true;" ]
-                script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" ] []
-                script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-fsharp.min.js" ] []
-                script [] [ rawText "const applySiteTheme = (theme) => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('theme', theme); document.querySelectorAll('[data-theme-variant]').forEach(el => { el.style.display = el.getAttribute('data-theme-variant') === theme ? 'block' : 'none'; }); }; window.addEventListener('DOMContentLoaded', () => applySiteTheme(document.documentElement.getAttribute('data-theme'))); document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => applySiteTheme(el.getAttribute('data-set-theme'))));" ]
-                script [] [ rawText """
+                                          match logoDarkPath with
+                                          | Some darkPath ->
+                                              yield
+                                                  img
+                                                      [ _src (navigationHref darkPath)
+                                                        _alt siteName
+                                                        attr "data-theme-variant" "dark"
+                                                        _style "display: none;"
+                                                        _class "site-logo-dark h-14 w-auto max-w-52 object-contain" ]
+                                          | None -> ()
+                                      | None ->
+                                          yield
+                                              div
+                                                  [ _class
+                                                        "bg-primary text-primary-content w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-xl shadow-primary/20 group-hover:rotate-12 transition-transform" ]
+                                                  [ str logoText ]
+                                      if showSiteName then
+                                          yield span [ _class "text-2xl font-black tracking-tighter" ] [ str siteName ] ] ]
+                          div [ _id "search-ui"; _class "hidden md:block not-prose" ] []
+                          div
+                              [ _class "flex-none hidden lg:flex" ]
+                              [ ul
+                                    [ _class "menu menu-horizontal px-1 gap-6" ]
+                                    [ yield!
+                                          navigation
+                                          |> List.map (fun item -> navItem item.Label (navigationHref item.Href))
+                                      match chrome with
+                                      | Some value when value.Sets.Length > 1 ->
+                                          li
+                                              []
+                                              [ details
+                                                    [ _class "dropdown dropdown-end" ]
+                                                    [ summary
+                                                          [ _class
+                                                                "px-5 py-3 bg-base-200 hover:bg-base-300 rounded-2xl cursor-pointer transition-all font-black text-xs uppercase tracking-widest" ]
+                                                          [ str value.SetTitle ]
+                                                      ul
+                                                          [ _class
+                                                                "p-3 bg-base-100 rounded-2xl shadow-2xl border border-base-300 w-64 mt-4" ]
+                                                          (value.Sets
+                                                           |> List.map (fun set ->
+                                                               li
+                                                                   []
+                                                                   [ a
+                                                                         [ _href (
+                                                                               Url.resolve
+                                                                                   safeRoot
+                                                                                   (value.VersionPath
+                                                                                    + setRootTarget set.Path)
+                                                                           )
+                                                                           attr "data-docs-set-link" set.Id
+                                                                           _class "py-4 rounded-xl font-bold" ]
+                                                                         [ str set.Title ] ])) ] ]
+                                      | _ -> ()
+                                      li
+                                          []
+                                          [ details
+                                                [ _class "dropdown dropdown-end" ]
+                                                [ summary
+                                                      [ _class
+                                                            "px-8 py-3 bg-base-200 hover:bg-base-300 rounded-2xl cursor-pointer transition-all font-black text-xs uppercase tracking-widest" ]
+                                                      [ str package.Version ]
+                                                  ul
+                                                      [ _class
+                                                            "p-3 bg-base-100 rounded-2xl shadow-2xl border border-base-300 w-56 mt-4" ]
+                                                      (versions
+                                                       |> List.map (fun v ->
+                                                           let target =
+                                                               chrome
+                                                               |> Option.bind (fun value ->
+                                                                   value.VersionTargets
+                                                                   |> List.tryFind (fst >> (=) v)
+                                                                   |> Option.map snd)
+                                                               |> Option.defaultWith (fun () ->
+                                                                   if not versions.IsEmpty && v = versions.Head then
+                                                                       "index.html"
+                                                                   else
+                                                                       "history/" + v + "/index.html")
+
+                                                           li
+                                                               []
+                                                               [ a
+                                                                     [ _href (Url.resolve safeRoot target)
+                                                                       _class "py-4 rounded-xl font-bold" ]
+                                                                     [ str v ] ])) ] ] ]
+                                div [ _class "divider divider-horizontal mx-6 opacity-30" ] []
+                                div
+                                    [ _class "dropdown dropdown-end" ]
+                                    [ label
+                                          [ attr "tabindex" "0"
+                                            _class
+                                                "btn btn-ghost btn-md btn-circle bg-base-200 hover:bg-base-300 shadow-sm" ]
+                                          [ i [ _class "bi bi-palette-fill text-lg" ] [] ]
+                                      ul
+                                          [ attr "tabindex" "0"
+                                            _class
+                                                "dropdown-content z-[110] menu p-4 shadow-2xl bg-base-100 rounded-2xl w-64 mt-4 border border-base-300 grid grid-cols-2 gap-2" ]
+                                          [ themes
+                                            |> List.map (fun t ->
+                                                li
+                                                    []
+                                                    [ a
+                                                          [ attr "data-set-theme" t
+                                                            _class
+                                                                "text-[10px] font-black uppercase tracking-wider h-10 flex items-center justify-center rounded-xl hover:bg-base-200" ]
+                                                          [ str t ] ])
+                                            |> div [ _class "contents" ] ] ] ] ]
+
+                    yield div
+                        [ _class "flex-1 flex" ]
+                        [ div
+                              [ _class (
+                                    match chrome with
+                                    | Some value when not value.Sidebar -> "drawer"
+                                    | _ -> "drawer lg:drawer-open"
+                                ) ]
+                              [ input [ _id "my-drawer-2"; _type "checkbox"; _class "drawer-toggle" ]
+                                div
+                                    [ _class "drawer-content min-h-[calc(100vh-5rem)]" ]
+                                    [ div
+                                          [ _class
+                                                "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_14rem] gap-6 p-4 md:p-6 xl:p-8" ]
+                                          [ div
+                                                [ _class "min-w-0" ]
+                                                [ main
+                                                      [ _class
+                                                            "prose prose-base md:prose-lg max-w-none bg-base-100 p-6 md:p-8 rounded-xl shadow-xl shadow-base-300/30 border border-base-300 min-h-[85vh]" ]
+                                                      [ match chrome with
+                                                        | Some value ->
+                                                            span
+                                                                [ _class "hidden"
+                                                                  attr
+                                                                      "data-pagefind-filter"
+                                                                      ("Documentation Set:" + value.SetTitle)
+                                                                  attr "data-pagefind-meta" ("docs-set:" + value.SetId) ]
+                                                                [ str value.SetTitle ]
+                                                        | None -> emptyText
+                                                        yield! content ] ]
+                                            aside
+                                                [ _class
+                                                      "hidden xl:block sticky top-24 self-start h-[calc(100vh-7rem)] overflow-y-auto border-l border-base-300 bg-base-200/30" ]
+                                                [ div
+                                                      [ _class "px-6 py-10" ]
+                                                      [ h4
+                                                            [ _class
+                                                                  "text-[10px] font-black uppercase mb-8 opacity-30 tracking-[0.3em]" ]
+                                                            [ str "On This Page" ]
+                                                        ul
+                                                            [ _id "on-this-page"
+                                                              _class
+                                                                  "menu menu-sm opacity-80 border-l-4 border-primary/10 gap-3 ps-6" ]
+                                                            [] ] ] ] ]
+                                match chrome with
+                                | Some value when value.Sidebar ->
+                                    div
+                                        [ _class
+                                              "drawer-side z-50 lg:fixed lg:top-20 lg:bottom-0 lg:h-[calc(100vh-5rem)]" ]
+                                        [ label [ _for "my-drawer-2"; _class "drawer-overlay" ] []
+                                          div
+                                              [ _class
+                                                    "bg-base-100 w-80 h-full border-r border-base-300 overflow-y-auto p-10 shadow-sm transition-all" ]
+                                              [ sidebarForSet safeRoot pages value.NavigationPackage value ] ]
+                                | Some _ -> emptyText
+                                | None ->
+                                    div
+                                        [ _class
+                                              "drawer-side z-50 lg:fixed lg:top-20 lg:bottom-0 lg:h-[calc(100vh-5rem)]" ]
+                                        [ label [ _for "my-drawer-2"; _class "drawer-overlay" ] []
+                                          div
+                                              [ _class
+                                                    "bg-base-100 w-80 h-full border-r border-base-300 overflow-y-auto p-10 shadow-sm transition-all" ]
+                                              [ sidebar safeRoot pages package ] ] ] ]
+
+                    yield script [ _src (Url.resolve safeRoot "pagefind/pagefind-ui.js") ] []
+                    yield script
+                        []
+                        [ rawText
+                              "window.addEventListener('DOMContentLoaded', (event) => { if(typeof PagefindUI !== 'undefined') new PagefindUI({ element: '#search-ui', showSubResults: true }); });" ]
+                    yield script [] [ rawText "window.Prism = window.Prism || {}; window.Prism.manual = true;" ]
+                    yield script [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" ] []
+                    yield script
+                        [ _src "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-fsharp.min.js" ]
+                        []
+                    yield script
+                        []
+                        [ rawText
+                              "const applySiteTheme = (theme) => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('theme', theme); document.querySelectorAll('[data-theme-variant]').forEach(el => { el.style.display = el.getAttribute('data-theme-variant') === theme ? 'block' : 'none'; }); }; window.addEventListener('DOMContentLoaded', () => applySiteTheme(document.documentElement.getAttribute('data-theme'))); document.querySelectorAll('[data-set-theme]').forEach(el => el.addEventListener('click', () => applySiteTheme(el.getAttribute('data-set-theme'))));" ]
+                    yield (script
+                        []
+                        [ rawText
+                              """
                     window.addEventListener('DOMContentLoaded', () => {
                         document.querySelectorAll('[data-fsdocs-tip]').forEach(trigger => {
                             const tooltip = document.getElementById(trigger.dataset.fsdocsTip);
@@ -833,8 +1266,8 @@ module View =
                             trigger.addEventListener('blur', hide);
                         });
                     });
-                """ ]
-                script [] [ rawText $"""
+                """ ])
+                    yield script [] [ rawText $"""
                     window.addEventListener('DOMContentLoaded', () => {{
                         const codeBlocks = Array.from(document.querySelectorAll('pre code'));
                         const escapeHtml = (text) => text
@@ -873,7 +1306,7 @@ module View =
                         }});
                     }});
                 """ ]
-                script [] [ rawText $"""
+                    yield script [] [ rawText $"""
                     window.addEventListener('DOMContentLoaded', () => {{
                         const normalizePagePath = (value) => {{
                             const decoded = decodeURIComponent(value).replace(/\\/g, '/');
@@ -948,8 +1381,8 @@ module View =
                         }});
                     }});
                 """ ]
-                // Dynamic On-This-Page Generator
-                script [] [ rawText """
+                    // Dynamic On-This-Page Generator
+                    yield script [] [ rawText """
                     window.addEventListener('DOMContentLoaded', () => {
                         const headings = Array.from(document.querySelectorAll('main h1, main h2, main h3')).filter(h => h.id !== 'search-ui' && !h.closest('.livedocs-rendered'));
                         const toc = document.getElementById('on-this-page');
@@ -980,6 +1413,12 @@ module View =
                             });
                         }
                     });
-                """ ]
-            ]
-        ]
+                """ ] ] ]
+
+    /// <summary>Legacy single-site layout.</summary>
+    let layout pageTitle pages package config versions theme rootPath content =
+        layoutCore None pageTitle pages package config versions theme rootPath content
+
+    /// <summary>Layout for one documentation set inside the shared site shell.</summary>
+    let layoutWithChrome chrome pageTitle pages package config versions theme rootPath content =
+        layoutCore (Some chrome) pageTitle pages package config versions theme rootPath content

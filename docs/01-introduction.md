@@ -43,6 +43,10 @@ The command creates:
 
 The command does not replace existing files. Project arguments passed to later commands override the configured list; without either, FsLiveDocs discovers projects for that run.
 
+For a repository with several documentation audiences, configure `docsSets` instead. Commands
+still operate on the whole site, using the union of every set's projects; see
+[Configure navigation and branding](guides/navigation.md#split-one-site-into-documentation-sets).
+
 ## Write the primary API pages
 
 Use Markdown under `docs/api/` for the main documentation of public namespaces, modules, and types. XML comments remain useful for concise member documentation and editor tooltips, but they do not need to carry an entire guide.

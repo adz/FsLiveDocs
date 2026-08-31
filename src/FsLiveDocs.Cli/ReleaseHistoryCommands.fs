@@ -215,6 +215,19 @@ module ReleaseHistoryCommands =
         if failures.Count > 0 then
             let detail = failures |> Seq.truncate 50 |> String.concat Environment.NewLine
             invalidOp $"Generated links do not resolve:{Environment.NewLine}{detail}"
+        let setLinks = Regex("<a[^>]*href=['\"]([^'\"]+)['\"][^>]*data-docs-set-link=['\"]([^'\"]+)['\"]", RegexOptions.Compiled ||| RegexOptions.IgnoreCase)
+        for entry in index.Entries do
+            let landingPath = entryPoint entry.Version
+            let landingRelative = Path.GetRelativePath(root, landingPath)
+            for found in setLinks.Matches(File.ReadAllText landingPath) do
+                let href = found.Groups[1].Value
+                let setId = found.Groups[2].Value
+                match localTarget root landingRelative href with
+                | Some target when File.Exists target ->
+                    let identity = $"data-docs-set-id=\"{setId}\""
+                    if not (File.ReadAllText(target).Contains(identity, StringComparison.Ordinal)) then
+                        invalidOp $"Documentation-set entry point for {setId} in {entry.Version} has the wrong set identity: {target}"
+                | _ -> invalidOp $"Documentation-set entry point for {setId} in {entry.Version} is missing: {href}"
         let landing = File.ReadAllText(entryPoint index.CurrentVersion)
         let positions = index.Entries |> List.map (fun entry -> landing.IndexOf($">{entry.Version}<", StringComparison.Ordinal))
         if positions |> List.exists (fun position -> position < 0) || positions <> List.sort positions then

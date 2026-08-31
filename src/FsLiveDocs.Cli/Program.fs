@@ -15,6 +15,21 @@ open Microsoft.Extensions.Logging
 
 module Program =
 
+    let private configuredDocsSets projectPaths =
+        Workspace.loadDocsSetConfigs ()
+        |> Option.map (fun configured ->
+            let site = Workspace.loadSiteConfig ()
+            DocsSet.resolve site.SiteName projectPaths site.FSharpPrelude (Some configured))
+
+    let private documentationPages projectPaths package =
+        match configuredDocsSets projectPaths with
+        | Some sets -> DocAnalysis.pagesForDocsSets sets projectPaths package
+        | None ->
+            let prelude = Workspace.loadSiteConfig().FSharpPrelude |> Option.defaultValue ""
+
+            DocAnalysis.pages projectPaths package
+            |> List.map (fun page -> { page with Prelude = prelude })
+
     let private resolveProjects command projectPaths =
         Workspace.resolveProjects
             (fun count -> AnsiConsole.MarkupLine($"[grey]Discovered {count} project(s). Pass paths explicitly, or run 'livedocs init --discover-projects' to record the selection.[/]"))
@@ -96,11 +111,18 @@ module Program =
 
     let private analyzeDocumentationWithProgress reportProgress projectPaths projectFingerprint package =
         let prelude = Workspace.loadSiteConfig().FSharpPrelude |> Option.defaultValue ""
-        DocAnalysis.analyzeWithProgress reportProgress prelude projectPaths projectFingerprint package
+
+        match configuredDocsSets projectPaths with
+        | Some sets ->
+            DocAnalysis.analyzeDocsSetsWithProgress reportProgress sets projectPaths projectFingerprint package
+        | None -> DocAnalysis.analyzeWithProgress reportProgress prelude projectPaths projectFingerprint package
 
     let private analyzeDocumentation projectPaths projectFingerprint package =
         let prelude = Workspace.loadSiteConfig().FSharpPrelude |> Option.defaultValue ""
-        DocAnalysis.analyze prelude projectPaths projectFingerprint package
+
+        match configuredDocsSets projectPaths with
+        | Some sets -> DocAnalysis.analyzeDocsSets sets projectPaths projectFingerprint package
+        | None -> DocAnalysis.analyze prelude projectPaths projectFingerprint package
 
     let private printAudit showSuccess (analysis: DocAnalysis.Analysis) =
         let diagnosticsByBlock =
@@ -163,18 +185,20 @@ module Program =
 
     let captureAction warnAsError dryRun projectPaths version output =
         let result =
-            ReleaseCapture.capture {
-                ProjectPaths = projectPaths
-                Version = version
-                OutputPath = output
-                DryRun = dryRun
-                WarnAsError = warnAsError
-                Site = Workspace.loadSiteConfig()
-                ToolVersion = Reflection.Assembly.GetExecutingAssembly().GetName().Version |> string
-                ReportProgress = (fun _ _ _ -> ())
-                ReportAudit = (fun analysis -> printAudit true analysis |> ignore)
-                ReportApiDiagnostics = (fun treatAsError diagnostics -> printApiDiagnostics treatAsError diagnostics |> ignore)
-            }
+            ReleaseCapture.capture
+                { ProjectPaths = projectPaths
+                  Version = version
+                  OutputPath = output
+                  DryRun = dryRun
+                  WarnAsError = warnAsError
+                  Site = Workspace.loadSiteConfig ()
+                  DocsSets = configuredDocsSets projectPaths
+                  ToolVersion = Reflection.Assembly.GetExecutingAssembly().GetName().Version |> string
+                  ReportProgress = (fun _ _ _ -> ())
+                  ReportAudit = (fun analysis -> printAudit true analysis |> ignore)
+                  ReportApiDiagnostics =
+                    (fun treatAsError diagnostics -> printApiDiagnostics treatAsError diagnostics |> ignore) }
+
         let report = result.Report
         if result.DryRun then
             AnsiConsole.MarkupLine("[green]✔ Release capture dry run complete.[/]")
@@ -298,21 +322,22 @@ module Program =
 
             let package, _ = getUnifiedPackage resolvedProjects |> Async.RunSynchronously
             let documentationCases =
-                [ for page in DocAnalysis.pages resolvedProjects package do
-                    let externallyExecuted =
-                        page.Blocks
-                        |> List.choose (fun block ->
-                            match block.Mode, block.Origin with
-                            | (Run | Transcript), XmlExample -> Some block.Id
-                            | _ -> None)
-                        |> Set.ofList
-                    yield!
-                        DocumentationDiscovery.generatedCases
-                            page.SelectedProject
-                            ""
-                            page.Relative
-                            page.Expanded
-                            externallyExecuted ]
+                [ for page in documentationPages resolvedProjects package do
+                      let externallyExecuted =
+                          page.Blocks
+                          |> List.choose (fun block ->
+                              match block.Mode, block.Origin with
+                              | (Run | Transcript), XmlExample -> Some block.Id
+                              | _ -> None)
+                          |> Set.ofList
+
+                      yield!
+                          DocumentationDiscovery.generatedCases
+                              page.SelectedProject
+                              page.Prelude
+                              page.Relative
+                              page.Expanded
+                              externallyExecuted ]
 
             let documentationTestBodies =
                 documentationCases
@@ -357,20 +382,59 @@ module Program =
             reportStage "Rendering documentation site"
             let sourceDir = Directory.GetCurrentDirectory()
             let semanticCode =
-                {
-                    SemanticCode.defaults with
-                        Artifact = Some semanticArtifact
-                        Prelude = prelude
-                }
-            let package = ContentProvider.applyApiDocsWithOptions "docs" sourceDir packageRaw semanticCode
-            let pages = ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
-            let config = Workspace.loadSiteConfig()
+                { SemanticCode.defaults with
+                    Artifact = Some semanticArtifact
+                    Prelude = prelude }
+
+            let config = Workspace.loadSiteConfig ()
 
             let historyDir = ".livedocs/history"
             if not (Directory.Exists(historyDir)) then Directory.CreateDirectory(historyDir) |> ignore
 
-            SiteBuilder.buildAll historyDir package pages config theme "output"
-            ContentProvider.copyStaticFiles "docs" "output"
+            match configuredDocsSets projectPaths with
+            | Some sets ->
+                let prepared = DocumentationSets.prepareCurrent sets packageRaw semanticArtifact ""
+
+                let current: SiteBuilder.DocsSetVersionSite =
+                    { Version = packageRaw.Version
+                      Package = packageRaw
+                      Sets = prepared.Sites
+                      StaticRoot = None
+                      UsesDocumentationSets = true }
+
+                let historical =
+                    Directory.GetFiles(historyDir, "*.json")
+                    |> Array.toList
+                    |> List.map (fun path ->
+                        let historicalPackage =
+                            Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(
+                                File.ReadAllText path,
+                                Serialization.jsonSettings
+                            )
+
+                        let historicalPrepared =
+                            DocumentationSets.prepareCurrent sets historicalPackage semanticArtifact ""
+
+                        ({ Version = Path.GetFileNameWithoutExtension path
+                           Package = historicalPackage
+                           Sets = historicalPrepared.Sites
+                           StaticRoot = None
+                           UsesDocumentationSets = true }
+                        : SiteBuilder.DocsSetVersionSite))
+
+                SiteBuilder.buildDocsSetsHistory packageRaw.Version (current :: historical) config theme "output"
+
+                for source, prefix, files in prepared.StaticFiles do
+                    ContentProvider.copyStaticFilesForSet source prefix files "output"
+            | None ->
+                let package =
+                    ContentProvider.applyApiDocsWithOptions "docs" sourceDir packageRaw semanticCode
+
+                let pages =
+                    ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
+
+                SiteBuilder.buildAll historyDir package pages config theme "output"
+                ContentProvider.copyStaticFiles "docs" "output"
 
             reportStage "Building search index"
             let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
@@ -490,20 +554,54 @@ module Program =
                     |> List.map (fun entry ->
                         let capsulePath = ReleaseCapsule.acquireWithRetries retryAttempts indexRoot (Path.GetFullPath(".livedocs/releases")) entry
                         let docsDir = Path.Combine(temporaryRoot, entry.Version, "docs")
-                        let packageRaw, semanticArtifact, site = ReleaseCapsule.materializeContent capsulePath docsDir
+
+                        let packageRaw, semanticArtifact, content =
+                            ReleaseCapsule.materializeContentWithSets capsulePath docsDir
+
                         if packageRaw.Version <> entry.Version then
-                            invalidOp $"Release capsule version mismatch: expected {entry.Version}, got {packageRaw.Version}."
-                        let semanticCode = { SemanticCode.defaults with Artifact = Some semanticArtifact; Prelude = semanticArtifact.Prelude }
-                        let package = ContentProvider.applyApiDocsWithOptions docsDir docsDir packageRaw semanticCode
-                        let rootPath = if entry.Version = index.CurrentVersion then "" else "../../"
-                        let pages = ContentProvider.scanDocsWithOptions docsDir docsDir package rootPath semanticCode
-                        entry.Version, package, pages, docsDir, site)
+                            invalidOp
+                                $"Release capsule version mismatch: expected {entry.Version}, got {packageRaw.Version}."
+
+                        // Authored and API links are relative to each version's own output root.
+                        // SiteBuilder separately supplies the path back to shared site assets and
+                        // the version switcher; using that path here would point old pages at latest.
+                        let contentRootPath = ""
+
+                        let sites =
+                            if content.UsesDocumentationSets then
+                                (DocumentationSets.prepareCaptured docsDir content packageRaw semanticArtifact "")
+                                    .Sites
+                            else
+                                let semanticCode =
+                                    { SemanticCode.defaults with
+                                        Artifact = Some semanticArtifact
+                                        Prelude = semanticArtifact.Prelude }
+
+                                let package =
+                                    ContentProvider.applyApiDocsWithOptions docsDir docsDir packageRaw semanticCode
+
+                                let pages =
+                                    ContentProvider.scanDocsWithOptions docsDir docsDir package contentRootPath semanticCode
+
+                                [ { Set = content.DocsSets.Head
+                                    Package = package
+                                    Pages = pages } ]
+
+                        ({ Version = entry.Version
+                           Package = packageRaw
+                           Sets = sites
+                           StaticRoot = Some docsDir
+                           UsesDocumentationSets = content.UsesDocumentationSets }
+                        : SiteBuilder.DocsSetVersionSite),
+                        content.Site)
+
                 let config =
                     loaded
-                    |> List.find (fun (version, _, _, _, _) -> version = index.CurrentVersion)
-                    |> fun (_, _, _, _, site) -> site
-                let sites = loaded |> List.map (fun (version, package, pages, docsDir, _) -> version, package, pages, docsDir)
-                SiteBuilder.buildHistory index.CurrentVersion sites config theme outputDir
+                    |> List.find (fun (site, _) -> site.Version = index.CurrentVersion)
+                    |> snd
+
+                let sites = loaded |> List.map fst
+                SiteBuilder.buildDocsSetsHistory index.CurrentVersion sites config theme outputDir
             finally
                 if Directory.Exists temporaryRoot then Directory.Delete(temporaryRoot, true)
         else
@@ -524,8 +622,9 @@ module Program =
                             { SemanticCode.defaults with Artifact = Some artifact; Prelude = artifact.Prelude }
                         | _ -> SemanticCode.disabled
                     let package = ContentProvider.applyApiDocsWithOptions docsDir sourceDir packageRaw semanticCode
-                    let rootPath = if entry.Version = manifest.CurrentVersion then "" else "../../"
-                    let pages = ContentProvider.scanDocsWithOptions docsDir sourceDir package rootPath semanticCode
+                    // Guide and API links stay inside the version being rendered. SiteBuilder owns
+                    // the separate relative path used for shared shell/version navigation.
+                    let pages = ContentProvider.scanDocsWithOptions docsDir sourceDir package "" semanticCode
                     entry.Version, package, pages, docsDir)
 
             SiteBuilder.buildHistory manifest.CurrentVersion sites config theme outputDir
@@ -784,7 +883,8 @@ module Program =
                     // the generated cases; running them here is what makes this command a real
                     // alternative to generating a test project rather than a subset of one.
                     let package, _ = getUnifiedPackage projectPaths |> Async.RunSynchronously
-                    for page in DocAnalysis.pages projectPaths package do
+
+                    for page in documentationPages projectPaths package do
                         let externallyExecuted =
                             page.Blocks
                             |> List.choose (fun block ->
@@ -794,7 +894,12 @@ module Program =
                             |> Set.ofList
                         let cases =
                             DocumentationDiscovery.generatedCases
-                                page.SelectedProject "" page.Relative page.Expanded externallyExecuted
+                                page.SelectedProject
+                                page.Prelude
+                                page.Relative
+                                page.Expanded
+                                externallyExecuted
+
                         for case in cases do
                             match case.Action with
                             | ExecuteBlock _ | ExecuteTranscriptBlock _ ->

@@ -15,11 +15,123 @@ module ReleaseCapsule =
     [<Literal>]
     let ManifestSchemaVersion = 1
 
+    /// Schema 2 adds per-page documentation-set identity and the resolved <see cref="ReleaseDocsSet"/> list.
+    /// Schema 1 capsules are migrated deterministically to a single implicit default set.
     [<Literal>]
-    let ContentSchemaVersion = 1
+    let ContentSchemaVersion = 2
+
+    /// Content schema versions this renderer reads. Older versions are migrated; unknown versions are rejected.
+    let supportedContentSchemaVersions = set [ 1; 2 ]
 
     [<Literal>]
     let HistoryIndexSchemaVersion = 1
+
+    /// The renderer-neutral content artifact exactly as schema 1 persisted it, kept for migration only.
+    module private LegacyContent =
+
+        [<CLIMutable>]
+        type ContentPageV1 =
+            { SourcePath: string
+              Metadata: ContentMetadata
+              Markdown: string }
+
+        [<CLIMutable>]
+        type ContentArtifactV1 =
+            { SchemaVersion: int
+              Pages: ContentPageV1 list
+              Assets: ReleaseAsset list
+              Site: SiteConfig }
+
+        let deserialize (bytes: byte array) =
+            let root = Newtonsoft.Json.Linq.JObject.Parse(Encoding.UTF8.GetString bytes)
+
+            let required (objectValue: Newtonsoft.Json.Linq.JObject) name =
+                match objectValue.GetValue(name, StringComparison.OrdinalIgnoreCase) with
+                | null -> invalidOp $"Content schema 1 is missing required field {name}."
+                | value -> value
+
+            let serializer = JsonSerializer.Create(Serialization.jsonSettings)
+            let schema = required root "SchemaVersion" |> fun token -> token.ToObject<int>()
+
+            if schema <> 1 then
+                invalidOp $"Content schema 1 payload declares schema {schema}."
+
+            let pages =
+                match required root "Pages" with
+                | :? Newtonsoft.Json.Linq.JArray as values ->
+                    values
+                    |> Seq.map (fun token ->
+                        let page = token :?> Newtonsoft.Json.Linq.JObject
+
+                        { SourcePath = required page "SourcePath" |> fun value -> value.ToObject<string>()
+                          Metadata =
+                            required page "Metadata"
+                            |> fun value -> value.ToObject<ContentMetadata>(serializer)
+                          Markdown = required page "Markdown" |> fun value -> value.ToObject<string>() })
+                    |> Seq.toList
+                | _ -> invalidOp "Content schema 1 Pages must be an array."
+
+            let assets =
+                required root "Assets"
+                |> fun value -> value.ToObject<ReleaseAsset list>(serializer)
+
+            let site =
+                required root "Site" |> fun value -> value.ToObject<SiteConfig>(serializer)
+
+            if isNull (box site) then
+                invalidOp "Content schema 1 contains an invalid Site object."
+
+            { SchemaVersion = schema
+              Pages = if isNull (box pages) then [] else pages
+              Assets = if isNull (box assets) then [] else assets
+              Site = site }
+
+        /// Deterministically lifts a schema-1 content artifact to schema 2: one implicit default
+        /// set rooted at the site, owning every page and the whole API surface.
+        let migrate
+            (semanticPrelude: string)
+            (api: ApiModelArtifact)
+            (legacy: ContentArtifactV1)
+            : ReleaseContentArtifact =
+            let rec entityIds (entities: EntityModel list) =
+                entities |> List.collect (fun entity -> entity.Id :: entityIds entity.Entities)
+
+            let defaultSet: ReleaseDocsSet =
+                { Id = DocsSet.DefaultId
+                  Title =
+                    legacy.Site.SiteName
+                    |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+                    |> Option.defaultValue "Documentation"
+                  Source = "docs"
+                  Path = ""
+                  Projects =
+                    (if isNull (box api.Package.Packages) then
+                         []
+                     else
+                         api.Package.Packages)
+                    |> List.map _.Name
+                  IsDefault = true
+                  Sidebar = true
+                  Api = true
+                  ApiEntityIds = entityIds api.Package.Entities
+                  FSharpPrelude =
+                    if System.String.IsNullOrWhiteSpace semanticPrelude then
+                        None
+                    else
+                        Some semanticPrelude }
+
+            { SchemaVersion = ContentSchemaVersion
+              UsesDocumentationSets = false
+              Pages =
+                legacy.Pages
+                |> List.map (fun page ->
+                    { SourcePath = page.SourcePath
+                      SetId = DocsSet.DefaultId
+                      Metadata = page.Metadata
+                      Markdown = page.Markdown })
+              Assets = legacy.Assets
+              Site = legacy.Site
+              DocsSets = [ defaultSet ] }
 
     let private archiveTimestamp = DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let private maximumEntryCount = 10_000
@@ -139,9 +251,82 @@ module ReleaseCapsule =
                     invalidOp $"Release semantic block {block.Id} contains invalid tooltip index {index}."
                 | _ -> ()
 
+    let private validateDocsSets (content: ReleaseContentArtifact) =
+        let sets = content.DocsSets
+
+        if sets.IsEmpty then
+            invalidOp "Release content artifact declares no documentation sets."
+
+        if not content.UsesDocumentationSets && sets.Length <> 1 then
+            invalidOp "A legacy-layout release content artifact must declare exactly one implicit documentation set."
+
+        match sets |> List.countBy _.Id |> List.tryFind (fun (_, count) -> count > 1) with
+        | Some(id, _) -> invalidOp $"Release content artifact contains duplicate documentation set id {id}."
+        | None -> ()
+
+        match sets |> List.countBy _.Path |> List.tryFind (fun (_, count) -> count > 1) with
+        | Some(path, _) ->
+            let label = if path = "" then "the site root" else path
+            invalidOp $"Two captured documentation sets resolve to {label}."
+        | None -> ()
+
+        match sets |> List.filter _.IsDefault with
+        | [ _ ] -> ()
+        | other ->
+            invalidOp
+                $"Release content artifact must declare exactly one default documentation set; found {other.Length}."
+
+        for set in sets do
+            if String.IsNullOrWhiteSpace set.Id then
+                invalidOp "Release content artifact contains a documentation set without an id."
+
+            normalizedEntryPath set.Source |> ignore
+
+            if not set.IsDefault && String.IsNullOrWhiteSpace set.Path then
+                invalidOp $"Non-default documentation set {set.Id} has no route."
+
+            if not (String.IsNullOrWhiteSpace set.Path) then
+                normalizedEntryPath set.Path |> ignore
+
+            match
+                set.ApiEntityIds
+                |> List.countBy id
+                |> List.tryFind (fun (_, count) -> count > 1)
+            with
+            | Some(id, _) -> invalidOp $"Documentation set {set.Id} contains duplicate API entity id {id}."
+            | None -> ()
+
+        let knownSetIds = sets |> List.map _.Id |> Set.ofList
+
+        match
+            content.Pages
+            |> List.tryFind (fun page -> not (knownSetIds.Contains page.SetId))
+        with
+        | Some page -> invalidOp $"Release page {page.SourcePath} belongs to unknown documentation set {page.SetId}."
+        | None -> ()
+
+        let prefixes =
+            sets
+            |> List.map (fun set -> set.Id, (if set.Path = "" then "" else set.Path.Trim('/') + "/"))
+            |> Map.ofList
+
+        match
+            content.Pages
+            |> List.countBy (fun page -> prefixes.[page.SetId] + page.SourcePath)
+            |> List.tryFind (fun (_, count) -> count > 1)
+        with
+        | Some(path, _) -> invalidOp $"Captured documentation pages collide when materialized at {path}."
+        | None -> ()
+
     let private validateContent (content: ReleaseContentArtifact) =
-        match content.Pages |> List.countBy _.SourcePath |> List.tryFind (fun (_, count) -> count > 1) with
-        | Some (path, _) -> invalidOp $"Release content artifact contains duplicate page {path}."
+        validateDocsSets content
+        // Set identity is part of a page's key: two sets may each legitimately own an "index.md".
+        match
+            content.Pages
+            |> List.countBy (fun page -> page.SetId, page.SourcePath)
+            |> List.tryFind (fun (_, count) -> count > 1)
+        with
+        | Some((setId, path), _) -> invalidOp $"Release content artifact contains duplicate page {path} in set {setId}."
         | None -> ()
         content.Pages |> List.iter (fun page -> normalizedEntryPath page.SourcePath |> ignore)
         match content.Assets |> List.countBy _.Path |> List.tryFind (fun (_, count) -> count > 1) with
@@ -151,8 +336,18 @@ module ReleaseCapsule =
             normalizedEntryPath asset.Path |> ignore
             if String.IsNullOrWhiteSpace asset.MediaType then invalidOp $"Release asset {asset.Path} has no media type."
 
-    /// Creates a complete capsule without overwriting an existing release.
-    let create path sourceRevision captureToolVersion (api: ApiModelArtifact) (semantic: SemanticDocumentationArtifact) site pages assets =
+    let private createCore
+        usesDocumentationSets
+        path
+        sourceRevision
+        captureToolVersion
+        (api: ApiModelArtifact)
+        (semantic: SemanticDocumentationArtifact)
+        site
+        (docsSets: ReleaseDocsSet list)
+        pages
+        assets
+        =
         let fullPath = Path.GetFullPath path
         if File.Exists fullPath then invalidOp $"Release capsule already exists: {fullPath}"
         let directory = Path.GetDirectoryName fullPath
@@ -167,15 +362,22 @@ module ReleaseCapsule =
 
         let apiBytes = serialize api
         let semanticBytes = serialize semantic
-        let content : ReleaseContentArtifact =
-            {
-                SchemaVersion = ContentSchemaVersion
-                Pages = pages |> List.sortBy _.SourcePath
-                Assets =
-                    normalizedAssets
-                    |> List.map (fun (path, bytes) -> { Path = path; MediaType = mediaType path; Sha256 = sha256Bytes bytes; Size = int64 bytes.LongLength })
-                Site = site
-            }
+
+        let content: ReleaseContentArtifact =
+            { SchemaVersion = ContentSchemaVersion
+              UsesDocumentationSets = usesDocumentationSets
+              Pages = pages |> List.sortBy (fun page -> page.SetId, page.SourcePath)
+              Assets =
+                normalizedAssets
+                |> List.map (fun (path, bytes) ->
+                    { Path = path
+                      MediaType = mediaType path
+                      Sha256 = sha256Bytes bytes
+                      Size = int64 bytes.LongLength })
+              Site = site
+              // Configuration order drives the set switcher and is itself deterministic input.
+              DocsSets = docsSets }
+
         validateApi api
         validateSemantic semantic
         validateContent content
@@ -212,6 +414,60 @@ module ReleaseCapsule =
             Manifest = manifest
             Counts = captureCounts api semantic content
         }
+
+    /// Creates a complete multi-set capsule without overwriting an existing release.
+    let createWithDocsSets path sourceRevision captureToolVersion api semantic site docsSets pages assets =
+        createCore true path sourceRevision captureToolVersion api semantic site docsSets pages assets
+
+    /// Creates a complete legacy single-set capsule. Kept source-compatible for callers that
+    /// predate documentation sets; new capture code should call <see cref="createWithDocsSets"/>.
+    let create
+        path
+        sourceRevision
+        captureToolVersion
+        (api: ApiModelArtifact)
+        (semantic: SemanticDocumentationArtifact)
+        site
+        pages
+        assets
+        =
+        let rec entityIds (entities: EntityModel list) =
+            entities
+            |> List.collect (fun (entity: EntityModel) -> entity.Id :: entityIds entity.Entities)
+
+        let implicitSet: ReleaseDocsSet =
+            { Id = DocsSet.DefaultId
+              Title =
+                site.SiteName
+                |> Option.filter (String.IsNullOrWhiteSpace >> not)
+                |> Option.defaultValue "Documentation"
+              Source = "docs"
+              Path = ""
+              Projects =
+                (if isNull (box api.Package.Packages) then
+                     []
+                 else
+                     api.Package.Packages)
+                |> List.map _.Name
+              IsDefault = true
+              Sidebar = true
+              Api = true
+              ApiEntityIds = entityIds api.Package.Entities
+              FSharpPrelude =
+                if String.IsNullOrWhiteSpace semantic.Prelude then
+                    None
+                else
+                    Some semantic.Prelude }
+
+        let identifiedPages =
+            pages
+            |> List.map (fun (page: ReleaseContentPage) ->
+                if String.IsNullOrWhiteSpace page.SetId then
+                    { page with SetId = DocsSet.DefaultId }
+                else
+                    page)
+
+        createCore false path sourceRevision captureToolVersion api semantic site [ implicitSet ] identifiedPages assets
 
     let private readEntries path =
         use archive = ZipFile.OpenRead path
@@ -260,11 +516,54 @@ module ReleaseCapsule =
             let actual = if isNull (box manifest) then 0 else manifest.SchemaVersion
             invalidOp $"Unsupported release capsule manifest schema {actual}; expected {ManifestSchemaVersion}."
         let api = verifyComponent manifest.Api entries |> deserialize<ApiModelArtifact>
-        let semantic = verifyComponent manifest.Semantic entries |> deserialize<SemanticDocumentationArtifact>
-        let content = verifyComponent manifest.Content entries |> deserialize<ReleaseContentArtifact>
-        if api.SchemaVersion <> History.ApiModelSchemaVersion then invalidOp $"Unsupported API model schema {api.SchemaVersion}; expected {History.ApiModelSchemaVersion}."
-        if semantic.SchemaVersion <> History.SemanticSchemaVersion then invalidOp $"Unsupported semantic schema {semantic.SchemaVersion}; expected {History.SemanticSchemaVersion}."
-        if content.SchemaVersion <> ContentSchemaVersion then invalidOp $"Unsupported content schema {content.SchemaVersion}; expected {ContentSchemaVersion}."
+
+        let semantic =
+            verifyComponent manifest.Semantic entries
+            |> deserialize<SemanticDocumentationArtifact>
+
+        let contentBytes = verifyComponent manifest.Content entries
+        // The manifest records the exact persisted content contract. Deserialize against that
+        // version's shape, then migrate supported older versions with a small deterministic step.
+        let content =
+            match manifest.Content.SchemaVersion with
+            | 2 -> deserialize<ReleaseContentArtifact> contentBytes
+            | 1 -> LegacyContent.migrate semantic.Prelude api (LegacyContent.deserialize contentBytes)
+            | other ->
+                let supported =
+                    supportedContentSchemaVersions
+                    |> Set.toList
+                    |> List.map string
+                    |> String.concat ", "
+
+                invalidOp $"Unsupported content schema {other}; supported versions are {supported}."
+
+        if api.SchemaVersion <> History.ApiModelSchemaVersion then
+            invalidOp $"Unsupported API model schema {api.SchemaVersion}; expected {History.ApiModelSchemaVersion}."
+
+        if semantic.SchemaVersion <> History.SemanticSchemaVersion then
+            invalidOp $"Unsupported semantic schema {semantic.SchemaVersion}; expected {History.SemanticSchemaVersion}."
+
+        if not (supportedContentSchemaVersions.Contains manifest.Content.SchemaVersion) then
+            invalidOp $"Unsupported content schema {manifest.Content.SchemaVersion}."
+
+        if content.SchemaVersion <> ContentSchemaVersion then
+            invalidOp $"Content schema migration produced {content.SchemaVersion}; expected {ContentSchemaVersion}."
+
+        let knownEntities =
+            let rec ids entities =
+                entities
+                |> List.collect (fun (entity: EntityModel) -> entity.Id :: ids entity.Entities)
+
+            ids api.Package.Entities |> Set.ofList
+
+        match
+            content.DocsSets
+            |> List.collect _.ApiEntityIds
+            |> List.tryFind (knownEntities.Contains >> not)
+        with
+        | Some id -> invalidOp $"Release documentation set exposes unknown API entity {id}."
+        | None -> ()
+
         validateApi api
         validateSemantic semantic
         validateContent content
@@ -305,25 +604,54 @@ module ReleaseCapsule =
         settings
 
     /// Materializes renderer-neutral content under a validated destination.
-    let materializeContent path destination =
+    /// Pages and assets are laid out under each set's route prefix, so a history render can scan
+    /// one tree and recover the same source paths the semantic artifact was keyed by.
+    let materializeContentWithSets path destination =
         let _, api, semantic, content, entries = load path
         let root = Path.GetFullPath destination
         Directory.CreateDirectory root |> ignore
-        for page in content.Pages do
-            let relative = normalizedEntryPath page.SourcePath
-            if not (relative.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) then invalidOp $"Release page is not Markdown: {relative}"
+
+        let routePrefixById =
+            content.DocsSets
+            |> List.map (fun set -> set.Id, (if set.Path = "" then "" else set.Path.Trim('/') + "/"))
+            |> Map.ofList
+
+        let safeCombine (relative: string) =
             let output = Path.GetFullPath(Path.Combine(root, relative))
-            if not (output.StartsWith(root + string Path.DirectorySeparatorChar, StringComparison.Ordinal)) then invalidOp $"Unsafe release page path: {relative}"
+
+            if
+                output <> root
+                && not (output.StartsWith(root + string Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            then
+                invalidOp $"Unsafe release path: {relative}"
+
+            output
+
+        for page in content.Pages do
+            let sourceRelative = normalizedEntryPath page.SourcePath
+
+            if not (sourceRelative.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) then
+                invalidOp $"Release page is not Markdown: {sourceRelative}"
+
+            let routePrefix =
+                routePrefixById |> Map.tryFind page.SetId |> Option.defaultValue ""
+
+            let output = safeCombine (routePrefix + sourceRelative)
             Directory.CreateDirectory(Path.GetDirectoryName output) |> ignore
             let frontMatter = JsonConvert.SerializeObject(page.Metadata, Formatting.Indented, frontMatterSettings)
             File.WriteAllText(output, "---\n" + frontMatter + "\n---\n" + page.Markdown)
         for asset in content.Assets do
             let relative = normalizedEntryPath asset.Path
-            let output = Path.GetFullPath(Path.Combine(root, relative))
-            if not (output.StartsWith(root + string Path.DirectorySeparatorChar, StringComparison.Ordinal)) then invalidOp $"Unsafe release asset path: {relative}"
+            let output = safeCombine relative
             Directory.CreateDirectory(Path.GetDirectoryName output) |> ignore
             File.WriteAllBytes(output, required ("assets/" + relative) entries)
-        api.Package, semantic, content.Site
+
+        api.Package, semantic, content
+
+    /// Materializes content using the legacy single-set return shape.
+    let materializeContent path destination =
+        let package, semantic, content = materializeContentWithSets path destination
+        package, semantic, content.Site
 
     let private parseVersion (value: string) =
         let invalid () = invalidOp $"Release version '{value}' is not a semantic version."

@@ -19,6 +19,7 @@
     <Compile Include="HistoryModel.fs" />
     <Compile Include="RunnerModel.fs" />
     <Compile Include="SiteModel.fs" />
+    <Compile Include="DocsSetModel.fs" />
     <Compile Include="ReleaseModel.fs" />
     <Compile Include="Serialization.fs" />
     <Compile Include="History.fs" />

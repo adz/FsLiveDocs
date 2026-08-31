@@ -21,13 +21,19 @@ module Presentation =
         let signature = withoutPrefix.IndexOf('(')
         if signature >= 0 then withoutPrefix.Substring(0, signature) else withoutPrefix
 
-    let private symbolTargets package =
+    let private symbolTargetsWith (entityHref: EntityModel -> string option) package =
         let rec walk entities =
             [ for entity in entities do
-                yield entity.Id, entity.Id + ".html"
-                for memberModel in entity.Members do
-                    yield memberModel.Id, entity.Id + ".html#" + memberModel.Id
-                yield! walk entity.Entities ]
+                  match entityHref entity with
+                  | Some href ->
+                      yield entity.Id, href
+
+                      for memberModel in entity.Members do
+                          yield memberModel.Id, href + "#" + memberModel.Id
+                  | None -> ()
+
+                  yield! walk entity.Entities ]
+
         walk package.Entities |> Map.ofList
 
     let private safeExternalUri target =
@@ -36,8 +42,7 @@ module Presentation =
         | _ -> None
 
     /// Renders owned documentation semantics with the current renderer.
-    let renderDocumentationHtml package nodes =
-        let targets = symbolTargets package
+    let private renderDocumentationHtmlCore targets nodes =
         let encode (value: string) = WebUtility.HtmlEncode value
         let rec render nodes =
             nodes
@@ -69,6 +74,16 @@ module Presentation =
                 | DocumentationNodeKind.Markdown -> Markdown.ToHtml(node.Text |> Option.defaultValue "", markdownPipeline))
             |> String.concat ""
         render nodes
+
+    /// Renders documentation with explicit per-entity destinations, used by cross-set API pages.
+    let renderDocumentationHtmlWithTargets package (entityTargets: Map<string, string>) nodes =
+        symbolTargetsWith (fun entity -> entityTargets |> Map.tryFind entity.Id) package
+        |> fun targets -> renderDocumentationHtmlCore targets nodes
+
+    /// Renders owned documentation semantics with API links relative to the current API directory.
+    let renderDocumentationHtml package nodes =
+        symbolTargetsWith (fun entity -> Some(entity.Id + ".html")) package
+        |> fun targets -> renderDocumentationHtmlCore targets nodes
 
     let highlightSignatureHtml (text: string) =
         let encoded = WebUtility.HtmlEncode text

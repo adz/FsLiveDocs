@@ -77,6 +77,21 @@ module ContentProvider =
                 if not (Directory.Exists(destinationDirectory)) then Directory.CreateDirectory(destinationDirectory) |> ignore
                 File.Copy(source, destination, true))
 
+    /// <summary>Copies the explicitly owned static files of one documentation set beneath its route.</summary>
+    let copyStaticFilesForSet (sourceDir: string) (routePrefix: string) (files: string list) (outputDir: string) =
+        for source in files do
+            let relative = Path.GetRelativePath(sourceDir, source)
+
+            let destination =
+                Path.Combine(outputDir, routePrefix.Replace('/', Path.DirectorySeparatorChar), relative)
+
+            let destinationDirectory = Path.GetDirectoryName(destination)
+
+            if not (Directory.Exists destinationDirectory) then
+                Directory.CreateDirectory(destinationDirectory) |> ignore
+
+            File.Copy(source, destination, true)
+
     let defaultTitle (filePath: string) =
         let stem = Path.GetFileNameWithoutExtension(filePath) |> stripOrderingPrefix
         if stem.Equals("index", System.StringComparison.OrdinalIgnoreCase)
@@ -168,7 +183,8 @@ module ContentProvider =
         else
             let currentDir = Path.GetDirectoryName(currentOutputPath)
             let candidate =
-                if cleaned.StartsWith("/") then cleaned.TrimStart('/')
+                if cleaned = "/" then "index.html"
+                elif cleaned.StartsWith("/") then cleaned.TrimStart('/')
                 elif System.String.IsNullOrWhiteSpace currentDir then cleaned
                 else Path.Combine(currentDir, cleaned)
 
@@ -258,14 +274,20 @@ module ContentProvider =
                 walk (e.Id :: acc) (e.Entities @ rest)
         walk [] entities
 
-    let private collectGuideOutputs (docsDir: string) =
+    /// <summary>Entity ids contributed by a package, used to scope a set's API surface.</summary>
+    let entityIdsOf (entities: EntityModel list) = collectEntityIds entities
+
+    let private markdownFilesIn (docsDir: string) =
         if Directory.Exists(docsDir) then
             Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
-            |> Array.filter (fun f -> not (f.Contains($"{Path.DirectorySeparatorChar}api{Path.DirectorySeparatorChar}")))
-            |> Array.map (outputPathFor docsDir)
+            |> Array.filter (fun f ->
+                not (f.Contains($"{Path.DirectorySeparatorChar}api{Path.DirectorySeparatorChar}")))
             |> Array.toList
         else
             []
+
+    let private collectGuideOutputs (docsDir: string) =
+        markdownFilesIn docsDir |> List.map (outputPathFor docsDir)
 
     let private collectAllowedOutputs (docsDir: string) (package: PackageModel) =
         let guideOutputs = collectGuideOutputs docsDir
@@ -336,7 +358,7 @@ module ContentProvider =
 
     type private ApiLink = { Label: string; Url: string }
 
-    let private apiLinks (package: PackageModel) (rootPath: string) =
+    let private apiLinksWithRoutes (package: PackageModel) (rootPath: string) (apiRoutes: Map<string, string>) =
         let links = ResizeArray<string * ApiLink>()
         let add alias label url =
             if not (System.String.IsNullOrWhiteSpace alias) then
@@ -344,14 +366,20 @@ module ContentProvider =
 
         let rec collect (entities: EntityModel list) =
             for entity in entities do
-                let entityUrl = $"{rootPath}api/{entity.Id}.html"
-                add entity.Id entity.Name entityUrl
-                add entity.Name entity.Name entityUrl
-                let ownerName = entity.Name.Split('<').[0]
-                for member' in entity.Members do
-                    let memberUrl = $"{entityUrl}#{member'.Id}"
-                    add member'.Id member'.Name memberUrl
-                    add $"{ownerName}.{member'.Name}" member'.Name memberUrl
+                match apiRoutes |> Map.tryFind entity.Id with
+                | None when not apiRoutes.IsEmpty -> ()
+                | route ->
+                    let routeValue = route |> Option.defaultValue ""
+                    let entityUrl = $"{rootPath}{routeValue}api/{entity.Id}.html"
+                    add entity.Id entity.Name entityUrl
+                    add entity.Name entity.Name entityUrl
+                    let ownerName = entity.Name.Split('<').[0]
+
+                    for member' in entity.Members do
+                        let memberUrl = $"{entityUrl}#{member'.Id}"
+                        add member'.Id member'.Name memberUrl
+                        add $"{ownerName}.{member'.Name}" member'.Name memberUrl
+
                 collect entity.Entities
         collect package.Entities
 
@@ -363,6 +391,9 @@ module ContentProvider =
             | [ link ] -> Some(alias, link)
             | _ -> None)
         |> Map.ofSeq
+
+    let private apiLinks (package: PackageModel) (rootPath: string) =
+        apiLinksWithRoutes package rootPath Map.empty
 
     let private resolveApiTarget (links: Map<string, ApiLink>) (target: string) =
         let separator = target.LastIndexOf(':')
@@ -382,10 +413,33 @@ module ContentProvider =
                 | Some link -> $"[{link.Label}]({link.Url})"
                 | None -> invalidOp $"Cross-reference '{target}' was not found."))
 
+    let private resolveCrossReferencesWithRoutes (body: string) (package: PackageModel) (rootPath: string) apiRoutes =
+        let xrefPattern = @"(?<!\]\()xref:(?<type>[A-Z]):(?<id>[^\s\)]+)"
+        let links = apiLinksWithRoutes package rootPath apiRoutes
+
+        withProtectedCodeSegments body "FSLIVEDOCS_XREF" (fun protectedBody ->
+            Regex.Replace(
+                protectedBody,
+                xrefPattern,
+                fun (matched: Match) ->
+                    let symbolType = matched.Groups.["type"].Value
+                    let symbolId = matched.Groups.["id"].Value
+                    let target = $"{symbolType}:{symbolId}"
+
+                    match resolveApiTarget links target with
+                    | Some link -> $"[{link.Label}]({link.Url})"
+                    | None -> invalidOp $"Cross-reference '{target}' was not found."
+            ))
+
     /// Resolves explicit xref links and unambiguous inline-code API names on the parsed Markdown tree.
-    let private renderMarkdownWithApiLinks (body: string) (package: PackageModel) (rootPath: string) =
+    let private renderMarkdownWithApiLinksAndRoutes
+        (body: string)
+        (package: PackageModel)
+        (rootPath: string)
+        apiRoutes
+        =
         let document = Markdown.Parse(body, pipeline)
-        let links = apiLinks package rootPath
+        let links = apiLinksWithRoutes package rootPath apiRoutes
 
         // A `::: rendered` custom container frames sample output so a reader can tell a
         // demonstration of what Markdown renders to from the page's own content. Its headings
@@ -418,38 +472,71 @@ module ContentProvider =
 
         Markdown.ToHtml(document, pipeline)
 
+    let private renderMarkdownWithApiLinks (body: string) (package: PackageModel) (rootPath: string) =
+        renderMarkdownWithApiLinksAndRoutes body package rootPath Map.empty
+
     /// <summary>Resolves transclusions and semantic links for a current render.</summary>
     let resolveSnippets (body: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
         expandTransclusions body sourceDir package
         |> fun expanded -> resolveCrossReferences expanded package rootPath
 
-    type private MarkdownContext = {
-        DocsDir: string
-        SourceDir: string
-        Package: PackageModel
-        RootPath: string
-        CurrentOutputPath: string
-        AllowedOutputs: Set<string>
-        SemanticCode: SemanticCode.Options
-    }
+    type private MarkdownContext =
+        {
+            DocsDir: string
+            SourceDir: string
+            Package: PackageModel
+            RootPath: string
+            CurrentOutputPath: string
+            AllowedOutputs: Set<string>
+            /// Route prefix ("" or e.g. "internal/") prepended to this page's semantic source path so a
+            /// documentation set's persisted blocks stay uniquely keyed across the shared site.
+            RoutePrefix: string
+            /// Per-entity route prefixes for globally resolved cross-set API links.
+            ApiRoutes: Map<string, string>
+            SemanticCode: SemanticCode.Options
+        }
 
     let private resolveMarkdown (context: MarkdownContext) (sourcePath: string) (body: string) =
-        let resolved = resolveSnippets body context.SourceDir context.Package context.RootPath
-        let rewritten = rewriteLocalLinks context.CurrentOutputPath context.AllowedOutputs resolved
+        let resolved =
+            expandTransclusions body context.SourceDir context.Package
+            |> fun expanded ->
+                if context.ApiRoutes.IsEmpty then
+                    resolveCrossReferences expanded context.Package context.RootPath
+                else
+                    resolveCrossReferencesWithRoutes expanded context.Package context.RootPath context.ApiRoutes
+
+        let rewritten =
+            rewriteLocalLinks context.CurrentOutputPath context.AllowedOutputs resolved
+
         validateLinks context.CurrentOutputPath context.AllowedOutputs rewritten
-        let semanticSourcePath = Path.GetRelativePath(context.DocsDir, sourcePath).Replace('\\', '/')
-        let formatted = SemanticCode.formatFences context.SemanticCode semanticSourcePath rewritten
+
+        let semanticSourcePath =
+            context.RoutePrefix
+            + Path.GetRelativePath(context.DocsDir, sourcePath).Replace('\\', '/')
+
+        let formatted =
+            SemanticCode.formatFences context.SemanticCode semanticSourcePath rewritten
+
         let semanticSegments = ResizeArray<string>()
         let semanticPattern =
             Regex(
                 Regex.Escape(SemanticCode.htmlStartMarker) + "(?<html>.*?)" + Regex.Escape(SemanticCode.htmlEndMarker),
                 RegexOptions.Singleline)
         let protectedMarkdown =
-            semanticPattern.Replace(formatted, fun matched ->
-                let index = semanticSegments.Count
-                semanticSegments.Add(matched.Groups.["html"].Value)
-                $"<div data-fslivedocs-semantic-placeholder=\"{index}\"></div>")
-        let rendered = renderMarkdownWithApiLinks protectedMarkdown context.Package context.RootPath
+            semanticPattern.Replace(
+                formatted,
+                fun matched ->
+                    let index = semanticSegments.Count
+                    semanticSegments.Add(matched.Groups.["html"].Value)
+                    $"<div data-fslivedocs-semantic-placeholder=\"{index}\"></div>"
+            )
+
+        let rendered =
+            if context.ApiRoutes.IsEmpty then
+                renderMarkdownWithApiLinks protectedMarkdown context.Package context.RootPath
+            else
+                renderMarkdownWithApiLinksAndRoutes protectedMarkdown context.Package context.RootPath context.ApiRoutes
+
         semanticSegments
         |> Seq.mapi (fun index html -> $"<div data-fslivedocs-semantic-placeholder=\"{index}\"></div>", html)
         |> Seq.fold (fun (current: string) (placeholder, html) -> current.Replace(placeholder, html)) rendered
@@ -483,17 +570,86 @@ module ContentProvider =
     /// <returns>A processed content page ready for rendering.</returns>
     let loadPage (filePath: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (currentOutputPath: string) (allowedOutputs: Set<string>) =
         loadMarkdownPage
-            {
-                DocsDir = Path.GetDirectoryName(Path.GetFullPath(filePath))
-                SourceDir = sourceDir
-                Package = package
-                RootPath = rootPath
-                CurrentOutputPath = currentOutputPath
-                AllowedOutputs = allowedOutputs
-                SemanticCode = SemanticCode.defaults
-            }
+            { DocsDir = Path.GetDirectoryName(Path.GetFullPath(filePath))
+              SourceDir = sourceDir
+              Package = package
+              RootPath = rootPath
+              CurrentOutputPath = currentOutputPath
+              AllowedOutputs = allowedOutputs
+              RoutePrefix = ""
+              ApiRoutes = Map.empty
+              SemanticCode = SemanticCode.defaults }
             filePath
             currentOutputPath
+
+    /// <summary>Inputs for scanning one documentation set's Markdown into rendered pages.</summary>
+    type DocsSetScan =
+        {
+            /// <summary>The set's Markdown root directory.</summary>
+            SourceDir: string
+            /// <summary>Root used to resolve <c>{{&lt; snippet &gt;}}</c> shortcodes (usually the repository root).</summary>
+            SnippetSourceDir: string
+            /// <summary>The global package model, shared for cross-references and semantic tooltips.</summary>
+            Package: PackageModel
+            /// <summary>Route prefix ("" for the site-root default set, otherwise e.g. "internal/").</summary>
+            RoutePrefix: string
+            /// <summary>Stable set-id prefix used for semantic page/block identity.</summary>
+            SemanticPrefix: string
+            /// <summary>Site-relative root path ("" for the current build, "../../" for a history render).</summary>
+            SiteRootPath: string
+            /// <summary>Every generated output path across all sets, so cross-set links validate.</summary>
+            AllowedOutputs: Set<string>
+            /// <summary>Semantic formatting options carrying this set's prelude and release artifact.</summary>
+            SemanticCode: SemanticCode.Options
+            /// Entity id to documentation-set route prefix, used to resolve cross-set xrefs.
+            ApiRoutes: Map<string, string>
+            /// <summary>Absolute Markdown file paths owned by this set (API enrichment files excluded).</summary>
+            Files: string list
+        }
+
+    let private scanFileList
+        (docsDir: string)
+        (sourceDir: string)
+        (package: PackageModel)
+        (siteRootPath: string)
+        (routePrefix: string)
+        (semanticPrefix: string)
+        (allowedOutputs: Set<string>)
+        (apiRoutes: Map<string, string>)
+        (semanticCode: SemanticCode.Options)
+        (files: string list)
+        =
+        files
+        |> List.toArray
+        |> Array.map (fun f ->
+            let outputPath = routePrefix + outputPathFor docsDir f
+            let depth = outputPath.Split('/').Length - 1
+            let pageRootPath = siteRootPath + String.replicate depth "../"
+
+            let page =
+                loadMarkdownPage
+                    { DocsDir = docsDir
+                      SourceDir = sourceDir
+                      Package = package
+                      RootPath = pageRootPath
+                      CurrentOutputPath = outputPath
+                      AllowedOutputs = allowedOutputs
+                      RoutePrefix = semanticPrefix
+                      ApiRoutes = apiRoutes
+                      SemanticCode = semanticCode }
+                    f
+                    outputPath
+
+            { page with
+                SectionOrder = sectionOrderFor docsDir f })
+        |> Array.groupBy (fun page -> page.OutputPath)
+        |> Array.map (fun (outputPath, pages) ->
+            if pages.Length > 1 then
+                let sources = pages |> Array.map (fun page -> page.FilePath) |> String.concat ", "
+                invalidOp $"Documentation output path collision at {outputPath}: {sources}"
+
+            pages.[0])
+        |> Array.toList
 
     /// <summary>Scans guides and semantically formats F# fences using the supplied assembly references.</summary>
     let scanDocsWithOptions (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (semanticCode: SemanticCode.Options) =
@@ -501,33 +657,28 @@ module ContentProvider =
             let allowedOutputs = collectAllowedOutputs docsDir package
             Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
             |> Array.filter (fun f -> not (f.Contains("/api/")))
-            |> Array.map (fun f ->
-                let outputPath = outputPathFor docsDir f
-                let depth = outputPath.Split('/').Length - 1
-                let pageRootPath = rootPath + String.replicate depth "../"
-                let page =
-                    loadMarkdownPage
-                        {
-                            DocsDir = docsDir
-                            SourceDir = sourceDir
-                            Package = package
-                            RootPath = pageRootPath
-                            CurrentOutputPath = outputPath
-                            AllowedOutputs = allowedOutputs
-                            SemanticCode = semanticCode
-                        }
-                        f
-                        outputPath
-                { page with SectionOrder = sectionOrderFor docsDir f })
-            |> Array.groupBy (fun page -> page.OutputPath)
-            |> Array.map (fun (outputPath, pages) ->
-                if pages.Length > 1 then
-                    let sources = pages |> Array.map (fun page -> page.FilePath) |> String.concat ", "
-                    invalidOp $"Documentation output path collision at {outputPath}: {sources}"
-                pages.[0])
             |> Array.toList
+            |> scanFileList docsDir sourceDir package rootPath "" "" allowedOutputs Map.empty semanticCode
         else
             []
+
+    /// <summary>Scans one documentation set's Markdown, honoring its route prefix and shared allowed outputs.</summary>
+    let scanDocsSet (scan: DocsSetScan) =
+        scanFileList
+            scan.SourceDir
+            scan.SnippetSourceDir
+            scan.Package
+            scan.SiteRootPath
+            scan.RoutePrefix
+            scan.SemanticPrefix
+            scan.AllowedOutputs
+            scan.ApiRoutes
+            scan.SemanticCode
+            scan.Files
+
+    /// <summary>Guide output paths for a set's files, prefixed by its route, for building the shared allowed-output set.</summary>
+    let setGuideOutputs (sourceDir: string) (routePrefix: string) (files: string list) =
+        files |> List.map (fun f -> routePrefix + outputPathFor sourceDir f)
 
     /// <summary>Scans the docs directory and loads all guide pages.</summary>
     /// <param name="docsDir">The docs root containing markdown pages.</param>
@@ -538,12 +689,18 @@ module ContentProvider =
     let scanDocs (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) =
         scanDocsWithOptions docsDir sourceDir package rootPath SemanticCode.defaults
 
-    /// <summary>Applies long-form API documentation with semantic F# formatting.</summary>
-    let applyApiDocsWithOptions (docsDir: string) (sourceDir: string) (package: PackageModel) (semanticCode: SemanticCode.Options) =
-        let apiDocsDir = Path.Combine(docsDir, "api")
-        if not (Directory.Exists(apiDocsDir)) then package
+    let private applyApiDocsCore
+        (apiDocsDir: string)
+        (sourceDir: string)
+        (package: PackageModel)
+        (routePrefix: string)
+        (allowedOutputs: Set<string>)
+        (apiRoutes: Map<string, string>)
+        (_semanticCode: SemanticCode.Options)
+        =
+        if not (Directory.Exists(apiDocsDir)) then
+            package
         else
-            let allowedOutputs = collectAllowedOutputs docsDir package
             let rec updateEntity (e: EntityModel) (docs: Map<string, DocumentationNode list>) =
                 let summary = docs |> Map.tryFind e.Id |> Option.defaultValue e.Summary
                 { e with 
@@ -555,15 +712,64 @@ module ContentProvider =
                 docFiles 
                 |> Array.map (fun f -> 
                     let id = Path.GetFileNameWithoutExtension(f)
+                    let apiOutputPath = routePrefix + $"api/{id}.html"
                     let raw = File.ReadAllText(f)
                     let body = parseFrontMatter raw |> Option.map snd |> Option.defaultValue raw
-                    let expanded = resolveSnippets body sourceDir package ""
-                    let rewritten = rewriteLocalLinks $"api/{id}.html" allowedOutputs expanded
-                    validateLinks $"api/{id}.html" allowedOutputs rewritten
+
+                    let apiDepth =
+                        routePrefix.Split('/', System.StringSplitOptions.RemoveEmptyEntries).Length + 1
+
+                    let rootPath = String.replicate apiDepth "../"
+
+                    let expanded =
+                        expandTransclusions body sourceDir package
+                        |> fun value ->
+                            if apiRoutes.IsEmpty then
+                                resolveCrossReferences value package ""
+                            else
+                                resolveCrossReferencesWithRoutes value package rootPath apiRoutes
+
+                    let rewritten = rewriteLocalLinks apiOutputPath allowedOutputs expanded
+                    validateLinks apiOutputPath allowedOutputs rewritten
                     id, [ Documentation.markdown rewritten ])
                 |> Map.ofArray
             
             { package with Entities = package.Entities |> List.map (fun e -> updateEntity e docsMap) }
+
+    /// <summary>Applies long-form API documentation with semantic F# formatting.</summary>
+    let applyApiDocsWithOptions
+        (docsDir: string)
+        (sourceDir: string)
+        (package: PackageModel)
+        (semanticCode: SemanticCode.Options)
+        =
+        applyApiDocsCore
+            (Path.Combine(docsDir, "api"))
+            sourceDir
+            package
+            ""
+            (collectAllowedOutputs docsDir package)
+            Map.empty
+            semanticCode
+
+    /// <summary>Applies one documentation set's long-form API pages, honoring its route prefix and shared allowed outputs.</summary>
+    let applyApiDocsForSet
+        (setSourceDir: string)
+        (snippetSourceDir: string)
+        (package: PackageModel)
+        (routePrefix: string)
+        (allowedOutputs: Set<string>)
+        (apiRoutes: Map<string, string>)
+        (semanticCode: SemanticCode.Options)
+        =
+        applyApiDocsCore
+            (Path.Combine(setSourceDir, "api"))
+            snippetSourceDir
+            package
+            routePrefix
+            allowedOutputs
+            apiRoutes
+            semanticCode
 
     /// <summary>Applies long-form documentation from docs/api/*.md to the package model.</summary>
     /// <param name="docsDir">The docs root that contains the api subdirectory.</param>
