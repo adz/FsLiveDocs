@@ -133,11 +133,12 @@ jobs:
           git add .livedocs/history.json
           git commit -m "Record $VERSION in the release history"
           git push origin "$branch"
-          # The push triggers pages.yml; wait for that run to deploy before NuGet publication.
+          # Pushes made with GITHUB_TOKEN do not trigger other workflows, so dispatch Pages explicitly.
           sha="$(git rev-parse HEAD)"
-          for attempt in $(seq 1 30); do
-            run_id="$(gh run list --workflow pages.yml --branch "$branch" --json databaseId,headSha \
-              --jq '[.[] | select(.headSha == "'"$sha"'")][0].databaseId // 0')"
+          gh workflow run pages.yml --ref "$branch"
+          for attempt in $(seq 1 60); do
+            run_id="$(gh run list --workflow pages.yml --branch "$branch" --json databaseId,event,headSha \
+              --jq '[.[] | select(.event == "workflow_dispatch" and .headSha == "'"$sha"'")][0].databaseId // 0')"
             [ "$run_id" != "0" ] && break
             sleep 2
           done
