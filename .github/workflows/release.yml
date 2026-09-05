@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
+    paths:
+      - .github/workflows/release.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable release version whose GitHub Release already exists
+        required: true
+        type: string
 
 permissions:
   actions: write
@@ -16,6 +26,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -144,6 +155,69 @@ jobs:
           done
           [ "$run_id" != "0" ] || { echo "Pages run for $sha was not observed." >&2; exit 1; }
           gh run watch "$run_id" --exit-status
+
+  recover-release:
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: nuget
+    steps:
+      - name: Validate version
+        shell: bash
+        run: |
+          version="${{ inputs.version || '0.5.0' }}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must have the form MAJOR.MINOR.PATCH; got $version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Deploy the recorded release history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          branch="${{ github.event.repository.default_branch }}"
+          sha="${{ github.sha }}"
+          gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+          for attempt in $(seq 1 60); do
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow pages.yml --branch "$branch" \
+              --json databaseId,event,headSha \
+              --jq '[.[] | select(.event == "workflow_dispatch" and .headSha == "'"$sha"'")][0].databaseId // 0')"
+            [ "$run_id" != "0" ] && break
+            sleep 2
+          done
+          [ "$run_id" != "0" ] || { echo "Pages run for $sha was not observed." >&2; exit 1; }
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+
+      - name: Download packages from the immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts/packages
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir artifacts/packages \
+            --pattern '*.nupkg' --pattern '*.snupkg'
+          test -f "artifacts/packages/FsLiveDocs.$VERSION.nupkg"
+          test -f "artifacts/packages/FsLiveDocs.Annotations.$VERSION.nupkg"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Authenticate to NuGet.org
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Publish packages to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: |
+          for package in artifacts/packages/*.nupkg artifacts/packages/*.snupkg; do
+            [ -e "$package" ] || continue
+            dotnet nuget push "$package" --api-key "$NUGET_API_KEY" \
+              --source https://api.nuget.org/v3/index.json --skip-duplicate
+          done
 
   publish-nuget:
     runs-on: ubuntu-latest
