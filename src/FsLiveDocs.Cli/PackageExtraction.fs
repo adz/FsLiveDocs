@@ -14,38 +14,53 @@ module internal PackageExtraction =
     /// example a page transcludes is compiled as part of that page and must not be compiled again
     /// on its own.
     /// </remarks>
-    let private transcludedExamples () =
-        let docsDir = Path.GetFullPath("docs")
-        if not (Directory.Exists docsDir) then
-            Set.empty
-        else
-            Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
-            |> Array.map (File.ReadAllText >> ContentProvider.transcludedExampleNames)
-            |> Set.unionMany
+    let private transcludedExamples projectPaths =
+        let root = Directory.GetCurrentDirectory()
+        let sets = Workspace.loadDocsSets projectPaths
+
+        sets
+        |> List.collect (fun set ->
+            let docsDir = Path.GetFullPath(set.Source, root)
+
+            if not (Directory.Exists docsDir) then
+                []
+            else
+                Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
+                |> Array.filter (fun path ->
+                    let relative = Path.GetRelativePath(root, path).Replace('\\', '/')
+                    DocsSet.ownerOf sets relative |> Option.exists (fun owner -> owner.Id = set.Id))
+                |> Array.toList)
+        |> List.map (File.ReadAllText >> ContentProvider.transcludedExampleNames)
+        |> Set.unionMany
 
     /// <summary>Loads and merges multiple project models into a unified package.</summary>
-    let extractWithProgress reportProgress prelude (projectPaths: string list) = async {
-        let packages = ResizeArray()
-        let diagnostics = ResizeArray()
-        let covered = transcludedExamples ()
-        // The same prelude a page block is compiled with. Without it an example referencing the
-        // library by its own namespace fails for want of an open, not for anything wrong with it.
-        let builtAssemblies =
-            projectPaths
-            |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
-            |> List.filter (String.IsNullOrWhiteSpace >> not)
-            |> List.distinct
-        for index, projectPath in projectPaths |> List.indexed do
-            reportProgress "Extracting API documentation" (index + 1) projectPaths.Length
-            let! package, projectDiagnostics = SymbolLister.extractFromProjectWithDiagnostics projectPath
-            packages.Add(package)
-            diagnostics.AddRange(projectDiagnostics)
-            // Every example not covered elsewhere is compiled against the project that declares it,
-            // so "the documented code compiles" holds for XML examples as it does for fences.
-            let! exampleDiagnostics = GeneratedVerification.compileUncoveredExamples projectPath prelude builtAssemblies covered package
-            diagnostics.AddRange(exampleDiagnostics)
-        return SymbolLister.merge (Seq.toList packages), List.ofSeq diagnostics
-    }
+    let extractWithProgress reportProgress prelude (projectPaths: string list) =
+        async {
+            let packages = ResizeArray()
+            let diagnostics = ResizeArray()
+            let covered = transcludedExamples projectPaths
+            // The same prelude a page block is compiled with. Without it an example referencing the
+            // library by its own namespace fails for want of an open, not for anything wrong with it.
+            let builtAssemblies =
+                projectPaths
+                |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+                |> List.filter (String.IsNullOrWhiteSpace >> not)
+                |> List.distinct
+
+            for index, projectPath in projectPaths |> List.indexed do
+                reportProgress "Extracting API documentation" (index + 1) projectPaths.Length
+                let! package, projectDiagnostics = SymbolLister.extractFromProjectWithDiagnostics projectPath
+                packages.Add(package)
+                diagnostics.AddRange(projectDiagnostics)
+                // Every example not covered elsewhere is compiled against the project that declares it,
+                // so "the documented code compiles" holds for XML examples as it does for fences.
+                let! exampleDiagnostics =
+                    GeneratedVerification.compileUncoveredExamples projectPath prelude builtAssemblies covered package
+
+                diagnostics.AddRange(exampleDiagnostics)
+
+            return SymbolLister.merge (Seq.toList packages), List.ofSeq diagnostics
+        }
 
     let extract prelude projectPaths =
         extractWithProgress (fun _ _ _ -> ()) prelude projectPaths
@@ -56,6 +71,25 @@ module internal PackageExtraction =
         |> Security.Cryptography.SHA256.HashData
         |> Convert.ToHexString
         |> _.ToLowerInvariant()
+
+    let private documentationFingerprint projectPaths =
+        let root = Directory.GetCurrentDirectory()
+        let sets = Workspace.loadDocsSets projectPaths
+
+        [ for set in sets do
+              let setPrelude = set.FSharpPrelude |> Option.defaultValue ""
+              yield $"set:{set.Id}|source:{set.Source}|prelude:{setPrelude}"
+              let sourceDir = Path.GetFullPath(set.Source, root)
+
+              if Directory.Exists sourceDir then
+                  for path in Directory.GetFiles(sourceDir, "*.md", SearchOption.AllDirectories) |> Array.sort do
+                      let relative = Path.GetRelativePath(root, path).Replace('\\', '/')
+
+                      if DocsSet.ownerOf sets relative |> Option.exists (fun owner -> owner.Id = set.Id) then
+                          yield relative
+                          yield File.ReadAllText path ]
+        |> String.concat "\n--fslivedocs-documentation-input--\n"
+        |> sha256Text
 
     let inputFingerprint (projectPaths: string list) =
         let root = Directory.GetCurrentDirectory()
@@ -100,7 +134,13 @@ module internal PackageExtraction =
               Reflection.Assembly.GetExecutingAssembly() ]
             |> List.map (fun assembly -> string assembly.ManifestModule.ModuleVersionId)
             |> String.concat ","
-        let cacheKey = sha256Text $"api-schema:{History.ApiModelSchemaVersion}|extractor:{extractorVersions}|{inputHash}"
+
+        let docsHash = documentationFingerprint projectPaths
+
+        let cacheKey =
+            sha256Text
+                $"api-schema:{History.ApiModelSchemaVersion}|extractor:{extractorVersions}|projects:{inputHash}|documentation:{docsHash}|prelude:{prelude}"
+
         let cachePath = Path.Combine(cacheDirectory, cacheKey + ".package.json")
         // Diagnostics describe the run, not the snapshot, so they live beside the cached package
         // rather than inside it — otherwise a warning would be reported once and never again.

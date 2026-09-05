@@ -50,12 +50,26 @@ module internal Workspace =
         if not (File.Exists configPath) then []
         else
             let config = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText configPath)
-            match config.GetValue("projects", StringComparison.OrdinalIgnoreCase) with
-            | :? Newtonsoft.Json.Linq.JArray as projects ->
-                projects.Values<string>()
-                |> Seq.filter (String.IsNullOrWhiteSpace >> not)
-                |> Seq.toList
-            | _ -> []
+
+            let topLevel =
+                match config.GetValue("projects", StringComparison.OrdinalIgnoreCase) with
+                | :? Newtonsoft.Json.Linq.JArray as projects -> projects.Values<string>()
+                | _ -> Seq.empty
+
+            let setProjects =
+                match config.GetValue("docsSets", StringComparison.OrdinalIgnoreCase) with
+                | :? Newtonsoft.Json.Linq.JArray as sets ->
+                    sets.Children<Newtonsoft.Json.Linq.JObject>()
+                    |> Seq.collect (fun set ->
+                        match set.GetValue("projects", StringComparison.OrdinalIgnoreCase) with
+                        | :? Newtonsoft.Json.Linq.JArray as projects -> projects.Values<string>()
+                        | _ -> Seq.empty)
+                | _ -> Seq.empty
+
+            Seq.append topLevel setProjects
+            |> Seq.filter (String.IsNullOrWhiteSpace >> not)
+            |> Seq.distinct
+            |> Seq.toList
 
     /// Resolves explicit, configured, or discovered projects in that order.
     let resolveProjects reportDiscovery command projectPaths =
@@ -112,6 +126,31 @@ module internal Workspace =
                 if isNull (box config) then defaultSiteConfig else config
             with _ -> defaultSiteConfig
         else defaultSiteConfig
+
+    /// Reads the raw documentation-set array while preserving the distinction between an absent
+    /// key (the byte-compatible legacy site) and an explicitly configured set list.
+    let loadDocsSetConfigs () =
+        let configPath = Path.Combine(".livedocs", "config.json")
+
+        if not (File.Exists configPath) then
+            None
+        else
+            let config = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText configPath)
+
+            match config.GetValue("docsSets", StringComparison.OrdinalIgnoreCase) with
+            | null -> None
+            | :? Newtonsoft.Json.Linq.JArray as sets ->
+                let serializer = Newtonsoft.Json.JsonSerializer.Create(Serialization.jsonSettings)
+                let values = sets.ToObject<DocsSetConfig list>(serializer)
+                Some(if isNull (box values) then [] else values)
+            | _ -> invalidOp "\"docsSets\" in .livedocs/config.json must be an array."
+
+    let hasConfiguredDocsSets () = loadDocsSetConfigs().IsSome
+
+    /// Resolves effective sets for a command's site-wide project selection.
+    let loadDocsSets projectPaths =
+        let site = loadSiteConfig ()
+        DocsSet.resolve site.SiteName projectPaths site.FSharpPrelude (loadDocsSetConfigs ())
 
     let writeIfChanged (path: string) (content: string) =
         let normalized = content.Replace("\r\n", "\n").TrimEnd() + "\n"

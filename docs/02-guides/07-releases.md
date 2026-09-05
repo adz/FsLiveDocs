@@ -12,7 +12,7 @@ A capsule is a deterministic ZIP archive with four logical components:
 
 - `api.json` contains symbols, plain signatures, and structured documentation.
 - `semantic.json` contains tokens, tooltips, diagnostics, and source hashes.
-- `content.json` contains canonical Markdown, page metadata, assets, and site configuration.
+- `content.json` contains canonical Markdown, page/set identity, resolved documentation-set models, assets, and site configuration.
 - `manifest.json` contains provenance, schemas, sizes, and component checksums.
 
 The capsule stores documentation content and meaning rather than generated site files. This lets newer FsLiveDocs versions render an older release with current templates and styling.
@@ -165,6 +165,10 @@ and `src` (excluding the search tool's `pagefind/` directory), and confirms the 
 switcher lists all releases newest-first.
 
 The current version appears at the site root. Older versions appear below `history/<version>/`.
+Version switching keeps the current page and set when that identity exists in the target release,
+then falls back to that set's API/root and finally the site root. Historical releases always use
+the sets captured in their capsule, not the current repository configuration. Content schema 1
+capsules migrate deterministically to one implicit legacy set and retain their original routes.
 
 ## Migrate from loose artifacts
 

@@ -36,6 +36,62 @@ Use generated site paths for internal links and absolute HTTPS URLs for external
 
 FsLiveDocs adjusts internal navigation for nested guide and history pages.
 
+## Split one site into documentation sets
+
+Use `docsSets` when one shared site needs distinct guide trees or API audiences. Each set keeps
+its own title, route, sidebar, API surface, and F# verification prelude while sharing branding,
+themes, search, cross-references, releases, and the version switcher.
+
+```json
+{
+  "siteName": "Example Platform",
+  "docsSets": [
+    {
+      "id": "public",
+      "title": "Public SDK",
+      "source": "docs",
+      "path": "",
+      "projects": ["src/Example.Sdk/Example.Sdk.fsproj"],
+      "default": true,
+      "sidebar": true,
+      "api": true,
+      "fSharpPrelude": "open Example.Sdk"
+    },
+    {
+      "id": "operations",
+      "title": "Operations handbook",
+      "source": "docs/operations",
+      "path": "operations",
+      "projects": ["src/Example.Operations/Example.Operations.fsproj"],
+      "default": false,
+      "sidebar": false,
+      "api": false,
+      "fSharpPrelude": "open Example.Operations"
+    }
+  ]
+}
+```
+
+Exactly one set must have `default: true`; it renders at `/`. Other sets default their `path`
+to their `id` and render at `/<path>/`. Their API index, when enabled, is at `/<path>/api/`.
+`id` is a stable lower-case slug: do not change it merely to rename a set.
+
+`source` and every project path are repository-relative. Source roots may overlap. In the
+example, files below `docs/operations/` belong only to `operations`, because the most-specific
+source root owns a file. Generated output paths must still be unique.
+
+The set's `projects` determine both its default checking context and the API entities it exposes.
+A page's `project:` front matter must name one of those projects. `fSharpPrelude` overrides the
+top-level prelude for that set. Set `sidebar` or `api` to `false` to omit that surface entirely.
+
+Links are validated against all sets, so a guide can link to another set. API xrefs use the one
+global symbol model and resolve to the set that exposes the target. Search remains site-wide and
+records the set id/title as result metadata.
+
+Omit `docsSets` to keep the original `docs/`, `/api.html`, and single-sidebar layout unchanged.
+All commands remain site-wide: `audit`, `test`, `generate-tests`, `build`, `watch`, and `capture`
+process the union of configured set projects and pages.
+
 ## Configure themes
 
 FsLiveDocs renders with [Tailwind CSS](https://tailwindcss.com/) and [DaisyUI](https://daisyui.com/). Set `themes` to the DaisyUI theme names that readers can choose:

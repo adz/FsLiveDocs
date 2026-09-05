@@ -6,7 +6,7 @@
     <UseArtifactsOutput>true</UseArtifactsOutput>
     <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <VersionPrefix>0.5.0</VersionPrefix>
+    <VersionPrefix>0.6.0</VersionPrefix>
     <Authors>FsLiveDocs contributors</Authors>
     <Company>FsLiveDocs contributors</Company>
     <Copyright>Copyright © FsLiveDocs contributors</Copyright>

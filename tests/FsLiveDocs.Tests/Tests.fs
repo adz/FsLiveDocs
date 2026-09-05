@@ -157,11 +157,34 @@ module ReleaseCapsuleTests =
         }
 
     let private inputs () =
-        let package : PackageModel = { Version = "1.2.3"; Entities = []; Scenarios = []; Packages = [] }
-        let api : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
-        let semantic : SemanticDocumentationArtifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [] }
-        let metadata : ContentMetadata = { Title = "Home"; Type = None; Project = None; TargetFramework = None; Platform = None }
-        api, semantic, [ { SourcePath = "index.md"; Metadata = metadata; Markdown = "# Home\n" } ]
+        let package: PackageModel =
+            { Version = "1.2.3"
+              Entities = []
+              Scenarios = []
+              Packages = [] }
+
+        let api: ApiModelArtifact =
+            { SchemaVersion = History.ApiModelSchemaVersion
+              Package = package }
+
+        let semantic: SemanticDocumentationArtifact =
+            { SchemaVersion = History.SemanticSchemaVersion
+              Prelude = ""
+              Pages = [] }
+
+        let metadata: ContentMetadata =
+            { Title = "Home"
+              Type = None
+              Project = None
+              TargetFramework = None
+              Platform = None }
+
+        api,
+        semantic,
+        [ { SourcePath = "index.md"
+            SetId = DocsSet.DefaultId
+            Metadata = metadata
+            Markdown = "# Home\n" } ]
 
     [<Fact>]
     let ``release capsule is deterministic verified and self-contained`` () =
@@ -1717,3 +1740,484 @@ module PresentationTests =
         let summary = Presentation.synopsis [ Documentation.text "Represents a parameter. Additional details follow." ]
 
         Assert.Equal("Represents a parameter.", summary)
+
+    [<Fact>]
+    let ``structured API references can target another documentation set`` () =
+        let target =
+            { Id = "Other.Api"
+              Name = "Api"
+              Kind = EntityKind.Module
+              Summary = []
+              Members = []
+              Examples = []
+              Entities = [] }
+
+        let package: PackageModel =
+            { Version = "1"
+              Entities = [ target ]
+              Scenarios = []
+              Packages = [] }
+
+        let reference =
+            { Kind = DocumentationNodeKind.SymbolReference
+              Text = None
+              Target = Some target.Id
+              Language = None
+              Children = [ Documentation.text "other API" ] }
+
+        let html =
+            Presentation.renderDocumentationHtmlWithTargets
+                package
+                (Map.ofList [ target.Id, "../../other/api/Other.Api.html" ])
+                [ reference ]
+
+        Assert.Equal("<a href=\"../../other/api/Other.Api.html\">other API</a>", html)
+
+module DocumentationSetTests =
+
+    let private site: SiteConfig =
+        { RepoUrl = None
+          SiteName = Some "Shared"
+          LogoText = None
+          LogoPath = None
+          LogoDarkPath = None
+          ShowSiteName = None
+          Stylesheet = None
+          Themes = None
+          Navigation =
+              Some
+                  [ { Label = "Docs"; Href = "/" }
+                    { Label = "Handbook"; Href = "/handbook/" } ]
+          FSharpPrelude = None }
+
+    let private configured id title source path projects isDefault sidebar api prelude : DocsSetConfig =
+        { Id = id
+          Title = Some title
+          Source = Some source
+          Path = path
+          Projects = projects
+          Default = Some isDefault
+          Sidebar = Some sidebar
+          Api = Some api
+          FSharpPrelude = prelude }
+
+    [<Fact>]
+    let ``configured sets resolve defaults and most-specific source ownership`` () =
+        let sets =
+            DocsSet.resolve
+                (Some "Shared")
+                []
+                None
+                (Some
+                    [ configured "public" "Public" "docs" None [] true true false None
+                      configured
+                          "internal"
+                          "Internal"
+                          "docs/internal"
+                          (Some "team")
+                          []
+                          false
+                          false
+                          false
+                          (Some "open System") ])
+
+        Assert.Equal("", sets.[0].Path)
+        Assert.Equal("team", sets.[1].Path)
+        Assert.Equal(Some "internal", DocsSet.ownerOf sets "docs/internal/guide.md" |> Option.map _.Id)
+        Assert.Equal(Some "public", DocsSet.ownerOf sets "docs/start.md" |> Option.map _.Id)
+        Assert.Equal(Some "open System", sets.[1].FSharpPrelude)
+
+    [<Fact>]
+    let ``documentation set JSON uses the public camel-case configuration shape`` () =
+        let json =
+            """[{"id":"sdk","title":"SDK","source":"guides","path":"","projects":["Sdk.fsproj"],"default":true,"sidebar":false,"api":true,"fSharpPrelude":"open Sdk"}]"""
+
+        let serializer = JsonSerializer.Create(Serialization.jsonSettings)
+
+        let parsed =
+            Newtonsoft.Json.Linq.JArray.Parse(json).ToObject<DocsSetConfig list>(serializer)
+            |> List.head
+
+        Assert.Equal("sdk", parsed.Id)
+        Assert.Equal(Some "SDK", parsed.Title)
+        Assert.Equal<string list>([ "Sdk.fsproj" ], parsed.Projects)
+        Assert.Equal(Some false, parsed.Sidebar)
+
+    [<Fact>]
+    let ``configured sets reject missing default duplicate routes and unsafe paths`` () =
+        let noDefault =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                DocsSet.resolve None [] None (Some [ configured "one" "One" "docs" None [] false true false None ])
+                |> ignore)
+
+        Assert.Contains("default", noDefault.Message)
+
+        let duplicate =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                DocsSet.resolve
+                    None
+                    []
+                    None
+                    (Some
+                        [ configured "home" "Home" "docs" None [] true true false None
+                          configured "one" "One" "one-docs" (Some "shared") [] false true false None
+                          configured "two" "Two" "two-docs" (Some "shared") [] false true false None ])
+                |> ignore)
+
+        Assert.Contains("resolve to route", duplicate.Message)
+
+        let unsafe =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                DocsSet.resolve None [] None (Some [ configured "one" "One" "../docs" None [] true true false None ])
+                |> ignore)
+
+        Assert.Contains("unsafe", unsafe.Message)
+
+    [<Fact>]
+    let ``cross-set guide links validate against the global output inventory`` () =
+        let root =
+            Path.Combine(Path.GetTempPath(), "fslivedocs-links-" + Guid.NewGuid().ToString("N"))
+
+        let publicRoot = Path.Combine(root, "public")
+        let internalRoot = Path.Combine(root, "internal")
+        Directory.CreateDirectory(publicRoot) |> ignore
+        Directory.CreateDirectory(internalRoot) |> ignore
+        let publicPage = Path.Combine(publicRoot, "index.md")
+        let internalPage = Path.Combine(internalRoot, "index.md")
+        File.WriteAllText(publicPage, "[Internal](internal/)")
+        File.WriteAllText(internalPage, "# Internal")
+
+        let package: PackageModel =
+            { Version = "1.0.0"
+              Entities = []
+              Scenarios = []
+              Packages = [] }
+
+        let outputs = set [ "index.html"; "internal/index.html" ]
+
+        let scan source route identity files allowed =
+            ContentProvider.scanDocsSet
+                { SourceDir = source
+                  SnippetSourceDir = root
+                  Package = package
+                  RoutePrefix = route
+                  SemanticPrefix = identity
+                  SiteRootPath = ""
+                  AllowedOutputs = allowed
+                  SemanticCode = SemanticCode.disabled
+                  ApiRoutes = Map.empty
+                  Files = files }
+
+        let rendered = scan publicRoot "" "public/" [ publicPage ] outputs |> List.head
+        Assert.Contains("href=\"internal/index.html\"", rendered.ContentHtml)
+
+        let broken =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                scan publicRoot "" "public/" [ publicPage ] (set [ "index.html" ]) |> ignore)
+
+        Assert.Contains("does not resolve", broken.Message)
+
+    [<Fact>]
+    let ``shared shell renders contextual routes isolated API sidebar and search identity`` () =
+        let root =
+            Path.Combine(Path.GetTempPath(), "fslivedocs-sets-" + Guid.NewGuid().ToString("N"))
+
+        let output = Path.Combine(root, "output")
+        Directory.CreateDirectory(root) |> ignore
+
+        let entity id name =
+            { Id = id
+              Name = name
+              Kind = EntityKind.Module
+              Summary = []
+              Members = []
+              Examples = []
+              Entities = [] }
+
+        let publicEntity = entity "Public.Api" "Api"
+        let internalEntity = entity "Internal.Api" "Api"
+
+        let package: PackageModel =
+            { Version = "2.0.0"
+              Entities = [ publicEntity; internalEntity ]
+              Scenarios = []
+              Packages =
+                [ { Name = "Public"
+                    EntityIds = [ publicEntity.Id ] }
+                  { Name = "Internal"
+                    EntityIds = [ internalEntity.Id ] } ] }
+
+        let metadata title =
+            { Title = title
+              Type = None
+              Project = None
+              TargetFramework = None
+              Platform = None }
+
+        let page path title =
+            { Metadata = metadata title
+              ContentHtml = "<h1>" + title + "</h1>"
+              FilePath = path + ".md"
+              OutputPath = path + ".html"
+              SectionOrder = 0 }
+
+        let publicSet: ReleaseDocsSet =
+            { Id = "public"
+              Title = "Public"
+              Source = "docs"
+              Path = ""
+              Projects = [ "Public.fsproj" ]
+              IsDefault = true
+              Sidebar = true
+              Api = true
+              ApiEntityIds = [ publicEntity.Id ]
+              FSharpPrelude = None }
+
+        let internalSet: ReleaseDocsSet =
+            { Id = "internal"
+              Title = "Internal"
+              Source = "internal-docs"
+              Path = "internal"
+              Projects = [ "Internal.fsproj" ]
+              IsDefault = false
+              Sidebar = false
+              Api = false
+              ApiEntityIds = []
+              FSharpPrelude = Some "open System" }
+
+        let sites: SiteBuilder.DocsSetSite list =
+            [ { Set = publicSet
+                Package = package
+                Pages = [ page "index" "Public home" ] }
+              { Set = internalSet
+                Package = package
+                Pages = [ page "internal/index" "Internal home" ] } ]
+
+        SiteBuilder.buildDocsSets package.Version sites site [ package.Version ] "light" output
+
+        let publicHtml = File.ReadAllText(Path.Combine(output, "index.html"))
+        let internalHtml = File.ReadAllText(Path.Combine(output, "internal", "index.html"))
+        Assert.Contains("data-docs-set-id=\"public\"", publicHtml)
+        Assert.Contains("data-docs-set-link=\"internal\"", publicHtml)
+        Assert.Contains("Documentation Set:Public", publicHtml)
+        Assert.Contains("data-docs-set-id=\"internal\"", internalHtml)
+        Assert.DoesNotContain("id=\"sidebar-root\"", internalHtml)
+        Assert.True(File.Exists(Path.Combine(output, "api", "index.html")))
+        Assert.True(File.Exists(Path.Combine(output, "api", publicEntity.Id + ".html")))
+        Assert.False(File.Exists(Path.Combine(output, "api", internalEntity.Id + ".html")))
+        Assert.False(Directory.Exists(Path.Combine(output, "internal", "api")))
+
+    [<Fact>]
+    let ``history switching keeps an exact set page then falls back to the set root`` () =
+        let root =
+            Path.Combine(Path.GetTempPath(), "fslivedocs-set-history-" + Guid.NewGuid().ToString("N"))
+
+        let output = Path.Combine(root, "output")
+
+        let package version : PackageModel =
+            { Version = version
+              Entities = []
+              Scenarios = []
+              Packages = [] }
+
+        let metadata title =
+            { Title = title
+              Type = None
+              Project = None
+              TargetFramework = None
+              Platform = None }
+
+        let set: ReleaseDocsSet =
+            { Id = "handbook"
+              Title = "Handbook"
+              Source = "handbook"
+              Path = "handbook"
+              Projects = []
+              IsDefault = false
+              Sidebar = true
+              Api = false
+              ApiEntityIds = []
+              FSharpPrelude = None }
+
+        let homeSet: ReleaseDocsSet =
+            { set with
+                Id = "home"
+                Title = "Home"
+                Source = "docs"
+                Path = ""
+                IsDefault = true }
+
+        let page path title =
+            { Metadata = metadata title
+              ContentHtml = "<h1>" + title + "</h1>"
+              FilePath = path + ".md"
+              OutputPath = path + ".html"
+              SectionOrder = 0 }
+
+        let versionSite version includeGuide : SiteBuilder.DocsSetVersionSite =
+            let model = package version
+
+            { Version = version
+              Package = model
+              StaticRoot = None
+              UsesDocumentationSets = true
+              Sets =
+                [ { Set = homeSet
+                    Package = model
+                    Pages = [ page "index" "Home" ] }
+                  { Set = set
+                    Package = model
+                    Pages =
+                      [ yield page "handbook/index" "Handbook"
+                        if includeGuide then
+                            yield page "handbook/guide" "Guide" ] } ] }
+
+        let current = versionSite "2.0.0" true
+        let old = versionSite "1.0.0" true
+        let oldest = versionSite "0.9.0" false
+
+        SiteBuilder.buildDocsSetsHistory current.Version [ current; old; oldest ] site "light" output
+
+        let guide = File.ReadAllText(Path.Combine(output, "handbook", "guide.html"))
+        Assert.Contains("href=\"../history/1.0.0/handbook/guide.html\"", guide)
+        Assert.Contains("href=\"../history/0.9.0/handbook/index.html\"", guide)
+
+        let historicalGuide =
+            File.ReadAllText(Path.Combine(output, "history", "1.0.0", "handbook", "guide.html"))
+
+        Assert.Contains("href=\"../../../handbook/guide.html\"", historicalGuide)
+        Assert.Contains("href=\"../../../history/1.0.0/index.html\"", historicalGuide)
+        Assert.Contains("href=\"../../../history/1.0.0/handbook/\"", historicalGuide)
+        Assert.DoesNotContain("href=\"../../../index.html\"", historicalGuide)
+
+    [<Fact>]
+    let ``content schema two captures resolved set and page identity`` () =
+        let root =
+            Path.Combine(Path.GetTempPath(), "fslivedocs-capsule-" + Guid.NewGuid().ToString("N"))
+
+        Directory.CreateDirectory(root) |> ignore
+        let capsule = Path.Combine(root, "sets.zip")
+
+        let package: PackageModel =
+            { Version = "2.0.0"
+              Entities = []
+              Scenarios = []
+              Packages = [] }
+
+        let api: ApiModelArtifact =
+            { SchemaVersion = History.ApiModelSchemaVersion
+              Package = package }
+
+        let semantic: SemanticDocumentationArtifact =
+            { SchemaVersion = History.SemanticSchemaVersion
+              Prelude = ""
+              Pages = [] }
+
+        let metadata =
+            { Title = "Home"
+              Type = None
+              Project = None
+              TargetFramework = None
+              Platform = None }
+
+        let set: ReleaseDocsSet =
+            { Id = "handbook"
+              Title = "Handbook"
+              Source = "handbook"
+              Path = ""
+              Projects = []
+              IsDefault = true
+              Sidebar = true
+              Api = false
+              ApiEntityIds = []
+              FSharpPrelude = Some "open System" }
+
+        let page =
+            { SourcePath = "index.md"
+              SetId = set.Id
+              Metadata = metadata
+              Markdown = "# Home" }
+
+        ReleaseCapsule.createWithDocsSets capsule "revision" "0.5.0" api semantic site [ set ] [ page ] []
+        |> ignore
+
+        let manifest, _, _, content, _ = ReleaseCapsule.load capsule
+        Assert.Equal(2, manifest.Content.SchemaVersion)
+        Assert.True(content.UsesDocumentationSets)
+        Assert.Equal("handbook", content.DocsSets.Head.Source)
+        Assert.Equal("handbook", content.Pages.Head.SetId)
+        Assert.Equal(Some "open System", content.DocsSets.Head.FSharpPrelude)
+
+    [<Fact>]
+    let ``content schema one migrates deterministically to the implicit default set`` () =
+        let root =
+            Path.Combine(Path.GetTempPath(), "fslivedocs-v1-" + Guid.NewGuid().ToString("N"))
+
+        Directory.CreateDirectory(root) |> ignore
+        let capsule = Path.Combine(root, "legacy.zip")
+
+        let package: PackageModel =
+            { Version = "1.0.0"
+              Entities = []
+              Scenarios = []
+              Packages = [] }
+
+        let api: ApiModelArtifact =
+            { SchemaVersion = History.ApiModelSchemaVersion
+              Package = package }
+
+        let semantic: SemanticDocumentationArtifact =
+            { SchemaVersion = History.SemanticSchemaVersion
+              Prelude = "open System"
+              Pages = [] }
+
+        let bytes value =
+            Text.Encoding.UTF8.GetBytes(
+                JsonConvert.SerializeObject(value, Formatting.Indented, Serialization.jsonSettings)
+            )
+
+        let apiBytes = bytes api
+        let semanticBytes = bytes semantic
+
+        let contentBytes =
+            Text.Encoding.UTF8.GetBytes(
+                """{"SchemaVersion":1,"Pages":[{"SourcePath":"index.md","Metadata":{"Title":"Home","Type":null,"Project":null,"TargetFramework":null,"Platform":null},"Markdown":"# Home"}],"Assets":[],"Site":{"RepoUrl":null,"SiteName":"Legacy","LogoText":null,"LogoPath":null,"LogoDarkPath":null,"ShowSiteName":null,"Stylesheet":null,"Themes":null,"Navigation":null,"FSharpPrelude":null}}"""
+            )
+
+        let releaseComponent schema path (value: byte array) : ReleaseComponent =
+            { SchemaVersion = schema
+              Path = path
+              Sha256 = Convert.ToHexString(Security.Cryptography.SHA256.HashData value).ToLowerInvariant()
+              Size = int64 value.Length }
+
+        let manifest: ReleaseCapsuleManifest =
+            { SchemaVersion = ReleaseCapsule.ManifestSchemaVersion
+              ProductVersion = package.Version
+              SourceRevision = "revision"
+              CaptureToolVersion = "0.4.1"
+              Api = releaseComponent api.SchemaVersion "api.json" apiBytes
+              Semantic = releaseComponent semantic.SchemaVersion "semantic.json" semanticBytes
+              Content = releaseComponent 1 "content.json" contentBytes }
+
+        let manifestBytes = bytes manifest
+
+        use archive =
+            System.IO.Compression.ZipFile.Open(capsule, System.IO.Compression.ZipArchiveMode.Create)
+
+        for name, value in
+            [ "api.json", apiBytes
+              "content.json", contentBytes
+              "manifest.json", manifestBytes
+              "semantic.json", semanticBytes ] do
+            let entry = archive.CreateEntry(name)
+            use stream = entry.Open()
+            stream.Write(value, 0, value.Length)
+
+        archive.Dispose()
+
+        let _, _, _, content, _ = ReleaseCapsule.load capsule
+        Assert.False(content.UsesDocumentationSets)
+        Assert.Equal(DocsSet.DefaultId, content.DocsSets.Head.Id)
+        Assert.Equal("docs", content.DocsSets.Head.Source)
+        Assert.Equal(DocsSet.DefaultId, content.Pages.Head.SetId)
+        Assert.Equal(Some "open System", content.DocsSets.Head.FSharpPrelude)

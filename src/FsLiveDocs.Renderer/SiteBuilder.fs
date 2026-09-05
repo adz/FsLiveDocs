@@ -52,20 +52,71 @@ module SiteBuilder =
         OutputDir: string
     }
 
+    /// <summary>One resolved documentation set ready for renderer-only site assembly.</summary>
+    type DocsSetSite =
+        {
+            Set: ReleaseDocsSet
+            /// Global package model, optionally enriched by this set's API Markdown.
+            Package: PackageModel
+            Pages: ContentPage list
+        }
+
+    /// <summary>One captured version and its renderer-neutral set model.</summary>
+    type DocsSetVersionSite =
+        { Version: string
+          Package: PackageModel
+          Sets: DocsSetSite list
+          StaticRoot: string option
+          UsesDocumentationSets: bool }
+
     /// <summary>Renders a single Markdown guide page.</summary>
     /// <param name="page">The processed content page to render.</param>
     /// <returns>The rendered HTML document as a string.</returns>
-    let renderPage (page: ContentPage) (context: SiteRenderContext) =
-        let content = [
-            div [] [ rawText page.ContentHtml ]
-        ]
-        View.layout page.Metadata.Title context.AllPages context.Package context.Config context.Versions context.Theme context.RootPath content
+    let private renderPageCore chrome (page: ContentPage) (context: SiteRenderContext) =
+        let content = [ div [] [ rawText page.ContentHtml ] ]
+
+        match chrome with
+        | Some value ->
+            View.layoutWithChrome
+                value
+                page.Metadata.Title
+                context.AllPages
+                context.Package
+                context.Config
+                context.Versions
+                context.Theme
+                context.RootPath
+                content
+        | None ->
+            View.layout
+                page.Metadata.Title
+                context.AllPages
+                context.Package
+                context.Config
+                context.Versions
+                context.Theme
+                context.RootPath
+                content
         |> fun node -> RenderView.AsString.htmlNode node
+
+    let renderPage page context = renderPageCore None page context
 
     /// <summary>Renders a single API entity page (Module or Type).</summary>
     /// <param name="e">The entity to render.</param>
     /// <returns>The rendered HTML document as a string.</returns>
-    let renderEntityPage (e: EntityModel) (context: SiteRenderContext) =
+    let private renderEntityPageCore chrome (e: EntityModel) (context: SiteRenderContext) =
+        let entityTargets =
+            match chrome with
+            | Some(value: View.SiteChrome) ->
+                value.ApiRoutes
+                |> Map.map (fun id route -> context.RootPath + value.VersionPath + route + "api/" + id + ".html")
+            | None -> Map.empty
+
+        let renderDocumentation nodes =
+            if entityTargets.IsEmpty then
+                Presentation.renderDocumentationHtml context.Package nodes
+            else
+                Presentation.renderDocumentationHtmlWithTargets context.Package entityTargets nodes
         // Other projects' own root entities (e.g. "Axial.Layers") nest under a shared parent
         // namespace ("Axial") in the merged tree. Each such project already gets its own sidebar
         // group and API index card, so listing it again in the parent's Contents is noise.
@@ -98,8 +149,11 @@ module SiteBuilder =
             if Documentation.isEmpty summary then
                 emptyText
             else
-                let rendered = Presentation.renderDocumentationHtml context.Package summary
-                div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ rawText rendered ]
+                let rendered = renderDocumentation summary
+
+                div
+                    [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ]
+                    [ rawText rendered ]
 
         let renderFieldTable (title: string) (items: MemberModel list) =
             if items.IsEmpty then emptyText
@@ -136,155 +190,234 @@ module SiteBuilder =
                 ]
 
         let renderGenericEntity (ent: EntityModel) =
-            div [ _class ""; _id ent.Id ] [
-                h1 [
-                    _class "text-4xl font-black mb-8 pb-4 border-b-8 border-primary/10 tracking-tight group scroll-mt-24 flex items-center gap-3"
-                    attr "data-toc-title" ent.Name
-                ] [
-                    span [ _class "leading-tight" ] [ str ent.Name ]
-                    span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str (string ent.Kind) ]
-                    a [
-                        _href ("#" + ent.Id)
-                        _class "anchor-link opacity-0 group-hover:opacity-60 transition-opacity no-underline inline-flex items-center justify-center w-6 h-6 text-base-content/60 hover:text-primary"
-                        attr "aria-label" $"Copy link to {ent.Name}"
-                        attr "title" $"Copy link to {ent.Name}"
-                    ] [ i [ _class "bi bi-link-45deg text-base" ] [] ]
-                ]
+            div
+                [ _class ""; _id ent.Id ]
+                [ h1
+                      [ _class
+                            "text-4xl font-black mb-8 pb-4 border-b-8 border-primary/10 tracking-tight group scroll-mt-24 flex items-center gap-3"
+                        attr "data-toc-title" ent.Name ]
+                      [ span [ _class "leading-tight" ] [ str ent.Name ]
+                        span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str (string ent.Kind) ]
+                        a
+                            [ _href ("#" + ent.Id)
+                              _class
+                                  "anchor-link opacity-0 group-hover:opacity-60 transition-opacity no-underline inline-flex items-center justify-center w-6 h-6 text-base-content/60 hover:text-primary"
+                              attr "aria-label" $"Copy link to {ent.Name}"
+                              attr "title" $"Copy link to {ent.Name}" ]
+                            [ i [ _class "bi bi-link-45deg text-base" ] [] ] ]
 
-                renderPackageBadges ent
+                  renderPackageBadges ent
 
-                renderSummaryBlock ent.Summary
+                  renderSummaryBlock ent.Summary
 
-                let ownContents =
-                    ent.Entities |> List.filter (fun ne -> not (otherPackageRootIds.Contains ne.Id))
+                  let ownContents =
+                      ent.Entities |> List.filter (fun ne -> not (otherPackageRootIds.Contains ne.Id))
 
-                let contentsCard (ne: EntityModel) =
-                    a [ _href (ne.Id + ".html"); _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
-                        span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str ne.Name ]
-                        span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string ne.Kind) ]
-                    ]
+                  let contentsCard (ne: EntityModel) =
+                      a
+                          [ _href (ne.Id + ".html")
+                            _class
+                                "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ]
+                          [ span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str ne.Name ]
+                            span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string ne.Kind) ] ]
 
-                if not ownContents.IsEmpty then
-                    // Two independent projects can both add members directly to the same shared
-                    // namespace (e.g. "Axial" and "Axial.Telemetry" both declare things in namespace
-                    // "Axial.Telemetry"). Split Contents by the owning project and give each group an
-                    // anchor, so a sidebar link scoped to one project can land on that project's own
-                    // members instead of the page just looking like it belongs to a different one.
-                    let packagesFor (childId: string) =
-                        (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
-                        |> List.filter (fun package -> package.EntityIds |> List.contains childId)
-                        |> List.map (fun package -> package.Name)
+                  if not ownContents.IsEmpty then
+                      // Two independent projects can both add members directly to the same shared
+                      // namespace (e.g. "Axial" and "Axial.Telemetry" both declare things in namespace
+                      // "Axial.Telemetry"). Split Contents by the owning project and give each group an
+                      // anchor, so a sidebar link scoped to one project can land on that project's own
+                      // members instead of the page just looking like it belongs to a different one.
+                      let packagesFor (childId: string) =
+                          (if isNull (box context.Package.Packages) then
+                               []
+                           else
+                               context.Package.Packages)
+                          |> List.filter (fun package -> package.EntityIds |> List.contains childId)
+                          |> List.map (fun package -> package.Name)
 
-                    let groupedByPackage =
-                        ownContents
-                        |> List.groupBy (fun ne -> packagesFor ne.Id |> List.tryHead |> Option.defaultValue "")
-                        |> List.sortBy fst
+                      let groupedByPackage =
+                          ownContents
+                          |> List.groupBy (fun ne -> packagesFor ne.Id |> List.tryHead |> Option.defaultValue "")
+                          |> List.sortBy fst
 
-                    div [ _class "mb-16" ] [
-                        View.h2WithAnchor (ent.Id + "-contents") "Contents" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                        if groupedByPackage.Length > 1 then
-                            div [ _class "flex flex-col gap-8" ] (
-                                groupedByPackage |> List.map (fun (packageName, items) ->
-                                    div [ _class "flex flex-col gap-4" ] [
-                                        if packageName <> "" then
-                                            h3 [
-                                                _id ("package-" + packageName)
-                                                _class "scroll-mt-24 text-[10px] font-black uppercase tracking-widest opacity-40"
-                                            ] [ str packageName ]
-                                        div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (items |> List.map contentsCard)
-                                    ])
-                            )
-                        else
-                            div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (ownContents |> List.map contentsCard)
-                    ]
+                      div
+                          [ _class "mb-16" ]
+                          [ View.h2WithAnchor
+                                (ent.Id + "-contents")
+                                "Contents"
+                                "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
+                            if groupedByPackage.Length > 1 then
+                                div
+                                    [ _class "flex flex-col gap-8" ]
+                                    (groupedByPackage
+                                     |> List.map (fun (packageName, items) ->
+                                         div
+                                             [ _class "flex flex-col gap-4" ]
+                                             [ if packageName <> "" then
+                                                   h3
+                                                       [ _id ("package-" + packageName)
+                                                         _class
+                                                             "scroll-mt-24 text-[10px] font-black uppercase tracking-widest opacity-40" ]
+                                                       [ str packageName ]
+                                               div
+                                                   [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ]
+                                                   (items |> List.map contentsCard) ]))
+                            else
+                                div
+                                    [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ]
+                                    (ownContents |> List.map contentsCard) ]
 
-                if ent.Kind <> EntityKind.Module && not ent.Members.IsEmpty then
-                    div [ _class "mb-16 not-prose" ] [
-                        View.h2WithAnchor (ent.Id + "-spec") "Specification" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                        div [ _class "rounded-3xl border border-base-300 bg-base-100 shadow-sm overflow-hidden" ] [
-                            div [ _class "grid grid-cols-1 md:grid-cols-3 gap-0 border-b border-base-300" ] [
-                                div [ _class "p-5 md:p-6" ] [
-                                    div [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ] [ str "Kind" ]
-                                    div [ _class "text-lg font-black" ] [ str (string ent.Kind) ]
-                                ]
-                                div [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ] [
-                                    div [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ] [ str "Members" ]
-                                    div [ _class "text-lg font-black" ] [ str (string ent.Members.Length) ]
-                                ]
-                                div [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ] [
-                                    div [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ] [ str "Examples" ]
-                                    div [ _class "text-lg font-black" ] [ str (string (Presentation.entityExamples ent).Length) ]
-                                ]
-                            ]
-                            div [ _class "p-5 md:p-6 space-y-3" ] (
-                                ent.Members
-                                |> List.take (min 5 ent.Members.Length)
-                                |> List.map (fun m ->
-                                    div [ _class "flex flex-col gap-2 rounded-2xl border border-base-300 bg-base-200/20 p-4" ] [
-                                        div [ _class "flex items-center justify-between gap-4" ] [
-                                            span [ _class "font-bold text-primary" ] [ str m.Name ]
-                                            span [ _class "text-[10px] uppercase tracking-[0.3em] opacity-40 font-black" ] [ str "Signature" ]
-                                        ]
-                                        div [ _class "font-mono text-sm text-accent overflow-x-auto" ] [ rawText (Presentation.highlightSignatureHtml m.Signature) ]
-                                    ]
-                                )
-                            )
-                        ]
-                    ]
+                  if ent.Kind <> EntityKind.Module && not ent.Members.IsEmpty then
+                      div
+                          [ _class "mb-16 not-prose" ]
+                          [ View.h2WithAnchor
+                                (ent.Id + "-spec")
+                                "Specification"
+                                "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
+                            div
+                                [ _class "rounded-3xl border border-base-300 bg-base-100 shadow-sm overflow-hidden" ]
+                                [ div
+                                      [ _class "grid grid-cols-1 md:grid-cols-3 gap-0 border-b border-base-300" ]
+                                      [ div
+                                            [ _class "p-5 md:p-6" ]
+                                            [ div
+                                                  [ _class
+                                                        "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ]
+                                                  [ str "Kind" ]
+                                              div [ _class "text-lg font-black" ] [ str (string ent.Kind) ] ]
+                                        div
+                                            [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ]
+                                            [ div
+                                                  [ _class
+                                                        "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ]
+                                                  [ str "Members" ]
+                                              div [ _class "text-lg font-black" ] [ str (string ent.Members.Length) ] ]
+                                        div
+                                            [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ]
+                                            [ div
+                                                  [ _class
+                                                        "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ]
+                                                  [ str "Examples" ]
+                                              div
+                                                  [ _class "text-lg font-black" ]
+                                                  [ str (string (Presentation.entityExamples ent).Length) ] ] ]
+                                  div
+                                      [ _class "p-5 md:p-6 space-y-3" ]
+                                      (ent.Members
+                                       |> List.take (min 5 ent.Members.Length)
+                                       |> List.map (fun m ->
+                                           div
+                                               [ _class
+                                                     "flex flex-col gap-2 rounded-2xl border border-base-300 bg-base-200/20 p-4" ]
+                                               [ div
+                                                     [ _class "flex items-center justify-between gap-4" ]
+                                                     [ span [ _class "font-bold text-primary" ] [ str m.Name ]
+                                                       span
+                                                           [ _class
+                                                                 "text-[10px] uppercase tracking-[0.3em] opacity-40 font-black" ]
+                                                           [ str "Signature" ] ]
+                                                 div
+                                                     [ _class "font-mono text-sm text-accent overflow-x-auto" ]
+                                                     [ rawText (Presentation.highlightSignatureHtml m.Signature) ] ])) ] ]
 
-                if not ent.Members.IsEmpty then
-                    div [ _class "mb-16 not-prose" ] [
-                        View.h2WithAnchor (ent.Id + "-summary") "Summary" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                        div [ _class "overflow-x-auto rounded-2xl border border-base-300 shadow-sm" ] [
-                            table [ _class "table table-zebra w-full" ] [
-                                thead [ _class "bg-base-200/50" ] [
-                                    tr [] [
-                                        th [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Name" ]
-                                        th [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Signature" ]
-                                        th [ attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Synopsis" ]
-                                    ]
-                                ]
-                                tbody [] (
-                                    ent.Members
-                                    |> List.map (fun m ->
-                                        tr [] [
-                                            td [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                                a [ _href ("#" + m.Id); _class "font-bold text-primary hover:underline" ] [ str m.Name ]
-                                            ]
-                                            td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                                span [ _class "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText m.Signature ]
-                                            ]
-                                            td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                                str (Presentation.synopsis m.Summary)
-                                            ]
-                                        ]
-                                    )
-                                )
-                            ]
-                        ]
-                    ]
+                  if not ent.Members.IsEmpty then
+                      div
+                          [ _class "mb-16 not-prose" ]
+                          [ View.h2WithAnchor
+                                (ent.Id + "-summary")
+                                "Summary"
+                                "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
+                            div
+                                [ _class "overflow-x-auto rounded-2xl border border-base-300 shadow-sm" ]
+                                [ table
+                                      [ _class "table table-zebra w-full" ]
+                                      [ thead
+                                            [ _class "bg-base-200/50" ]
+                                            [ tr
+                                                  []
+                                                  [ th
+                                                        [ attr
+                                                              "style"
+                                                              "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ]
+                                                        [ str "Name" ]
+                                                    th
+                                                        [ attr
+                                                              "style"
+                                                              "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ]
+                                                        [ str "Signature" ]
+                                                    th
+                                                        [ attr
+                                                              "style"
+                                                              "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ]
+                                                        [ str "Synopsis" ] ] ]
+                                        tbody
+                                            []
+                                            (ent.Members
+                                             |> List.map (fun m ->
+                                                 tr
+                                                     []
+                                                     [ td
+                                                           [ attr
+                                                                 "style"
+                                                                 "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
+                                                           [ a
+                                                                 [ _href ("#" + m.Id)
+                                                                   _class "font-bold text-primary hover:underline" ]
+                                                                 [ str m.Name ] ]
+                                                       td
+                                                           [ attr
+                                                                 "style"
+                                                                 "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
+                                                           [ span
+                                                                 [ _class
+                                                                       "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ]
+                                                                 [ rawText m.Signature ] ]
+                                                       td
+                                                           [ _class "text-sm opacity-80 leading-relaxed"
+                                                             attr
+                                                                 "style"
+                                                                 "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
+                                                           [ str (Presentation.synopsis m.Summary) ] ])) ] ] ]
 
-                div [ _class "space-y-12" ] (ent.Members |> List.map (View.apiCard context.Package context.Config.RepoUrl))
+                  div
+                      [ _class "space-y-12" ]
+                      (ent.Members
+                       |> List.map (fun memberModel ->
+                           if entityTargets.IsEmpty then
+                               View.apiCard context.Package context.Config.RepoUrl memberModel
+                           else
+                               View.apiCardWithTargets context.Package entityTargets context.Config.RepoUrl memberModel))
 
-                let examples = Presentation.entityExamples ent
-                if not examples.IsEmpty then
-                    div [ _class "mt-24 border-t border-base-300 pt-16" ] [
-                        View.h2WithAnchor (ent.Id + "-examples") "Examples" "text-3xl font-black mb-10 tracking-tighter"
-                        div [ _class "space-y-12" ] (
-                            examples |> List.map (fun ex ->
-                                let exampleId =
-                                    let slug = Regex.Replace(ex.Name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-')
-                                    if String.IsNullOrWhiteSpace slug then "example" else slug
-                                div [ _class "not-prose" ] [
-                                    if ex.Name <> "Example" then
-                                        View.h3WithAnchor (ent.Id + "-example-" + exampleId) ex.Name "text-sm font-black mb-4 opacity-40 tracking-[0.3em]"
-                                    pre [ _class "bg-neutral text-neutral-content p-6 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-md" ] [
-                                        code [ _class "language-fsharp" ] [ str ex.Content ]
-                                    ]
-                                ])
-                        )
-                    ]
-            ]
+                  let examples = Presentation.entityExamples ent
+
+                  if not examples.IsEmpty then
+                      div
+                          [ _class "mt-24 border-t border-base-300 pt-16" ]
+                          [ View.h2WithAnchor
+                                (ent.Id + "-examples")
+                                "Examples"
+                                "text-3xl font-black mb-10 tracking-tighter"
+                            div
+                                [ _class "space-y-12" ]
+                                (examples
+                                 |> List.map (fun ex ->
+                                     let exampleId =
+                                         let slug =
+                                             Regex.Replace(ex.Name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-')
+
+                                         if String.IsNullOrWhiteSpace slug then "example" else slug
+
+                                     div
+                                         [ _class "not-prose" ]
+                                         [ if ex.Name <> "Example" then
+                                               View.h3WithAnchor
+                                                   (ent.Id + "-example-" + exampleId)
+                                                   ex.Name
+                                                   "text-sm font-black mb-4 opacity-40 tracking-[0.3em]"
+                                           pre
+                                               [ _class
+                                                     "bg-neutral text-neutral-content p-6 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-md" ]
+                                               [ code [ _class "language-fsharp" ] [ str ex.Content ] ] ])) ] ]
 
         let renderRecordEntity (ent: EntityModel) =
             div [ _id ent.Id ] [
@@ -328,13 +461,36 @@ module SiteBuilder =
             ]
 
         let content =
-            [
-                match e.Kind with
-                | EntityKind.Record -> renderRecordEntity e
-                | _ -> renderGenericEntity e
-            ]
-        View.layout e.Name context.AllPages context.Package context.Config context.Versions context.Theme context.RootPath content
+            [ match e.Kind with
+              | EntityKind.Record -> renderRecordEntity e
+              | _ -> renderGenericEntity e ]
+
+        match chrome with
+        | Some value ->
+            View.layoutWithChrome
+                value
+                e.Name
+                context.AllPages
+                context.Package
+                context.Config
+                context.Versions
+                context.Theme
+                context.RootPath
+                content
+        | None ->
+            View.layout
+                e.Name
+                context.AllPages
+                context.Package
+                context.Config
+                context.Versions
+                context.Theme
+                context.RootPath
+                content
         |> fun node -> RenderView.AsString.htmlNode node
+
+    let renderEntityPage entity context =
+        renderEntityPageCore None entity context
 
     /// <summary>Generates a text-based summary of the API for LLM consumption.</summary>
     /// <param name="package">The package model to summarize.</param>
@@ -541,6 +697,377 @@ module SiteBuilder =
           ]
           let (html: string) = View.layout "Home" context.Pages context.Package context.Config context.Versions context.Theme context.RootPath indexContent |> RenderView.AsString.htmlNode
           File.WriteAllText(indexPath, html)
+
+    let private packageForEntityIds (package: PackageModel) (entityIds: string list) =
+        let allowed = Set.ofList entityIds
+
+        let rec retain (entity: EntityModel) =
+            let children = entity.Entities |> List.choose retain
+
+            if allowed.Contains entity.Id || not children.IsEmpty then
+                Some { entity with Entities = children }
+            else
+                None
+
+        let packages =
+            (if isNull (box package.Packages) then
+                 []
+             else
+                 package.Packages)
+            |> List.choose (fun info ->
+                let ids = info.EntityIds |> List.filter allowed.Contains
+
+                if ids.IsEmpty then
+                    None
+                else
+                    Some { info with EntityIds = ids })
+
+        { package with
+            Entities = package.Entities |> List.choose retain
+            Packages = packages }
+
+    let private routePrefix (set: ReleaseDocsSet) =
+        if String.IsNullOrEmpty set.Path then
+            ""
+        else
+            set.Path.Trim('/') + "/"
+
+    let private setRootOutput (set: ReleaseDocsSet) = routePrefix set + "index.html"
+    let private setApiOutput (set: ReleaseDocsSet) = routePrefix set + "api/index.html"
+
+    let private versionOutputRoot currentVersion version =
+        if version = currentVersion then
+            ""
+        else
+            "history/" + version + "/"
+
+    let private setLinks (site: DocsSetVersionSite) =
+        site.Sets
+        |> List.map (fun value ->
+            ({ Id = value.Set.Id
+               Title = value.Set.Title
+               Path = value.Set.Path }
+            : View.DocsSetLink))
+
+    let private fallbackForSet (targetSite: DocsSetVersionSite) (setId: string) preferApi =
+        match targetSite.Sets |> List.tryFind (fun candidate -> candidate.Set.Id = setId) with
+        | Some target when preferApi && target.Set.Api -> setApiOutput target.Set
+        | Some target -> setRootOutput target.Set
+        | None ->
+            targetSite.Sets
+            |> List.tryFind (fun candidate -> candidate.Set.IsDefault)
+            |> Option.map (fun candidate -> setRootOutput candidate.Set)
+            |> Option.defaultValue "index.html"
+
+    let private guideVersionTargets
+        currentVersion
+        (sites: DocsSetVersionSite list)
+        (currentSet: ReleaseDocsSet)
+        (page: ContentPage)
+        =
+        let relative = page.OutputPath.Substring((routePrefix currentSet).Length)
+
+        sites
+        |> List.map (fun targetSite ->
+            let destination =
+                match
+                    targetSite.Sets
+                    |> List.tryFind (fun candidate -> candidate.Set.Id = currentSet.Id)
+                with
+                | Some target ->
+                    let exact = routePrefix target.Set + relative
+
+                    if target.Pages |> List.exists (fun candidate -> candidate.OutputPath = exact) then
+                        exact
+                    else
+                        setRootOutput target.Set
+                | None -> fallbackForSet targetSite currentSet.Id false
+
+            targetSite.Version, versionOutputRoot currentVersion targetSite.Version + destination)
+
+    let private apiVersionTargets
+        currentVersion
+        (sites: DocsSetVersionSite list)
+        (currentSet: ReleaseDocsSet)
+        entityId
+        =
+        sites
+        |> List.map (fun targetSite ->
+            let destination =
+                match
+                    targetSite.Sets
+                    |> List.tryFind (fun candidate -> candidate.Set.Id = currentSet.Id)
+                with
+                | Some target when target.Set.Api && target.Set.ApiEntityIds |> List.contains entityId ->
+                    routePrefix target.Set + "api/" + entityId + ".html"
+                | Some target when target.Set.Api -> setApiOutput target.Set
+                | Some target -> setRootOutput target.Set
+                | None -> fallbackForSet targetSite currentSet.Id true
+
+            targetSite.Version, versionOutputRoot currentVersion targetSite.Version + destination)
+
+    let private rootVersionTargets
+        currentVersion
+        (sites: DocsSetVersionSite list)
+        (currentSet: ReleaseDocsSet)
+        preferApi
+        =
+        sites
+        |> List.map (fun targetSite ->
+            targetSite.Version,
+            versionOutputRoot currentVersion targetSite.Version
+            + fallbackForSet targetSite currentSet.Id preferApi)
+
+    let private renderDocsSetVersion
+        currentVersion
+        versions
+        allSites
+        config
+        theme
+        siteRootPath
+        destination
+        (site: DocsSetVersionSite)
+        =
+        let links = setLinks site
+
+        for docsSet in site.Sets do
+            let set = docsSet.Set
+            let navigationPackage = packageForEntityIds docsSet.Package set.ApiEntityIds
+
+            let apiRoutes =
+                site.Sets
+                |> List.sortBy (fun candidate ->
+                    if candidate.Set.Id = set.Id then 0
+                    elif candidate.Set.IsDefault then 1
+                    else 2)
+                |> List.collect (fun candidate ->
+                    candidate.Set.ApiEntityIds |> List.map (fun id -> id, routePrefix candidate.Set))
+                |> List.rev
+                |> Map.ofList
+
+            let chrome targets =
+                ({ SetId = set.Id
+                   SetTitle = set.Title
+                   SetPath = set.Path
+                   VersionPath = versionOutputRoot currentVersion site.Version
+                   Sets = links
+                   Sidebar = set.Sidebar
+                   Api = set.Api
+                   NavigationPackage = navigationPackage
+                   ApiRoutes = apiRoutes
+                   VersionTargets = targets }
+                : View.SiteChrome)
+
+            let baseContext rootPath =
+                { AllPages = docsSet.Pages
+                  Package = docsSet.Package
+                  Config = config
+                  Versions = versions
+                  Theme = theme
+                  RootPath = rootPath }
+
+            docsSet.Pages
+            |> List.toArray
+            |> fun pages ->
+                parallelRender pages (fun page ->
+                    let depth = page.OutputPath.Split('/').Length - 1
+                    let context = baseContext (siteRootPath + String.replicate depth "../")
+
+                    let html =
+                        renderPageCore
+                            (Some(chrome (guideVersionTargets currentVersion allSites set page)))
+                            page
+                            context
+
+                    let output = Path.Combine(destination, page.OutputPath)
+                    Directory.CreateDirectory(Path.GetDirectoryName output) |> ignore
+                    File.WriteAllText(output, html))
+
+            if set.Api then
+                let apiDir =
+                    Path.Combine(destination, (routePrefix set).Replace('/', Path.DirectorySeparatorChar), "api")
+
+                Directory.CreateDirectory(apiDir) |> ignore
+                let allEntities = Presentation.flattenEntities navigationPackage.Entities
+
+                let entityContext =
+                    baseContext (siteRootPath + String.replicate ((setApiOutput set).Split('/').Length - 1) "../")
+
+                allEntities
+                |> List.toArray
+                |> fun entities ->
+                    parallelRender entities (fun entity ->
+                        let targets = apiVersionTargets currentVersion allSites set entity.Id
+                        let html = renderEntityPageCore (Some(chrome targets)) entity entityContext
+                        File.WriteAllText(Path.Combine(apiDir, entity.Id + ".html"), html))
+
+                let packageDir = Path.Combine(apiDir, "packages")
+                Directory.CreateDirectory(packageDir) |> ignore
+
+                navigationPackage.Packages
+                |> List.iter (fun packageInfo ->
+                    let owned =
+                        View.entitiesForPackage packageInfo navigationPackage.Entities
+                        |> Presentation.flattenEntities
+
+                    if not owned.IsEmpty then
+                        let packageContent =
+                            [ h1
+                                  [ _id "package"
+                                    attr "data-toc-title" packageInfo.Name
+                                    _class "text-5xl font-black tracking-tighter mb-12" ]
+                                  [ str packageInfo.Name ]
+                              div
+                                  [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ]
+                                  (owned
+                                   |> List.map (fun entity ->
+                                       a
+                                           [ _href ("../" + entity.Id + ".html")
+                                             _class "p-4 border border-base-300 rounded-2xl font-bold" ]
+                                           [ str entity.Name ])) ]
+
+                        let packageRoot =
+                            siteRootPath
+                            + String.replicate
+                                ((routePrefix set).Split('/', StringSplitOptions.RemoveEmptyEntries).Length + 2)
+                                "../"
+
+                        let html =
+                            View.layoutWithChrome
+                                (chrome (rootVersionTargets currentVersion allSites set true))
+                                packageInfo.Name
+                                docsSet.Pages
+                                docsSet.Package
+                                config
+                                versions
+                                theme
+                                packageRoot
+                                packageContent
+                            |> RenderView.AsString.htmlNode
+
+                        File.WriteAllText(
+                            Path.Combine(packageDir, Uri.EscapeDataString packageInfo.Name + ".html"),
+                            html
+                        ))
+
+                let card entity =
+                    a
+                        [ _href (entity.Id + ".html")
+                          _class "card bg-base-100 border border-base-300 p-5 hover:border-primary transition-all" ]
+                        [ h3 [ _class "text-lg font-bold" ] [ str entity.Name ]
+                          p [ _class "text-sm opacity-60 mt-2" ] [ str (Presentation.synopsis entity.Summary) ] ]
+
+                let overview =
+                    [ View.h1WithAnchor "api-reference" "API Reference" "text-5xl font-black mb-12 tracking-tighter"
+                      div
+                          [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 not-prose" ]
+                          (allEntities |> List.map card) ]
+
+                let overviewRoot =
+                    siteRootPath + String.replicate ((setApiOutput set).Split('/').Length - 1) "../"
+
+                let apiHtml =
+                    View.layoutWithChrome
+                        (chrome (rootVersionTargets currentVersion allSites set true))
+                        "API Reference"
+                        docsSet.Pages
+                        docsSet.Package
+                        config
+                        versions
+                        theme
+                        overviewRoot
+                        overview
+                    |> RenderView.AsString.htmlNode
+
+                File.WriteAllText(Path.Combine(apiDir, "index.html"), apiHtml)
+                validateGeneratedApiLinks apiDir
+
+            let indexPath = Path.Combine(destination, setRootOutput set)
+
+            if not (File.Exists indexPath) then
+                Directory.CreateDirectory(Path.GetDirectoryName indexPath) |> ignore
+                let rootDepth = setRootOutput set |> fun output -> output.Split('/').Length - 1
+                let rootPath = siteRootPath + String.replicate rootDepth "../"
+
+                let content =
+                    [ View.h1WithAnchor "home" set.Title "text-6xl font-black mb-8 tracking-tighter"
+                      if set.Api then
+                          a [ _href "api/"; _class "btn btn-primary" ] [ str "Explore API" ] ]
+
+                let html =
+                    View.layoutWithChrome
+                        (chrome (rootVersionTargets currentVersion allSites set false))
+                        set.Title
+                        docsSet.Pages
+                        docsSet.Package
+                        config
+                        versions
+                        theme
+                        rootPath
+                        content
+                    |> RenderView.AsString.htmlNode
+
+                File.WriteAllText(indexPath, html)
+
+    /// <summary>Builds one shared shell containing all configured documentation sets.</summary>
+    let buildDocsSets currentVersion (sets: DocsSetSite list) config versions theme outputDir =
+        let site =
+            { Version = currentVersion
+              Package = sets.Head.Package
+              Sets = sets
+              StaticRoot = None
+              UsesDocumentationSets = true }
+
+        if Directory.Exists outputDir then
+            Directory.Delete(outputDir, true)
+
+        Directory.CreateDirectory(outputDir) |> ignore
+        File.WriteAllText(Path.Combine(outputDir, "llms.txt"), generateLlmsTxt site.Package)
+        renderDocsSetVersion currentVersion versions [ site ] config theme "" outputDir site
+
+    /// <summary>Renders captured documentation sets for every historical version.</summary>
+    let buildDocsSetsHistory currentVersion (sites: DocsSetVersionSite list) config theme outputDir =
+        let current =
+            sites
+            |> List.tryFind (fun site -> site.Version = currentVersion)
+            |> Option.defaultWith (fun () -> invalidOp $"Current history version {currentVersion} was not loaded.")
+
+        let versions =
+            currentVersion
+            :: (sites |> List.map _.Version |> List.filter ((<>) currentVersion))
+
+        if Directory.Exists outputDir then
+            Directory.Delete(outputDir, true)
+
+        Directory.CreateDirectory(outputDir) |> ignore
+
+        for site in current :: (sites |> List.filter (fun site -> site.Version <> currentVersion)) do
+            let siteRootPath, destination =
+                if site.Version = currentVersion then
+                    "", outputDir
+                else
+                    "../../", Path.Combine(outputDir, "history", site.Version)
+
+            Directory.CreateDirectory(destination) |> ignore
+
+            if site.UsesDocumentationSets then
+                renderDocsSetVersion currentVersion versions sites config theme siteRootPath destination site
+            else
+                let legacy = site.Sets.Head
+
+                build
+                    { Pages = legacy.Pages
+                      Package = legacy.Package
+                      Config = config
+                      Versions = versions
+                      Theme = theme
+                      RootPath = siteRootPath
+                      OutputDir = destination }
+
+            site.StaticRoot
+            |> Option.iter (fun root -> ContentProvider.copyStaticFiles root destination)
+
+        File.WriteAllText(Path.Combine(outputDir, "llms.txt"), generateLlmsTxt current.Package)
 
     /// <summary>Builds the current site and computes the version list from history snapshots.</summary>
     /// <param name="historyDir">The directory containing previous package snapshots.</param>

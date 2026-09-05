@@ -5,7 +5,7 @@
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue?logo=github)](https://adz.github.io/FsLiveDocs/)
 [![License](https://img.shields.io/github/license/adz/FsLiveDocs)](LICENSE)
 
-FsLiveDocs can be the whole documentation site for an F# library: Markdown guides and generated API reference in one navigation and search index, without Hugo, Docsy, or Docusaurus.
+FsLiveDocs can be the whole documentation site for an F# library: Markdown guides and generated API reference in one navigation and search index, without Hugo, Docsy, or Docusaurus. One shared shell can host multiple isolated documentation sets with their own routes, sidebars, API surfaces, and verification preludes.
 
 It builds on FSharp.Formatting with richer API pages, API-aware links, source transclusion, checked examples, compiler tooltips, and immutable release documentation.
 

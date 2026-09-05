@@ -512,6 +512,10 @@ module SymbolLister =
         projectProperty projectPath "PackageId"
         |> Option.defaultWith (fun () -> getAssemblyName projectPath)
 
+    /// <summary>The <see cref="PackageInfo.Name"/> a project contributes, so a documentation set can
+    /// select the API surface of its own projects from the shared package model.</summary>
+    let packageName (projectPath: string) = getPackageName projectPath
+
     let private getPackageReferenceDirectories (projectPath: string) =
         let projectDir = Path.GetDirectoryName(projectPath)
         let projectName = Path.GetFileNameWithoutExtension(projectPath)
