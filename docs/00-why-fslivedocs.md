@@ -5,99 +5,34 @@ weight: 1
 
 # Why FsLiveDocs
 
-FsLiveDocs is a modern documentation tool for F# libraries. Think of it as
-[fsdocs](https://fsprojects.github.io/FSharp.Formatting/) plus verification,
-versioned docs, and the conveniences you would otherwise assemble by hand.
+Documentation examples are easy to trust and easy to forget. A library changes, an old snippet still looks convincing, and the reader finds the breakage first.
 
-## Where it came from
+FsLiveDocs treats examples as part of the codebase. It compiles them with the real project and can run the few examples whose output matters.
 
-This project started with fsdocs, then grew a requirement for versioned
-documentation. That led through Docusaurus and later Docsy — each with its own
-Node or Go toolchain — combined with FSharp.Formatting for the API reference and a
-layer of scripts to hold it together. It worked, but it was clunky.
+That turns a docs site into a friendly extra test suite. API changes fail near the explanation they broke, while readers still get normal guides and generated reference pages.
 
-The clunkiness was one motivation. The larger one was verification:
+## One tool instead of a stack
 
-- What if every example in the docs compiled in CI, so a rename or a signature
-  change could not silently break them?
-- Then why not check FSI transcripts too?
-- Then why not actually run examples, capture their output, and show that output
-  back in the docs?
+FsLiveDocs started with a familiar mix: FSharp.Formatting for API reference, another static-site tool for guides, and scripts to connect releases and versions.
 
-At that point executable documentation starts behaving like a test suite.
-FsLiveDocs is that idea built into one F#/.NET tool.
+It worked, but every extra tool created another configuration, build step, and place for links or versions to drift.
 
-For a full example, see the [Reified documentation](https://adz.github.io/Reified/getting-started/index.html).
+FsLiveDocs keeps that workflow in one .NET tool:
 
-## Modern
+- Markdown guides and enriched API pages;
+- compile-checked, runnable, and transcript examples;
+- source transclusion and API-aware links;
+- one sidebar, search index, theme, and preview server;
+- immutable documentation captured with each release.
 
-- A `dotnet tool`: `dotnet livedocs`.
-- Current F#/.NET implementation and SDK tooling.
-- Tailwind CSS and DaisyUI, with a responsive UI and a theme picker.
-- Long-form API pages that merge prose with the generated member reference.
-- One search index and one sidebar across guides and API.
-- Code presentation built on FSharp.Formatting, with inferred types and compiler
-  tooltips on rendered blocks.
-- First-class versioned documentation.
+It still uses [FSharp.Formatting](https://fsprojects.github.io/FSharp.Formatting/) for F# API extraction. If you only need a current API reference, fsdocs may already be the smaller answer.
 
-## Conveniences
+## History without rebuilding old code
 
-- A small CLI: `init`, `audit`, `test`, `build`, `watch`.
-- File-based navigation: number files under `docs/` to set sidebar order.
-- API enrichment by convention: `docs/api/<Namespace>.<Type>.md` merges into the
-  generated page for that entity.
-- API-aware links (`xref:`) from prose to extracted symbols.
-- Transclude examples from real source files and XML docs instead of copying them.
-- A version switcher with a "latest" alias.
-- Immutable release documentation.
-- Batteries included: very little site configuration to get started.
+A release capsule stores API meaning, checked documentation, semantic code data, and assets. It does not freeze generated HTML.
 
-## Verification
+A newer FsLiveDocs can render that capsule later without restoring the old SDK or compiling the old source. Styling can improve while the released meaning stays fixed.
 
-- Ordinary F# blocks are compile-checked against the actual project being
-  documented, with failures reported at the page and line.
-- Execution is explicit per block: compile-only, `run`, `transcript`, or a
-  justified opt-out.
-- Release documentation is verified against the corresponding library version.
+That is the larger idea: docs should stay honest while a project changes, and old docs should remain buildable after its toolchain moves on.
 
-See [Verify F# examples](guides/verified-examples.md).
-
-## Versioning
-
-Versioning is deliberately unusual.
-
-On release, CI captures a **release capsule** — the public API symbols, the
-documentation semantics, the Markdown, and the assets — and stores it somewhere
-durable such as GitHub Releases. The site then regenerates HTML for every version
-from those capsules.
-
-This means a change to templates, CSS, or navigation updates the whole site,
-including old versions, without rebuilding the old versions of the library. The
-alternative — freezing the generated HTML of each release forever — is what this
-avoids.
-
-Each step is a `livedocs` command — `capture`, `history-check`, `history-add`,
-`build-history`, `verify-output` — and the committed `.livedocs/history.json` is the
-record of what has shipped. The tool does not upload capsules or push the index. Those are explicit CI steps, so
-the publication flow works with GitHub, GitLab, or your own server. See [Capture and publish releases](guides/releases.md) and
-[Verify documentation in CI](guides/continuous-integration.md).
-
-## Where FSharp.Formatting fits
-
-FsLiveDocs uses FSharp.Formatting for API extraction and keeps its F# and XML
-documentation model. If you only need a current API site, without checked examples
-or historical release capsules, FSharp.Formatting on its own may already be enough.
-
-## Try it
-
-```bash
-dotnet new tool-manifest
-dotnet tool install FsLiveDocs
-dotnet livedocs init --discover-projects
-dotnet build
-dotnet livedocs audit
-dotnet livedocs watch --host 127.0.0.1 --port 5000
-```
-
-Then continue with [Get started](introduction.md). If FsLiveDocs does not fit your
-library well, that is considered a bug worth reporting.
+Ready to try it? [Set up your repository](introduction.md).

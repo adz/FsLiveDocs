@@ -36,6 +36,26 @@ module IntegrationTests =
     }
 
     [<Fact>]
+    let ``transcript references do not assume assembly names are namespaces`` () =
+        let context : FsiTranscriptRunner.DocTestExecutionContext =
+            { Project =
+                { ProjectPath = coreProject
+                  AssemblyPath = typeof<PackageModel>.Assembly.Location
+                  ProjectNamespace = "FsLiveDocs.Core" }
+              References = [ typeof<FsLiveDocs.DocScenarioAttribute>.Assembly.Location ]
+              Scenario = None
+              Example =
+                { Name = "reference-name"
+                  Content = "> 20 + 22;;\nval it: int = 42"
+                  ExpectedOutput = None
+                  Scenario = None
+                  IsSnapshotTest = false
+                  NoCheckReason = None } }
+
+        let output, _, _ = FsiTranscriptRunner.runExample context
+        Assert.Equal("val it: int = 42", output)
+
+    [<Fact>]
     let ``documentation compiler maps errors back to owning block coordinates`` () = async {
         let blocks =
             DocumentationDiscovery.discoverMarkdown

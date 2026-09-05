@@ -13,6 +13,39 @@ module SiteBuilder =
         let options = Threading.Tasks.ParallelOptions(MaxDegreeOfParallelism = min 4 Environment.ProcessorCount)
         Threading.Tasks.Parallel.ForEach(items, options, Action<'a>(render)) |> ignore
 
+    let private packageIntroduction packageName entities =
+        let rec findExact = function
+            | [] -> None
+            | entity :: rest ->
+                if entity.Id.Equals(packageName, StringComparison.OrdinalIgnoreCase)
+                   && not (Documentation.isEmpty entity.Summary) then
+                    Some entity.Summary
+                else
+                    findExact entity.Entities |> Option.orElseWith (fun () -> findExact rest)
+
+        let rec findFirst = function
+            | [] -> None
+            | entity :: rest ->
+                if not (Documentation.isEmpty entity.Summary) then Some entity.Summary
+                else findFirst entity.Entities |> Option.orElseWith (fun () -> findFirst rest)
+
+        findExact entities |> Option.orElseWith (fun () -> findFirst entities)
+
+    let private shiftApiHtmlIntoPackageDirectory html =
+        Regex.Replace(
+            html,
+            "(?<attribute>href|src)=\"(?<url>[^\"]+)\"",
+            MatchEvaluator(fun matchedValue ->
+                let url = matchedValue.Groups["url"].Value
+                if url.StartsWith("#", StringComparison.Ordinal)
+                   || url.StartsWith("/", StringComparison.Ordinal)
+                   || Uri.IsWellFormedUriString(url, UriKind.Absolute) then
+                    matchedValue.Value
+                else
+                    let attributeName = matchedValue.Groups["attribute"].Value
+                    $"{attributeName}=\"../{url}\""),
+            RegexOptions.IgnoreCase)
+
     let private validateGeneratedApiLinks (apiDir: string) =
         let hrefPattern = Regex("href=\"(?<href>[^\"]+)\"", RegexOptions.IgnoreCase)
         let apiRoot = Path.GetFullPath(apiDir) + string Path.DirectorySeparatorChar
@@ -574,13 +607,22 @@ module SiteBuilder =
         |> fun packages -> parallelRender packages (fun packageInfo ->
             let ownedIds = packageInfo.EntityIds |> Set.ofList
             let ownedEntities = allEntities |> List.filter (fun entity -> ownedIds.Contains entity.Id)
+            let contributedEntities = View.entitiesForPackage packageInfo context.Package.Entities
 
             if not ownedEntities.IsEmpty then
+                let introduction =
+                    packageIntroduction packageInfo.Name contributedEntities
+                    |> Option.map (Presentation.renderDocumentationHtml context.Package >> shiftApiHtmlIntoPackageDirectory)
+
                 let packageContent = [
-                    div [ _class "flex items-center gap-3 mb-12" ] [
+                    div [ _class "flex items-center gap-3 mb-8" ] [
                         h1 [ _id "package"; attr "data-toc-title" packageInfo.Name; _class "text-5xl font-black tracking-tighter" ] [ str packageInfo.Name ]
                         span [ _class "badge badge-primary badge-sm" ] [ str "Package" ]
                     ]
+                    match introduction with
+                    | Some html ->
+                        div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ rawText html ]
+                    | None -> emptyText
                     View.h2WithAnchor "contents" "Contents" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
                     div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (
                         ownedEntities |> List.map (fun entity ->

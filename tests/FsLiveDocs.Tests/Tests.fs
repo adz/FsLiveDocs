@@ -28,6 +28,24 @@ module DocumentationSourceTests =
         for path in sources do
             Assert.DoesNotContain("tool install FsLiveDocs --version", File.ReadAllText path)
 
+module AnnotationContractTests =
+
+    [<Fact>]
+    let ``DocScenarioAttribute preserves its public CLR contract`` () =
+        let attributeType = typeof<FsLiveDocs.DocScenarioAttribute>
+        Assert.True(attributeType.IsSealed)
+        Assert.Equal(typeof<Attribute>, attributeType.BaseType)
+        Assert.NotNull(attributeType.GetConstructor([| typeof<string> |]))
+
+        let nameProperty = attributeType.GetProperty("Name")
+        Assert.Equal(typeof<string>, nameProperty.PropertyType)
+        Assert.True(nameProperty.CanRead)
+        Assert.False(nameProperty.CanWrite)
+
+        let usage = attributeType.GetCustomAttributes(typeof<AttributeUsageAttribute>, false).[0] :?> AttributeUsageAttribute
+        Assert.Equal(AttributeTargets.Method, usage.ValidOn)
+        Assert.False(usage.AllowMultiple)
+
 module HistoryTests =
 
     [<Fact>]
@@ -1678,7 +1696,7 @@ module SiteBuilderTests =
             Id = "Axial.Telemetry"
             Name = "Telemetry"
             Kind = EntityKind.Namespace
-            Summary = []
+            Summary = [ Documentation.markdown "Telemetry package orientation. [Start here](../guide.html)" ]
             Members = []
             Examples = []
             Entities = [ attribute; fiberTelemetry ]
@@ -1687,7 +1705,7 @@ module SiteBuilderTests =
             Id = "Axial"
             Name = "Axial"
             Kind = EntityKind.Namespace
-            Summary = []
+            Summary = [ Documentation.text "Axial package orientation." ]
             Members = []
             Examples = []
             Entities = [ telemetry ]
@@ -1718,8 +1736,13 @@ module SiteBuilderTests =
         let packagePage = File.ReadAllText(Path.Combine(outputDir, "api", "packages", "Axial.Telemetry.html"))
         Assert.Contains("<title>Axial.Telemetry - FsLiveDocs</title>", packagePage)
         Assert.Contains(">Package<", packagePage)
+        Assert.Contains("Telemetry package orientation.", packagePage)
+        Assert.Contains("href=\"../../guide.html\"", packagePage)
         Assert.Contains("href=\"../Axial.Telemetry.FiberTelemetry.html\"", packagePage)
         Assert.DoesNotContain("href=\"../Axial.Telemetry.Attribute.html\"", packagePage)
+
+        let parentPackagePage = File.ReadAllText(Path.Combine(outputDir, "api", "packages", "Axial.html"))
+        Assert.Contains("Axial package orientation.", parentPackagePage)
 
         let namespacePage = File.ReadAllText(Path.Combine(outputDir, "api", "Axial.Telemetry.html"))
         Assert.Contains(">Attribute<", namespacePage)

@@ -2,125 +2,52 @@
 title: FsLiveDocs
 ---
 
-# F# documentation that checks itself
+# Documentation that checks itself
 
-FsLiveDocs can be the whole documentation site for an F# library. You do not need Hugo, Docsy, Docusaurus, or a separate API-reference site.
+FsLiveDocs builds documentation sites for F# libraries. It keeps guides, generated API pages, checked examples, search, and version history in one .NET tool.
 
-Write Markdown pages in folders. FsLiveDocs puts them in the same navigation, search, theme, and version history as the generated API reference. The site uses Tailwind CSS and DaisyUI, so you can start with a built-in theme and add your own stylesheet.
+The useful bit is simple: examples are checked against the project they explain. Rename an API or change a type, and CI points to the page that needs attention.
 
-It builds on FSharp.Formatting, then adds long-form API pages, API-aware links, source transclusion, compiler tooltips, checked examples, and immutable release history.
-
-## See the difference
-
-A normal Markdown example can go stale without anyone noticing:
+Ordinary F# blocks compile without running:
 
 ````markdown
 ```fsharp
-type Order = { Total: decimal }
-
-module Orders =
-    let total orders = orders |> List.sumBy _.Total
-
-let pendingOrders = [ { Total = 20M }; { Total = 22M } ]
-let total = Orders.total pendingOrders
+let total = [ 20M; 22M ] |> List.sum
 ```
 ````
 
-FsLiveDocs compiles that block during `audit`, `test`, `build`, and `capture`. It uses the selected `.fsproj`, target framework, references, and earlier blocks on the page.
+Execution stays explicit. Use `run` for behavior and `transcript` when output is part of the promise.
 
-If `Orders.total` is renamed or its type changes, the documentation build fails at the page and line that need fixing.
+## Try it
 
-```bash
-dotnet livedocs audit
-```
-
-Ordinary examples compile but do not run. Execution is explicit:
-
-````markdown
-```fsharp run
-printfn "order-total=%M" (Orders.total pendingOrders)
-```
-````
-
-Use `transcript` when output is part of the claim:
-
-````markdown
-```fsharp transcript
-> 20 + 22;;
-val it: int = 42
-```
-````
-
-## One site for guides and API reference
-
-The `docs/` folder is the site structure:
-
-```text
-docs/
-├── index.md
-├── getting-started.md
-├── guides/
-│   └── configuration.md
-└── api/
-    └── YourLibrary.Client.md
-```
-
-Ordinary Markdown files become guide pages. Files under `docs/api/` add long-form content to generated API pages. Both appear in one sidebar and one search index.
-
-Use `xref` links to connect prose to extracted symbols. Transclude marked source regions and named XML examples instead of copying code. Configure branding, source links, themes, and navigation in `.livedocs/config.json`.
-
-## What else FsLiveDocs adds
-
-### Checked guide examples
-
-Code fences and XML documentation examples are checked against the real project. You choose whether each example compiles, runs, verifies a transcript, or is deliberately excluded.
-
-### Compiler information in the browser
-
-Rendered F# blocks can show inferred types and documentation tooltips. The compiler runs when you build the docs, not in the reader's browser.
-
-### Release documentation that survives toolchain changes
-
-`capture` stores the public API, Markdown, assets, and compiler-derived code information in one immutable capsule:
-
-```bash
-dotnet livedocs capture --version 1.4.0 --output artifacts/YourLibrary-1.4.0-livedocs.zip
-```
-
-A current FsLiveDocs version can render that capsule later. It does not need the old SDK, packages, source tree, or FSharp.Formatting version.
-
-## Where FSharp.Formatting fits
-
-FsLiveDocs uses FSharp.Formatting for API extraction. It keeps the existing F# and XML documentation model, then adds:
-
-- long-form Markdown enrichment for API pages;
-- API-aware links from guides;
-- source and XML-example transclusion;
-- examples that fail when they stop compiling;
-- explicit, controlled execution of examples;
-- inferred types and compiler documentation on displayed code;
-- current rendering of immutable historical documentation;
-- one CLI contract for local builds and CI.
-
-If you only need a current API site and do not need checked examples or historical release capsules, FSharp.Formatting may already be enough.
-
-## Start
+From your repository root:
 
 ```bash
 dotnet new tool-manifest
 dotnet tool install FsLiveDocs
 dotnet livedocs init --discover-projects
 dotnet build
-dotnet livedocs audit
-dotnet livedocs build
 dotnet livedocs watch --host 127.0.0.1 --port 5000
 ```
 
-Then continue with:
+Open `http://127.0.0.1:5000`. Edit a Markdown page or F# source file and the preview rebuilds.
 
-1. [Get started](introduction.md).
-2. [Write primary API pages](guides/api-pages.md).
-3. [Verify F# examples](guides/verified-examples.md).
-4. [Add semantic code tooltips](guides/semantic-code.md).
-5. [Capture and publish releases](guides/releases.md).
-6. [Use the command reference](cheat-sheet.md).
+## What you get
+
+- Markdown guides and generated API reference in one site.
+- F# examples checked with your project's compiler settings.
+- Optional execution, transcripts, and snapshot tests.
+- Source and XML-example transclusion, so examples have one owner.
+- Compiler tooltips and API-aware links.
+- Release capsules that can render old docs without rebuilding old source.
+
+## Where to go next
+
+1. [Set up your repository](introduction.md).
+2. [Write API and guide pages](guides/api-pages.md).
+3. [Check examples and manage them as tests](guides/verified-examples.md).
+4. [Run documentation checks in CI](guides/continuous-integration.md).
+5. [Configure the site](guides/navigation.md).
+6. [Capture versioned documentation](guides/releases.md).
+
+Want the background first? Read [Why FsLiveDocs](why-fslivedocs.md). For exact commands and options, use the [command reference](cheat-sheet.md).

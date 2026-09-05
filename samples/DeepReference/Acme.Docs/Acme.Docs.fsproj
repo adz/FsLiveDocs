@@ -8,6 +8,6 @@
     <Compile Include="Library.fs" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../src/FsLiveDocs.Annotations/FsLiveDocs.Annotations.csproj" />
+    <ProjectReference Include="../../../src/FsLiveDocs.Annotations/FsLiveDocs.Annotations.fsproj" />
   </ItemGroup>
 </Project>

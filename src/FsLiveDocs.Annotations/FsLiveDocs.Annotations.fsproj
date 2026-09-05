@@ -6,4 +6,8 @@
     <Description>Lightweight metadata attributes for FsLiveDocs documentation examples.</Description>
     <PackageTags>fsharp;documentation;doctest;annotations</PackageTags>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="DocScenarioAttribute.fs" />
+  </ItemGroup>
 </Project>

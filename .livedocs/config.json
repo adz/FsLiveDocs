@@ -1,4 +1,13 @@
 {
   "siteName": "FsLiveDocs",
-  "repoUrl": "https://github.com/adz/FsLiveDocs"
+  "repoUrl": "https://github.com/adz/FsLiveDocs",
+  "projects": [
+    "src/FsLiveDocs.Annotations/FsLiveDocs.Annotations.fsproj",
+    "samples/DeepReference/Acme.Docs/Acme.Docs.fsproj"
+  ],
+  "navigation": [
+    { "label": "Home", "href": "index.html" },
+    { "label": "API", "href": "api.html" },
+    { "label": "GitHub", "href": "https://github.com/adz/FsLiveDocs" }
+  ]
 }

@@ -1,11 +1,26 @@
 ---
-title: Dogfood FsLiveDocs
+title: How this site dogfoods FsLiveDocs
 ---
 
-# Dogfood FsLiveDocs
+# How this site dogfoods FsLiveDocs
 
-FsLiveDocs documents and releases itself with its own tool, using the same `init`, `audit`, `capture`, and `build-history` workflow described elsewhere in these docs. Nothing about the release process is special-cased for this repository.
+This site is built with the tool it documents. The repository configuration selects two useful API surfaces:
 
-Each release goes through the full pipeline before publishing: every documentation example across the repository's own projects is checked, a release capsule is captured and inspected, and the historical site is rebuilt from that capsule alone, with no compilation of the tagged source. That rebuild is what confirms a release capsule is genuinely self-contained: if it required recompiling the original project, `build-history` would fail.
+- `FsLiveDocs.Annotations`, the real public library package;
+- `Acme.Docs`, a small teaching sample.
 
-This is the same guarantee described in [Capture and publish releases](guides/releases.md) — dogfooding is simply how that guarantee gets exercised before every FsLiveDocs release ships.
+The CLI, Core, Runner, and Renderer assemblies are implementation details. They are bundled into the tool and are not presented as supported library APIs.
+
+The authored API pages under `docs/api/` introduce both selected packages. The rest of this site exercises guide pages, checked fences, XML examples, scenarios, transclusion, source links, and custom navigation.
+
+During development we run:
+
+```bash
+dotnet build
+dotnet run --project src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj -- \
+  watch --host 127.0.0.1 --port 5000
+```
+
+A release goes through the same capture and history workflow described in [Capture and publish releases](guides/releases.md). Historical rendering uses the capsule alone and does not rebuild the tagged source.
+
+There are no private shortcuts here. If this repository is awkward to document with FsLiveDocs, that is product feedback.

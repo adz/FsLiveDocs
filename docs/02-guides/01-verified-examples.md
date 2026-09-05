@@ -1,30 +1,34 @@
 ---
-title: Verify F# examples
+title: Author and test examples
 ---
 
-# Verify F# examples
+# Author and test examples
 
-Choose the least powerful mode that proves your documentation claim. Ordinary examples compile but do not execute.
+Choose the least powerful mode that proves the point. Most examples only need to compile.
 
-## Compile a page
+## Compile a page as one story
 
-Use ordinary `fsharp` fences for progressive examples:
+Ordinary `fsharp` blocks share a page compilation unit. Later blocks can use earlier declarations, but none of them run.
 
 ````markdown
 ```fsharp
-type Order = { Total: decimal }
+let subtotal = 120M
 ```
 
 ```fsharp
-let order = { Total = 120M }
+let total = subtotal * 1.2M
 ```
 ````
 
-FsLiveDocs compiles these blocks in one page unit. It never executes them.
+Use `prepare` for setup that readers need less often:
 
-## Compile an independent example
+````markdown
+```fsharp prepare
+open System
+```
+````
 
-Use `isolated` when the example must stand alone:
+Use `isolated` when a snippet should stand on its own:
 
 ````markdown
 ```fsharp isolated
@@ -32,9 +36,9 @@ let normalize (value: string) = value.Trim()
 ```
 ````
 
-## Run an example
+## Run only what matters
 
-Use `run` only when runtime behavior is part of the contract:
+Use `run` when runtime behavior is part of the claim:
 
 ````markdown
 ```fsharp run
@@ -42,11 +46,7 @@ printfn "order-total=120.0"
 ```
 ````
 
-Operational code can access files, processes, networks, clocks, or hosts. Do not mark ordinary examples `run` for stronger-looking verification.
-
-## Verify an FSI transcript
-
-Use `transcript` for input and expected output:
+Use `transcript` when the exact FSI result matters:
 
 ````markdown
 ```fsharp transcript
@@ -55,33 +55,25 @@ val it: int = 42
 ```
 ````
 
-## Add page setup
+Executable examples have the same file, process, network, clock, and environment access as the person running FsLiveDocs. Keep them quick, deterministic, and local.
 
-Use `prepare` for declarations shared by later blocks:
+## Mark honest pseudocode
 
-````markdown
-```fsharp prepare
-type Customer = { Name: string }
-```
-````
-
-## Mark deliberate pseudocode
-
-Use `no-check` only when the fragment cannot be made complete:
+Sometimes a fragment is useful even though it cannot compile alone. Say why:
 
 ````markdown
-```fsharp no-check reason="The remaining cases are application-specific"
+```fsharp no-check reason="The omitted cases are application-specific"
 match result with
 | Ok value -> publish value
 | Error _ -> ...
 ```
 ````
 
-FsLiveDocs requires a nonempty reason. Audit output reports the exclusion.
+A nonempty reason is required and appears in the audit result.
 
-## Verify XML examples
+## Check XML examples
 
-Add an example to XML documentation:
+XML examples stay beside the API they explain:
 
 ```fsharp
 /// <summary>Adds two values.</summary>
@@ -92,116 +84,110 @@ Add an example to XML documentation:
 let add left right = left + right
 ```
 
-Use `data-livedocs="snapshot"` when output is part of the contract. Use `data-livedocs="no-check" reason="..."` for a deliberate exclusion.
+Use `data-livedocs="snapshot"` when output is part of the contract. Use `data-livedocs="no-check" reason="..."` only for a deliberate exclusion.
 
-## Prepare XML examples with scenarios
+## Prepare an XML example
 
-Some XML examples need deterministic state before their transcript runs. Install the small annotations package in the library that owns the example:
+Some examples need known state. Add the small annotations library to the documented project:
 
 ```bash
 dotnet add package FsLiveDocs.Annotations
 ```
 
-`FsLiveDocs.Annotations` contains metadata consumed by FsLiveDocs; it does not bring the CLI, compiler service, or renderer into your library. Mark a public, parameterless function with a unique scenario name:
+Do not reference the `FsLiveDocs` tool package from your library. `FsLiveDocs.Annotations` is the lightweight compile-time contract.
+
+Mark a public, parameterless F# function with a unique scenario name:
 
 ```fsharp
 open FsLiveDocs
 
 module CustomerExamples =
-    let mutable private currentCustomer = "anonymous"
+    let mutable private discount = 0M
 
     [<DocScenario("preferred-customer")>]
-    let preparePreferredCustomer () =
-        currentCustomer <- "Ada"
+    let loadPreferredCustomer () =
+        discount <- 0.1M
 
-    /// <summary>Greets the current customer.</summary>
-    /// <example name="preferred-customer-greeting"
+    /// <example name="preferred-price"
     ///          scenario="preferred-customer"
     ///          data-livedocs="snapshot">
-    /// > CustomerExamples.greet();;
-    /// val it: string = "Hello Ada"
+    /// > CustomerExamples.price 100M;;
+    /// val it: decimal = 90.0M
     /// </example>
-    let greet () = $"Hello {currentCustomer}"
+    let price subtotal = subtotal * (1M - discount)
 ```
 
-For each example that names the scenario, FsLiveDocs starts the example session, loads the documented project, calls `preparePreferredCustomer()`, and then evaluates the example. Setup output is not part of the expected transcript.
+FsLiveDocs starts a fresh FSI session, loads the project, runs scenario setup, and then evaluates the example. Setup output is not included in the expected transcript.
 
-Use scenarios for focused deterministic setup such as fixture data, dependency-injection state, or an in-memory test double. Keep setup fast and local: executable documentation has the same file, process, network, clock, and environment access as the user running FsLiveDocs.
+Scenario names must be unique across the build. The XML `scenario` value must match the `DocScenario` name exactly.
 
-Scenario rules:
+## Use the quick test loop
 
-- the `scenario` value must exactly match the `DocScenario` name;
-- scenario names must be unique across the projects in one documentation build;
-- the annotated F# function must compile to a callable static, parameterless method; a public function in an F# module is the usual form;
-- the example fails when its named scenario cannot be found;
-- each example gets a fresh FSI session, so one example must not depend on another example having run first.
-
-Do not add `FsLiveDocs` itself as a library dependency. It is a .NET tool package. `FsLiveDocs.Annotations` is the compile-time contract for attributes used by documented projects.
-
-## Verify without a test project
+Run all checks without creating test source:
 
 ```bash
 dotnet livedocs test
 ```
 
-`test` runs the full verification transiently: it audits every F# block, compiles
-each page and isolated unit, then runs every `run` block and `transcript`. Nothing
-is written. This is all most repositories need in CI.
+This audits every block, compiles page and isolated units, then runs explicit examples. It writes nothing and is enough for many repositories.
 
-## Generate a committed test project
+Use `audit` when you want compilation and coverage checks without execution:
+
+```bash
+dotnet livedocs audit
+```
+
+## Manage examples as normal tests
+
+Generate an xUnit project when examples should appear in your IDE, normal test run, and test reports:
 
 ```bash
 dotnet livedocs generate-tests
 dotnet test tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj
 ```
 
-Use this when you want documentation verification to appear in your normal test
-run, IDE test explorer, and coverage reports.
+The generated project contains one fact per discovered case:
 
-### What is generated
+- one compile fact per page unit and isolated block;
+- one execution fact per `run` block and transcript;
+- one fact per XML example, using Verify for snapshots.
 
-`generate-tests` writes `tests/FsLiveDocs.SnapshotTests/` — a `.fsproj` and a
-`SnapshotTests.fs` containing one xUnit `[<Fact>]` **per discovered case**,
-enumerated at generation time:
+The facts rerun FsLiveDocs discovery and catch removed or renamed cases. They cannot discover a brand-new case until you regenerate the project.
 
-- one per XML `<example>` — a [Verify](https://github.com/VerifyTests/Verify)
-  snapshot when the example carries `data-livedocs="snapshot"`, otherwise a
-  compile check;
-- one compile fact per page compilation unit and per `isolated` block;
-- one execution fact per `run` block and per `transcript`.
+Regenerate whenever a checked fence or XML example is added, removed, or renamed. Commit the generated diff.
 
-Discovery is the same pass `audit`, `build`, and `capture` use: top-level `fsharp`
-fences in the Markdown *after* transclusion and shortcode expansion, plus every
-XML `<example>` on the documented API.
-
-### It does not rediscover on its own
-
-The generated file lists cases by name. When it runs, each fact re-runs discovery
-for its own page and fails if that case has disappeared, so drift is caught — but a
-**new** example or fence is only picked up when you regenerate.
-
-Re-run `generate-tests` whenever you add, remove, or rename an example or an F#
-block, then commit the diff. Re-running when nothing changed produces no diff (the
-files are rewritten only when their content changes), so it is safe in a pre-commit
-hook or a CI freshness check:
+A useful freshness check is:
 
 ```bash
 dotnet livedocs generate-tests --interactive false --banner false
 git diff --exit-code tests/FsLiveDocs.SnapshotTests
 ```
 
-FsLiveDocs still owns coverage validation, compile-before-execute ordering,
-transcript behavior, and stale-case detection — the generated facts only expose
-that work to `dotnet test`.
+That command produces no diff when the project is current, so it fits a pre-commit hook or CI job.
 
-See [Verify documentation in CI](continuous-integration.md) for where these commands fit.
+## Read a failure
 
-## Audit only
+Failures name the authored page and stable case, such as `guides/orders.md#fsharp-2`. Compiler line numbers are mapped back to that block rather than the temporary F# file.
+
+A compile failure usually means the example no longer matches the selected project or an earlier page block. A transcript failure shows expected and actual output. A stale-case failure means the generated test project needs regenerating.
+
+Run the narrower command while editing:
 
 ```bash
-dotnet livedocs audit
+dotnet livedocs audit --verbosity debug --interactive false
 ```
 
-Audit checks coverage, modes, and compilation for every block, and classifies each
-as passed, excluded, or failed. It does not execute `run` blocks or transcripts —
-that is what `test` adds. A successful release capture requires complete coverage.
+`debug` includes compiler messages and every discovered block. Once compilation passes, `test` gives the runtime or transcript result.
+
+## Choose a practical policy
+
+A simple default works well:
+
+1. Compile ordinary examples.
+2. Use isolated blocks for copy-and-paste snippets.
+3. Run only examples that make a runtime claim.
+4. Snapshot only output readers depend on.
+5. Generate tests when your team benefits from normal test tooling.
+6. Run freshness checks in CI if generated tests are committed.
+
+See [Verify documentation in CI](continuous-integration.md) for a complete pipeline.

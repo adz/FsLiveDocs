@@ -50,7 +50,7 @@ dotnet livedocs build --interactive false --banner false
 must be on `PATH`. Publish the `output/` directory as the site artifact.
 
 If you commit a generated snapshot test project (see
-[Verify F# examples](verified-examples.md#generate-a-committed-test-project)), run it
+[Author and test examples](verified-examples.md#manage-examples-as-normal-tests)), run it
 as an ordinary test project and add a check that it is up to date:
 
 ```bash
