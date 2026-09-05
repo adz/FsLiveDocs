@@ -649,9 +649,12 @@ module View =
         (versions: string list)
         (theme: string)
         (rootPath: string)
+        (siteRootPath: string)
+        (currentOutputPath: string)
         (content: XmlNode list)
         =
         let safeRoot = Url.ensureTrailing rootPath
+        let safeSiteRoot = Url.ensureTrailing siteRootPath
 
         let homeTarget =
             chrome
@@ -742,7 +745,7 @@ module View =
                     link
                         [ _rel "stylesheet"
                           _href "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" ]
-                    link [ _rel "stylesheet"; _href (Url.resolve safeRoot "pagefind/pagefind-ui.css") ]
+                    link [ _rel "stylesheet"; _href (Url.resolve safeSiteRoot "pagefind/pagefind-ui.css") ]
                     stylesheet
                     |> Option.map (fun href -> link [ _rel "stylesheet"; _href (navigationHref href) ])
                     |> Option.defaultValue emptyText
@@ -1120,14 +1123,14 @@ module View =
                                                                    |> Option.map snd)
                                                                |> Option.defaultWith (fun () ->
                                                                    if not versions.IsEmpty && v = versions.Head then
-                                                                       "index.html"
+                                                                       currentOutputPath
                                                                    else
-                                                                       "history/" + v + "/index.html")
+                                                                       "history/" + v + "/" + currentOutputPath)
 
                                                            li
                                                                []
                                                                [ a
-                                                                     [ _href (Url.resolve safeRoot target)
+                                                                     [ _href (Url.resolve safeSiteRoot target)
                                                                        _class "py-4 rounded-xl font-bold" ]
                                                                      [ str v ] ])) ] ] ]
                                 div [ _class "divider divider-horizontal mx-6 opacity-30" ] []
@@ -1218,7 +1221,7 @@ module View =
                                                     "bg-base-100 w-80 h-full border-r border-base-300 overflow-y-auto p-10 shadow-sm transition-all" ]
                                               [ sidebar safeRoot pages package ] ] ] ]
 
-                    yield script [ _src (Url.resolve safeRoot "pagefind/pagefind-ui.js") ] []
+                    yield script [ _src (Url.resolve safeSiteRoot "pagefind/pagefind-ui.js") ] []
                     yield script
                         []
                         [ rawText
@@ -1416,9 +1419,9 @@ module View =
                 """ ] ] ]
 
     /// <summary>Legacy single-site layout.</summary>
-    let layout pageTitle pages package config versions theme rootPath content =
-        layoutCore None pageTitle pages package config versions theme rootPath content
+    let layout pageTitle pages package config versions theme rootPath siteRootPath currentOutputPath content =
+        layoutCore None pageTitle pages package config versions theme rootPath siteRootPath currentOutputPath content
 
     /// <summary>Layout for one documentation set inside the shared site shell.</summary>
-    let layoutWithChrome chrome pageTitle pages package config versions theme rootPath content =
-        layoutCore (Some chrome) pageTitle pages package config versions theme rootPath content
+    let layoutWithChrome chrome pageTitle pages package config versions theme rootPath siteRootPath currentOutputPath content =
+        layoutCore (Some chrome) pageTitle pages package config versions theme rootPath siteRootPath currentOutputPath content
