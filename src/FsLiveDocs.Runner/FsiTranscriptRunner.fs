@@ -63,9 +63,9 @@ module FsiTranscriptRunner =
             [
                 "open System"
                 if not (String.IsNullOrWhiteSpace project.ProjectNamespace) then $"open {project.ProjectNamespace}"
-                for reference in references do
-                    let namespaceName = Path.GetFileNameWithoutExtension(reference)
-                    if not (String.IsNullOrWhiteSpace namespaceName) && Char.IsUpper(namespaceName.[0]) then $"open {namespaceName}"
+                // Assembly names are not namespace names. Opening each reference worked only
+                // by accident until FsLiveDocs.Annotations became an F# assembly whose package
+                // name differs from its FsLiveDocs namespace.
                 yield! extraOpens
             ]
             |> List.distinct

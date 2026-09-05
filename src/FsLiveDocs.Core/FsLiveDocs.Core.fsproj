@@ -33,7 +33,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../FsLiveDocs.Annotations/FsLiveDocs.Annotations.csproj" />
+    <ProjectReference Include="../FsLiveDocs.Annotations/FsLiveDocs.Annotations.fsproj" />
     <PackageReference Include="FSharp.Compiler.Service" Version="43.12.201" />
     <PackageReference Include="FSharp.Formatting" Version="22.0.0" />
     <PackageReference Include="Markdig" Version="1.2.0" />

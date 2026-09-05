@@ -1,14 +1,17 @@
-# FsLiveDocs API
+# FsLiveDocs annotations
 
-FsLiveDocs is split into four packages with explicit responsibilities.
+`FsLiveDocs.Annotations` is the small library package that connects documented code to FsLiveDocs. Most projects only need it when an XML example requires scenario setup.
 
-- `FsLiveDocs.Core` owns persisted models, discovery, content, extraction, history, and capsules.
-- `FsLiveDocs.Runner` owns compiler evaluation, semantic extraction, transcript execution, and generated verification.
-- `FsLiveDocs.Renderer` converts renderer-neutral models into the current static site.
-- `FsLiveDocs.Cli` coordinates user commands and release workflows.
+Install it in the library that owns the example:
 
-Start with [FsLiveDocs.Core](FsLiveDocs.Core.md) when you integrate models or content.
+```bash
+dotnet add package FsLiveDocs.Annotations
+```
 
-Use [FsLiveDocs.Runner](FsLiveDocs.Runner.md) for verification and semantic analysis.
+The package contains `DocScenarioAttribute`. It does not bring the CLI, compiler service, or renderer into your library.
 
-Use [FsLiveDocs.Renderer](FsLiveDocs.Renderer.md) for site generation.
+The similarly named `FsLiveDocs` package is a .NET tool. Install that through a tool manifest and run it as `dotnet livedocs`; do not add it as a library reference.
+
+[Author and test examples](../guides/verified-examples.md#prepare-an-xml-example) covers the complete workflow. The `DocScenarioAttribute` page contains its generated reference.
+
+The `Acme.Docs` package shown beside this one is a teaching sample from this repository. It is not published for application use.

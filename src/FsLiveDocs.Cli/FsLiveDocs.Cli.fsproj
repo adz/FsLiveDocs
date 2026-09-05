@@ -37,7 +37,7 @@
     <ProjectReference Include="..\FsLiveDocs.Runner\FsLiveDocs.Runner.fsproj" PrivateAssets="All" />
     <ProjectReference Include="..\FsLiveDocs.Renderer\FsLiveDocs.Renderer.fsproj" PrivateAssets="All" />
     <!-- Keep the consumer-facing annotation contract as an ordinary package dependency. -->
-    <ProjectReference Include="..\FsLiveDocs.Annotations\FsLiveDocs.Annotations.csproj" />
+    <ProjectReference Include="..\FsLiveDocs.Annotations\FsLiveDocs.Annotations.fsproj" />
   </ItemGroup>
 
   <ItemGroup>

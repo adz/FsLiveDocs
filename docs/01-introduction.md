@@ -1,59 +1,97 @@
 ---
-title: Get started
+title: Set up your repository
 weight: 2
 ---
 
-# Get started
+# Set up your repository
 
-This guide creates a local documentation site for one F# project.
+This guide takes an existing F# repository from no docs setup to a live local preview.
 
-## Before you begin
+## Before you start
 
-You need:
+You need the .NET SDK used by the repository. The project should already build.
 
-- the .NET SDK used by your project;
-- a successful project build;
-- FsLiveDocs installed as a local or global .NET tool.
+Node.js is also needed when FsLiveDocs builds the search index.
 
-## Install the tool
+## Install FsLiveDocs
 
-Create a tool manifest and install FsLiveDocs:
+A local tool keeps the version with the repository:
 
 ```bash
 dotnet new tool-manifest
 dotnet tool install FsLiveDocs
 ```
 
+Commit `.config/dotnet-tools.json`. Teammates and CI can then install the same tools with `dotnet tool restore`.
+
 ## Initialize the repository
 
-Run this command from the repository root:
+Run this from the repository root:
 
 ```bash
 dotnet livedocs init --discover-projects
 ```
 
-`--discover-projects` writes the repository's documentable `.fsproj` files to the configuration. Review that list when the repository also contains benchmarks, probes, or applications that should not appear in the API reference.
+FsLiveDocs creates or preserves:
 
-The command creates:
+```text
+.livedocs/
+  config.json
+  history.json
+docs/
+  index.md
+```
 
-- `.livedocs/config.json` for site configuration;
-- `.livedocs/history.json` for release capsules;
-- `docs/index.md` as a starter page;
-- cache and release-download entries in `.gitignore`.
+It also adds disposable caches and downloaded capsules to `.gitignore`.
 
-The command does not replace existing files. Project arguments passed to later commands override the configured list; without either, FsLiveDocs discovers projects for that run.
+`--discover-projects` records the `.fsproj` files it finds. Open `.livedocs/config.json` and remove tests, benchmarks, or apps that should not appear in the public API.
 
-For a repository with several documentation audiences, configure `docsSets` instead. Commands
-still operate on the whole site, using the union of every set's projects; see
-[Configure navigation and branding](guides/navigation.md#split-one-site-into-documentation-sets).
+A small setup looks like this:
 
-## Write the primary API pages
+```json
+{
+  "siteName": "Example Library",
+  "repoUrl": "https://github.com/example/example",
+  "projects": [
+    "src/Example/Example.fsproj"
+  ],
+  "navigation": [
+    { "label": "Home", "href": "index.html" },
+    { "label": "API", "href": "api.html" },
+    { "label": "GitHub", "href": "https://github.com/example/example" }
+  ]
+}
+```
 
-Use Markdown under `docs/api/` for the main documentation of public namespaces, modules, and types. XML comments remain useful for concise member documentation and editor tooltips, but they do not need to carry an entire guide.
+`repoUrl` adds source links to generated API members. Project paths are relative to the repository root.
 
-Start with [Write primary API pages](guides/api-pages.md), then add task-oriented guides for workflows that cross several API entities.
+## Build the library
 
-## Add a guide page
+FsLiveDocs reads compiled assemblies and XML documentation, so build first:
+
+```bash
+dotnet build
+```
+
+If the project does not emit XML documentation, set `GenerateDocumentationFile` to `true` in the project or shared build props.
+
+## Start the preview
+
+```bash
+dotnet livedocs watch --host 127.0.0.1 --port 5000
+```
+
+Open `http://127.0.0.1:5000`. The watcher rebuilds after changes to docs, F# source, project files, or configuration.
+
+Use a one-off build when you do not need the server:
+
+```bash
+dotnet livedocs build
+```
+
+The generated site goes to `output/`.
+
+## Add your first guide
 
 Create `docs/getting-started.md`:
 
@@ -70,63 +108,22 @@ greeting "Ada"
 ```
 ````
 
-The `isolated` mode checks the block independently. Use an ordinary `fsharp` fence when later blocks depend on earlier blocks on the same page.
+`isolated` checks this block on its own. Ordinary `fsharp` blocks can build on earlier blocks from the same page.
 
-## Audit the documentation
-
-Build your project, then audit every F# block:
+## Check everything
 
 ```bash
-dotnet build
 dotnet livedocs audit
+dotnet livedocs test
 ```
 
-Fix compilation failures or mark deliberate pseudocode with a reason:
+`audit` checks coverage and compilation without executing examples. `test` also runs explicit `run` blocks and transcripts.
 
-````markdown
-```fsharp no-check reason="The omitted branch is application-specific"
-match result with
-| Ok value -> save value
-| Error _ -> ...
-```
-````
+## Next steps
 
-## Build the site
+- [Write API and guide pages](guides/api-pages.md).
+- [Author and test examples](guides/verified-examples.md).
+- [Run the checks in CI](guides/continuous-integration.md).
+- [Configure navigation and branding](guides/navigation.md).
 
-```bash
-dotnet livedocs build
-```
-
-The generated site is in `output/`.
-
-## Add source links
-
-`init` writes an empty `.livedocs/config.json`. Set `repoUrl` so API members link to
-their source:
-
-```json
-{
-  "repoUrl": "https://github.com/your-org/your-library"
-}
-```
-
-FsLiveDocs builds links as `<repoUrl>/blob/main/<file>#L<line>`, so this assumes the
-default branch is `main` and that source paths resolve from the repository root.
-[Configure navigation and branding](guides/navigation.md) covers `siteName`, logos,
-themes, and the rest of the file.
-
-## Preview changes
-
-```bash
-dotnet livedocs watch --host 127.0.0.1 --port 5000
-```
-
-The watcher rebuilds after source, project, configuration, or documentation changes.
-
-## Continue
-
-- [Write primary API pages](guides/api-pages.md).
-- [Verify examples](guides/verified-examples.md).
-- [Configure navigation](guides/navigation.md).
-- [Verify documentation in CI](guides/continuous-integration.md).
-- [Capture a release](guides/releases.md).
+If the repository serves separate audiences, see [documentation sets](guides/navigation.md#split-one-site-into-documentation-sets) after the basic site works.
