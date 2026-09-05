@@ -1,6 +1,9 @@
 name: Recover release publication
 
 on:
+  push:
+    branches: [ main ]
+    paths: [ .github/workflows/recover-release.yml ]
   workflow_dispatch:
     inputs:
       version:
@@ -25,7 +28,7 @@ jobs:
       - name: Validate version
         shell: bash
         run: |
-          version="${{ inputs.version }}"
+          version="${{ inputs.version || '0.5.0' }}"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Version must have the form MAJOR.MINOR.PATCH; got $version" >&2
             exit 1
