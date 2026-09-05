@@ -39,6 +39,7 @@ module SiteBuilder =
         Versions: string list
         Theme: string
         RootPath: string
+        SiteRootPath: string
     }
 
     /// <summary>Shared inputs for building the generated site.</summary>
@@ -49,6 +50,7 @@ module SiteBuilder =
         Versions: string list
         Theme: string
         RootPath: string
+        SiteRootPath: string
         OutputDir: string
     }
 
@@ -86,6 +88,8 @@ module SiteBuilder =
                 context.Versions
                 context.Theme
                 context.RootPath
+                context.SiteRootPath
+                page.OutputPath
                 content
         | None ->
             View.layout
@@ -96,6 +100,8 @@ module SiteBuilder =
                 context.Versions
                 context.Theme
                 context.RootPath
+                context.SiteRootPath
+                page.OutputPath
                 content
         |> fun node -> RenderView.AsString.htmlNode node
 
@@ -476,6 +482,8 @@ module SiteBuilder =
                 context.Versions
                 context.Theme
                 context.RootPath
+                context.SiteRootPath
+                ("api/" + e.Id + ".html")
                 content
         | None ->
             View.layout
@@ -486,6 +494,8 @@ module SiteBuilder =
                 context.Versions
                 context.Theme
                 context.RootPath
+                context.SiteRootPath
+                ("api/" + e.Id + ".html")
                 content
         |> fun node -> RenderView.AsString.htmlNode node
 
@@ -532,6 +542,7 @@ module SiteBuilder =
             Versions = context.Versions
             Theme = context.Theme
             RootPath = context.RootPath
+            SiteRootPath = context.SiteRootPath
         }
 
         if Directory.Exists(context.OutputDir) then Directory.Delete(context.OutputDir, true)
@@ -546,7 +557,10 @@ module SiteBuilder =
         |> List.toArray
         |> fun pages -> parallelRender pages (fun page ->
             let depth = page.OutputPath.Split('/').Length - 1
-            let pageContext = { renderContext with RootPath = context.RootPath + String.replicate depth "../" }
+            let pageContext =
+                { renderContext with
+                    RootPath = context.RootPath + String.replicate depth "../"
+                    SiteRootPath = context.SiteRootPath + String.replicate depth "../" }
             let html = renderPage page pageContext
             let outputPath = Path.Combine(context.OutputDir, page.OutputPath)
             let outputDirectory = Path.GetDirectoryName(outputPath)
@@ -557,7 +571,10 @@ module SiteBuilder =
         let apiDir = Path.Combine(context.OutputDir, "api")
         if not (Directory.Exists(apiDir)) then Directory.CreateDirectory(apiDir) |> ignore
         
-        let apiRenderContext = { renderContext with RootPath = context.RootPath + "../" }
+        let apiRenderContext =
+            { renderContext with
+                RootPath = context.RootPath + "../"
+                SiteRootPath = context.SiteRootPath + "../" }
         let allEntities = Presentation.flattenEntities context.Package.Entities
 
         allEntities
@@ -590,8 +607,12 @@ module SiteBuilder =
                             ])
                     )
                 ]
-                let packageContext = { renderContext with RootPath = context.RootPath + "../../" }
-                let html = View.layout packageInfo.Name context.Pages context.Package context.Config context.Versions context.Theme packageContext.RootPath packageContent |> RenderView.AsString.htmlNode
+                let packageContext =
+                    { renderContext with
+                        RootPath = context.RootPath + "../../"
+                        SiteRootPath = context.SiteRootPath + "../../" }
+                let outputPath = "api/packages/" + Uri.EscapeDataString packageInfo.Name + ".html"
+                let html = View.layout packageInfo.Name context.Pages context.Package context.Config context.Versions context.Theme packageContext.RootPath packageContext.SiteRootPath outputPath packageContent |> RenderView.AsString.htmlNode
                 File.WriteAllText(Path.Combine(packageDir, Uri.EscapeDataString packageInfo.Name + ".html"), html))
 
         validateGeneratedApiLinks apiDir
@@ -643,7 +664,7 @@ module SiteBuilder =
                         ])
             )
         ]
-        let (apiHtml: string) = View.layout "API Reference" context.Pages context.Package context.Config context.Versions context.Theme context.RootPath apiOverview |> RenderView.AsString.htmlNode
+        let (apiHtml: string) = View.layout "API Reference" context.Pages context.Package context.Config context.Versions context.Theme context.RootPath context.SiteRootPath "api.html" apiOverview |> RenderView.AsString.htmlNode
         File.WriteAllText(Path.Combine(context.OutputDir, "api.html"), apiHtml)
 
         // Generate a fallback homepage only when the consumer has not authored docs/index.md.
@@ -695,7 +716,7 @@ module SiteBuilder =
                 ]
             ]
           ]
-          let (html: string) = View.layout "Home" context.Pages context.Package context.Config context.Versions context.Theme context.RootPath indexContent |> RenderView.AsString.htmlNode
+          let (html: string) = View.layout "Home" context.Pages context.Package context.Config context.Versions context.Theme context.RootPath context.SiteRootPath "index.html" indexContent |> RenderView.AsString.htmlNode
           File.WriteAllText(indexPath, html)
 
     let private packageForEntityIds (package: PackageModel) (entityIds: string list) =
@@ -864,7 +885,8 @@ module SiteBuilder =
                   Config = config
                   Versions = versions
                   Theme = theme
-                  RootPath = rootPath }
+                  RootPath = rootPath
+                  SiteRootPath = rootPath }
 
             docsSet.Pages
             |> List.toArray
@@ -942,6 +964,8 @@ module SiteBuilder =
                                 versions
                                 theme
                                 packageRoot
+                                packageRoot
+                                (routePrefix set + "api/packages/" + Uri.EscapeDataString packageInfo.Name + ".html")
                                 packageContent
                             |> RenderView.AsString.htmlNode
 
@@ -976,6 +1000,8 @@ module SiteBuilder =
                         versions
                         theme
                         overviewRoot
+                        overviewRoot
+                        (setApiOutput set)
                         overview
                     |> RenderView.AsString.htmlNode
 
@@ -1004,6 +1030,8 @@ module SiteBuilder =
                         versions
                         theme
                         rootPath
+                        rootPath
+                        (setRootOutput set)
                         content
                     |> RenderView.AsString.htmlNode
 
@@ -1061,7 +1089,8 @@ module SiteBuilder =
                       Config = config
                       Versions = versions
                       Theme = theme
-                      RootPath = siteRootPath
+                      RootPath = ""
+                      SiteRootPath = siteRootPath
                       OutputDir = destination }
 
             site.StaticRoot
@@ -1093,6 +1122,7 @@ module SiteBuilder =
             Versions = allVersions
             Theme = theme
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1108,7 +1138,8 @@ module SiteBuilder =
                     Config = config
                     Versions = allVersions
                     Theme = theme
-                    RootPath = "../../"
+                    RootPath = ""
+                    SiteRootPath = "../../"
                     OutputDir = vDir
                 }
 
@@ -1128,7 +1159,8 @@ module SiteBuilder =
                 Config = config
                 Versions = versions
                 Theme = theme
-                RootPath = rootPath
+                RootPath = ""
+                SiteRootPath = rootPath
                 OutputDir = destination
             }
             ContentProvider.copyStaticFiles docsDir destination

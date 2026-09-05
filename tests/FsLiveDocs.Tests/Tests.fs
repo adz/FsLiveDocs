@@ -230,6 +230,7 @@ module ReleaseCapsuleTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
         ContentProvider.copyStaticFiles docsDir outputDir
@@ -988,7 +989,7 @@ module ViewTests =
         let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
         let page = { Metadata = { Title = "Guide"; Type = None; Project = None; TargetFramework = None; Platform = None }; ContentHtml = ""; FilePath = "guide.md"; OutputPath = "guide.html"; SectionOrder = 0 }
         let context : SiteBuilder.SiteRenderContext =
-            { AllPages = [ page ]; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "dark"; RootPath = "" }
+            { AllPages = [ page ]; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "dark"; RootPath = ""; SiteRootPath = "" }
 
         let html = SiteBuilder.renderPage page context
 
@@ -1005,7 +1006,7 @@ module ViewTests =
               page "03-advanced.md" "advanced.html" "Advanced" ]
         let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
         let context : SiteBuilder.SiteRenderContext =
-            { AllPages = pages; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "light"; RootPath = "" }
+            { AllPages = pages; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "light"; RootPath = ""; SiteRootPath = "" }
 
         let html = SiteBuilder.renderPage pages.Head context
 
@@ -1055,6 +1056,7 @@ module ViewTests =
                 Versions = []
                 Theme = "light"
                 RootPath = "../"
+                SiteRootPath = "../"
             }
         let html = SiteBuilder.renderEntityPage recordEntity context
 
@@ -1095,6 +1097,39 @@ module SiteBuilderTests =
         Assert.Contains("data-fsdocs-tip", html)
 
     [<Fact>]
+    let ``historical version pages keep sidebar and same-version links inside their own history subtree`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let outputDir = Path.Combine(root, "output")
+
+        let makeSite version =
+            let docsDir = Path.Combine(root, version, "docs")
+            Directory.CreateDirectory(docsDir) |> ignore
+            File.WriteAllText(Path.Combine(docsDir, "index.md"), "---\ntitle: Home\n---\nHello")
+            File.WriteAllText(Path.Combine(docsDir, "guide.md"), "---\ntitle: Guide\n---\nGuide body")
+            let package : PackageModel = { Version = version; Entities = []; Scenarios = []; Packages = [] }
+            let pages = ContentProvider.scanDocsWithOptions docsDir docsDir package "" SemanticCode.defaults
+            version, package, pages, docsDir
+
+        let v2 = makeSite "2.0.0"
+        let v1 = makeSite "1.0.0"
+
+        SiteBuilder.buildHistory "2.0.0" [ v2; v1 ] defaultSiteConfig "light" outputDir
+
+        let v1Guide = File.ReadAllText(Path.Combine(outputDir, "history", "1.0.0", "guide.html"))
+
+        // Sidebar's Home link must stay inside history/1.0.0/, not climb back to the
+        // current version's index.html at the site root.
+        Assert.Contains("href=\"index.html\"", v1Guide)
+        Assert.DoesNotContain("href=\"../../index.html\"", v1Guide)
+
+        // The version switcher must always be resolvable from the true site root
+        // (it needs to reach the sibling "history/{version}/" tree), and must
+        // preserve the current page rather than always targeting index.html.
+        Assert.Contains("href=\"../../guide.html\"", v1Guide)
+        Assert.Contains("href=\"../../history/1.0.0/guide.html\"", v1Guide)
+        Assert.DoesNotContain("href=\"../../history/1.0.0/index.html\"", v1Guide)
+
+    [<Fact>]
     let ``API summaries link compiler references to generated entity pages`` () =
         let exitEntity = {
             Id = "Example.Exit`2"
@@ -1131,6 +1166,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = "../"
+            SiteRootPath = "../"
         }
 
         let html = SiteBuilder.renderEntityPage deferredEntity context
@@ -1168,6 +1204,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1202,6 +1239,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1256,6 +1294,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1302,6 +1341,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1349,6 +1389,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1402,6 +1443,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1453,6 +1495,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1518,6 +1561,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1588,6 +1632,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1646,6 +1691,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
@@ -1709,6 +1755,7 @@ module SiteBuilderTests =
             Versions = []
             Theme = "light"
             RootPath = ""
+            SiteRootPath = ""
             OutputDir = outputDir
         }
 
