@@ -1,7 +1,13 @@
 {
   "SchemaVersion": 1,
-  "CurrentVersion": "0.5.0",
+  "CurrentVersion": "0.6.0",
   "Entries": [
+    {
+      "Version": "0.6.0",
+      "CapsulePath": null,
+      "CapsuleUrl": "https://github.com/adz/FsLiveDocs/releases/download/v0.6.0/FsLiveDocs-0.6.0-livedocs.zip",
+      "CapsuleSha256": "0c8773c33c8bfea9be32b1d8307fe38420a89bd158003153a556c8f5037cc828"
+    },
     {
       "Version": "0.5.0",
       "CapsulePath": null,
