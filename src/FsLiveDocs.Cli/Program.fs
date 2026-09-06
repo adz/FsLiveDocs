@@ -393,7 +393,7 @@ module Program =
 
             match configuredDocsSets projectPaths with
             | Some sets ->
-                let prepared = DocumentationSets.prepareCurrent sets packageRaw semanticArtifact ""
+                let prepared = DocumentationSets.prepareCurrent true sets packageRaw semanticArtifact ""
 
                 let current: SiteBuilder.DocsSetVersionSite =
                     { Version = packageRaw.Version
@@ -413,7 +413,7 @@ module Program =
                             )
 
                         let historicalPrepared =
-                            DocumentationSets.prepareCurrent sets historicalPackage semanticArtifact ""
+                            DocumentationSets.prepareCurrent true sets historicalPackage semanticArtifact ""
 
                         ({ Version = Path.GetFileNameWithoutExtension path
                            Package = historicalPackage

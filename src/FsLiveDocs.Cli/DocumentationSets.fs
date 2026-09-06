@@ -90,6 +90,7 @@ module internal DocumentationSets =
             not (relative.StartsWith("api/", StringComparison.OrdinalIgnoreCase)))
 
     let prepareCurrent
+        (usesDocumentationSets: bool)
         (sets: DocsSet list)
         (package: PackageModel)
         (artifact: SemanticDocumentationArtifact)
@@ -151,7 +152,7 @@ module internal DocumentationSets =
                           SnippetSourceDir = root
                           Package = apiPackage
                           RoutePrefix = DocsSet.routePrefix set
-                          SemanticPrefix = set.Id + "/"
+                          SemanticPrefix = if usesDocumentationSets then set.Id + "/" else ""
                           SiteRootPath = siteRootPath
                           AllowedOutputs = allowed
                           SemanticCode = options

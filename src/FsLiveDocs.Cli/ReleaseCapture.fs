@@ -127,7 +127,7 @@ module internal ReleaseCapture =
         verifyExplicitCases request.ProjectPaths pages references
 
         let semantic = DocAnalysis.semanticArtifact analysis
-        let prepared = DocumentationSets.prepareCurrent resolvedSets package semantic ""
+        let prepared = DocumentationSets.prepareCurrent request.DocsSets.IsSome resolvedSets package semantic ""
 
         let api: ApiModelArtifact =
             { SchemaVersion = History.ApiModelSchemaVersion
