@@ -1095,6 +1095,51 @@ module SiteBuilder =
         File.WriteAllText(Path.Combine(outputDir, "llms.txt"), generateLlmsTxt site.Package)
         renderDocsSetVersion currentVersion versions [ site ] config theme "" outputDir site
 
+    let private versionSiteOutputIdentities (site: DocsSetVersionSite) =
+        [ for docsSet in site.Sets do
+              yield! docsSet.Pages |> List.map _.OutputPath
+
+              if docsSet.Set.Api then
+                  let prefix = routePrefix docsSet.Set
+                  yield if site.UsesDocumentationSets then prefix + "api/index.html" else prefix + "api.html"
+                  yield! docsSet.Set.ApiEntityIds |> List.map (fun id -> prefix + "api/" + id + ".html")
+                  yield!
+                      (if isNull (box docsSet.Package.Packages) then [] else docsSet.Package.Packages)
+                      |> List.map (fun packageInfo ->
+                          prefix + "api/packages/" + Uri.EscapeDataString(packageInfo.Name) + ".html") ]
+        |> Set.ofList
+
+    let private writeVersionFallback (destination: string) (identity: string) (fallback: string) =
+        let output = Path.GetFullPath(Path.Combine(destination, identity.Replace('/', Path.DirectorySeparatorChar)))
+        let destinationRoot = Path.GetFullPath(destination) + string Path.DirectorySeparatorChar
+
+        if output.StartsWith(destinationRoot, StringComparison.Ordinal) && not (File.Exists output) then
+            Directory.CreateDirectory(Path.GetDirectoryName output) |> ignore
+            let target = Path.GetFullPath(Path.Combine(destination, fallback.Replace('/', Path.DirectorySeparatorChar)))
+            let relative = Path.GetRelativePath(Path.GetDirectoryName output, target).Replace('\\', '/')
+            let encoded = Net.WebUtility.HtmlEncode(relative)
+            File.WriteAllText(
+                output,
+                $"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"robots\" content=\"noindex\"><meta http-equiv=\"refresh\" content=\"0; url={encoded}\"></head><body><a href=\"{encoded}\">Documentation moved</a></body></html>"
+            )
+
+    let private fallbackForIdentity (site: DocsSetVersionSite) (identity: string) =
+        let owningSet =
+            site.Sets
+            |> List.sortByDescending (fun candidate -> routePrefix candidate.Set |> String.length)
+            |> List.tryFind (fun candidate -> identity.StartsWith(routePrefix candidate.Set, StringComparison.Ordinal))
+            |> Option.orElseWith (fun () -> site.Sets |> List.tryFind (fun candidate -> candidate.Set.IsDefault))
+
+        match owningSet with
+        | Some candidate ->
+            let prefix = routePrefix candidate.Set
+            let isApiPath = identity.StartsWith(prefix + "api/", StringComparison.Ordinal)
+            if isApiPath && candidate.Set.Api then
+                if site.UsesDocumentationSets then prefix + "api/index.html" else prefix + "api.html"
+            else
+                setRootOutput candidate.Set
+        | None -> "index.html"
+
     /// <summary>Renders captured documentation sets for every historical version.</summary>
     let buildDocsSetsHistory currentVersion (sites: DocsSetVersionSite list) config theme outputDir =
         let current =
@@ -1137,6 +1182,19 @@ module SiteBuilder =
 
             site.StaticRoot
             |> Option.iter (fun root -> ContentProvider.copyStaticFiles root destination)
+
+        // Legacy pages built their version links from their own output identity. When a page or
+        // symbol did not exist in another release, that produced a dead link. Keep those stable
+        // identities resolvable with renderer-owned redirects to the target set's API or home.
+        let identities = sites |> List.map versionSiteOutputIdentities |> Set.unionMany
+
+        for site in sites do
+            let destination =
+                if site.Version = currentVersion then outputDir
+                else Path.Combine(outputDir, "history", site.Version)
+
+            for identity in identities do
+                writeVersionFallback destination identity (fallbackForIdentity site identity)
 
         File.WriteAllText(Path.Combine(outputDir, "llms.txt"), generateLlmsTxt current.Package)
 

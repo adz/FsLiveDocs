@@ -2161,6 +2161,67 @@ module DocumentationSetTests =
         Assert.DoesNotContain("href=\"../../../index.html\"", historicalGuide)
 
     [<Fact>]
+    let ``legacy history writes fallbacks for pages absent from another release`` () =
+        let root =
+            Path.Combine(Path.GetTempPath(), "fslivedocs-legacy-fallback-" + Guid.NewGuid().ToString("N"))
+
+        let output = Path.Combine(root, "output")
+        let metadata title =
+            { Title = title
+              Type = None
+              Project = None
+              TargetFramework = None
+              Platform = None }
+        let page path title =
+            { Metadata = metadata title
+              ContentHtml = "<h1>" + title + "</h1>"
+              FilePath = path + ".md"
+              OutputPath = path + ".html"
+              SectionOrder = 0 }
+        let entity =
+            { Id = "New.Api"
+              Name = "Api"
+              Kind = EntityKind.Module
+              Summary = []
+              Members = []
+              Examples = []
+              Entities = [] }
+        let releaseSet entityIds : ReleaseDocsSet =
+            { Id = "default"
+              Title = "Docs"
+              Source = "docs"
+              Path = ""
+              Projects = []
+              IsDefault = true
+              Sidebar = true
+              Api = true
+              ApiEntityIds = entityIds
+              FSharpPrelude = None }
+        let versionSite version pages entities : SiteBuilder.DocsSetVersionSite =
+            let model : PackageModel =
+                { Version = version
+                  Entities = entities
+                  Scenarios = []
+                  Packages = [] }
+            { Version = version
+              Package = model
+              Sets = [ { Set = releaseSet (entities |> List.map _.Id); Package = model; Pages = pages } ]
+              StaticRoot = None
+              UsesDocumentationSets = false }
+
+        let current = versionSite "2.0.0" [ page "index" "Home"; page "new-guide" "New guide" ] [ entity ]
+        let old = versionSite "1.0.0" [ page "index" "Old home" ] []
+        SiteBuilder.buildDocsSetsHistory current.Version [ current; old ] site "light" output
+
+        let fallback = Path.Combine(output, "history", "1.0.0", "new-guide.html")
+        Assert.True(File.Exists fallback)
+        Assert.Contains("href=\"index.html\"", File.ReadAllText fallback)
+
+        let apiFallback = Path.Combine(output, "history", "1.0.0", "api", "New.Api.html")
+        Assert.True(File.Exists apiFallback)
+        Assert.Contains("href=\"../api.html\"", File.ReadAllText apiFallback)
+
+    [<Fact>]
     let ``content schema two captures resolved set and page identity`` () =
         let root =
             Path.Combine(Path.GetTempPath(), "fslivedocs-capsule-" + Guid.NewGuid().ToString("N"))
