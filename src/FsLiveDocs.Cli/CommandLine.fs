@@ -15,6 +15,8 @@ open Microsoft.Extensions.Logging
 
 /// <summary>Defines the supported command-line arguments for the livedocs tool.</summary>
 type Arguments =
+    /// <summary>Prints the installed FsLiveDocs tool version.</summary>
+    | [<CliPrefix(CliPrefix.None)>] Tool_Version
     /// <summary>Adds FsLiveDocs configuration and starter documentation to a repository.</summary>
     | [<CliPrefix(CliPrefix.None)>] Init
     /// <summary>Generates a GitHub Actions workflow for documentation verification and releases.</summary>
@@ -86,6 +88,7 @@ type Arguments =
     interface IArgParserTemplate with
         member s.Usage =
             match s with
+            | Tool_Version -> "Print the installed FsLiveDocs tool version."
             | Init -> "Add FsLiveDocs configuration and starter documentation to this repository."
             | Generate_CI -> "Generate a GitHub Actions workflow for documentation verification and releases."
             | Generate_Tests _ -> "Generate a test project for documentation examples."

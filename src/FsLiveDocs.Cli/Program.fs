@@ -712,7 +712,12 @@ module Program =
                     ConsoleOutput.interactive && ConsoleOutput.banner && (results.Contains Build || results.Contains Watch)
                 let theme = results.GetResult(Theme, defaultValue = "light")
                 
-                if results.Contains Init then
+                if results.Contains Tool_Version then
+                    let version = typeof<Arguments>.Assembly.GetName().Version.ToString(3)
+                    Console.WriteLine($"FsLiveDocs {version}")
+                    0
+
+                elif results.Contains Init then
                     printBanner()
                     AnsiConsole.MarkupLine("[blue]Scaffolding new project...[/]")
                     let discovered = Workspace.initialize (results.Contains Discover_Projects)
