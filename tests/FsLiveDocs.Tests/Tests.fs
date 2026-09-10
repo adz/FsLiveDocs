@@ -870,6 +870,28 @@ module ContentProviderTests =
         let error = Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.loadPage file root package "/" "guide.html" (set [ "guide.html" ]) |> ignore)
         Assert.Contains("Cross-reference 'xref:T:Example.Missing' was not found", error.Message)
 
+    [<Fact>]
+    let ``semantic code placeholders do not swallow Markdown following a fence`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let file = Path.Combine(root, "guide.md")
+        File.WriteAllText(file, "```fsharp no-check reason=\"Illustrative\"\nlet answer = 42\n```\n\nSee [`the math module`](xref:T:Example.Math).")
+        let package : PackageModel =
+            {
+                Version = "1.0"
+                Entities = [ { Id = "Example.Math"; Name = "Math"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] } ]
+                Scenarios = []
+                Packages = []
+            }
+        let semantic = { SemanticCode.defaults with Artifact = Some { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [] } }
+
+        let page =
+            ContentProvider.scanDocsWithOptions root root package "/" semantic
+            |> List.exactlyOne
+
+        Assert.Contains("<a href=\"/api/Example.Math.html\"><code>the math module</code></a>", page.ContentHtml)
+        Assert.DoesNotContain("xref:T:Example.Math", page.ContentHtml)
+
 module DocTestRunnerTests =
 
     [<Fact>]

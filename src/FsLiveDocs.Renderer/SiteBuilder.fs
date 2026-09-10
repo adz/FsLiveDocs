@@ -539,6 +539,8 @@ module SiteBuilder =
     /// <param name="package">The package model to summarize.</param>
     /// <returns>A plaintext `llms.txt` document.</returns>
     /// <example name="GenerateLlmsTxtExample" data-livedocs="snapshot">
+    /// > open FsLiveDocs.Core;;
+    ///
     /// > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
     /// val package: PackageModel = { Version = "1.0"
     ///   Entities = []

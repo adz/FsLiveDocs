@@ -528,7 +528,9 @@ module ContentProvider =
                 fun matched ->
                     let index = semanticSegments.Count
                     semanticSegments.Add(matched.Groups.["html"].Value)
-                    $"<div data-fslivedocs-semantic-placeholder=\"{index}\"></div>"
+                    // A comment placeholder does not start an HTML block, so Markdown following a
+                    // semantically rendered fence remains available to Markdig for normal parsing.
+                    $"<!--fslivedocs-semantic-placeholder:{index}-->"
             )
 
         let rendered =
@@ -538,7 +540,7 @@ module ContentProvider =
                 renderMarkdownWithApiLinksAndRoutes protectedMarkdown context.Package context.RootPath context.ApiRoutes
 
         semanticSegments
-        |> Seq.mapi (fun index html -> $"<div data-fslivedocs-semantic-placeholder=\"{index}\"></div>", html)
+        |> Seq.mapi (fun index html -> $"<!--fslivedocs-semantic-placeholder:{index}-->", html)
         |> Seq.fold (fun (current: string) (placeholder, html) -> current.Replace(placeholder, html)) rendered
 
     let private loadMarkdownPage (context: MarkdownContext) (filePath: string) (outputPath: string) =

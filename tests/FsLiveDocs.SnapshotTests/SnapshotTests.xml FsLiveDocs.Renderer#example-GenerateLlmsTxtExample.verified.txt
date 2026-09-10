@@ -1,6 +1,8 @@
 {
   Name: GenerateLlmsTxtExample,
   Source:
+> open FsLiveDocs.Core;;
+
 > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
 val package: PackageModel = { Version = "1.0"
   Entities = []
