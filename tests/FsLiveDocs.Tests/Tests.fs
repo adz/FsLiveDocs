@@ -626,6 +626,31 @@ module ContentProviderTests =
         Assert.Equal(Some "dotnet", parsed |> Option.bind (fun (metadata, _) -> metadata.Platform))
 
     [<Fact>]
+    let ``applyApiDocs replaces an entity's summary from its docs/api markdown file`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let apiDir = Path.Combine(root, "api")
+        Directory.CreateDirectory(apiDir) |> ignore
+        File.WriteAllText(Path.Combine(apiDir, "Example.Math.md"), "Long-form summary for Math.")
+        let entity = { Id = "Example.Math"; Name = "Math"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] }
+        let package = { emptyPackage with Entities = [ entity ] }
+
+        let updated = ContentProvider.applyApiDocs root root package
+
+        let updatedEntity = updated.Entities |> List.exactlyOne
+        Assert.NotEmpty(updatedEntity.Summary)
+
+    [<Fact>]
+    let ``applyApiDocs is a no-op when the docs/api directory does not exist`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let entity = { Id = "Example.Math"; Name = "Math"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] }
+        let package = { emptyPackage with Entities = [ entity ] }
+
+        let updated = ContentProvider.applyApiDocs root root package
+
+        Assert.Equal<PackageModel>(package, updated)
+
+    [<Fact>]
     let ``persisted semantic records render accessible encoded tooltips and reject stale source`` () =
         let markdown = "```fsharp\nlet value = List.head [ \"<safe>\" ]\n```"
         let discovered = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown |> List.head
