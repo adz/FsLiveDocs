@@ -1,4 +1,4 @@
-namespace FsLiveDocs.Runner.Effects
+namespace FsLiveDocs.Core.Effects
 
 open Axial
 open Axial.Console

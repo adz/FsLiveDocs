@@ -2,7 +2,7 @@ namespace FsLiveDocs.Cli
 
 open Axial
 open Axial.Process
-open FsLiveDocs.Runner.Effects
+open FsLiveDocs.Core.Effects
 
 /// Runs local `git` queries. Hides process execution (Axial.Process) behind one synchronous
 /// call that raises on failure, matching the CLI's existing synchronous command style.

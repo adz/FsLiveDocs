@@ -4,7 +4,7 @@ open System
 open System.IO
 open Axial
 open Axial.Process
-open FsLiveDocs.Runner.Effects
+open FsLiveDocs.Core.Effects
 open Newtonsoft.Json.Linq
 
 /// Runs `dotnet msbuild` for one project and parses its JSON property output. Hides process

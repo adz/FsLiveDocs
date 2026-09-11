@@ -6,7 +6,7 @@ open Axial
 open Axial.FileSystem
 open FsLiveDocs.Core
 open FsLiveDocs.Runner
-open FsLiveDocs.Runner.Effects
+open FsLiveDocs.Core.Effects
 
 /// Owns release extraction, verification, renderer-neutral assembly, and capsule persistence.
 module internal ReleaseCapture =

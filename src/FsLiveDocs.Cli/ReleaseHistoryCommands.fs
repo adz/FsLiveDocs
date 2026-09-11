@@ -8,7 +8,7 @@ open System.Text.RegularExpressions
 open Axial
 open Axial.FileSystem
 open FsLiveDocs.Core
-open FsLiveDocs.Runner.Effects
+open FsLiveDocs.Core.Effects
 open Newtonsoft.Json
 
 [<CLIMutable>]

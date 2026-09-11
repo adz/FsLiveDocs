@@ -11,6 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Effects/LiveEnvironment.fs" />
+    <Compile Include="Effects/Run.fs" />
     <Compile Include="Transcript.fs" />
     <Compile Include="DocumentationModel.fs" />
     <Compile Include="ApiModel.fs" />
@@ -40,6 +42,11 @@
     <PackageReference Include="Markdig" Version="1.2.0" />
     <PackageReference Include="YamlDotNet" Version="17.1.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Axial" Version="0.9.1" />
+    <PackageReference Include="Axial.Process" Version="0.9.1" />
+    <PackageReference Include="Axial.Console" Version="0.9.1" />
+    <PackageReference Include="Axial.FileSystem" Version="0.9.1" />
+    <PackageReference Include="Axial.PlatformService" Version="0.9.1" />
   </ItemGroup>
 
 </Project>

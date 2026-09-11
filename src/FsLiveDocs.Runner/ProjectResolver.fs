@@ -6,7 +6,7 @@ open System.Xml.Linq
 open Axial
 open Axial.FileSystem
 open FsLiveDocs.Core
-open FsLiveDocs.Runner.Effects
+open FsLiveDocs.Core.Effects
 
 /// <summary>Resolves source projects and built assemblies for doc-test execution. Never throws
 /// for a missing file or directory -- matches its pre-Axial.FileSystem contract -- so every
