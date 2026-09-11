@@ -30,17 +30,7 @@ module internal ReleaseCapture =
           PlannedOutputPath: string
           DryRun: bool }
 
-    let private currentRevision () =
-        let startInfo = Diagnostics.ProcessStartInfo("git", "rev-parse HEAD")
-        startInfo.RedirectStandardOutput <- true
-        startInfo.RedirectStandardError <- true
-        startInfo.UseShellExecute <- false
-        use gitProcess = Diagnostics.Process.Start(startInfo)
-        let revision = gitProcess.StandardOutput.ReadToEnd().Trim()
-        gitProcess.WaitForExit()
-        if gitProcess.ExitCode <> 0 || String.IsNullOrWhiteSpace revision then
-            invalidOp "Release capture requires a Git commit so the capsule can record source provenance."
-        revision
+    let private currentRevision () = Git.currentRevision (Directory.GetCurrentDirectory())
 
     let private verifyExplicitCases projectPaths (pages: DocAnalysis.Page list) references =
         for projectPath in projectPaths do
