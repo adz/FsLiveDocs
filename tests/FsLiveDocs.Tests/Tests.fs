@@ -326,6 +326,27 @@ module ReleaseCapsuleTests =
         Assert.Contains("links do not resolve", error.Message)
 
     [<Fact>]
+    let ``history verification reports an unreadable page instead of crashing`` () =
+        if not (OperatingSystem.IsWindows()) then
+            let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(root) |> ignore
+            let hash = String.replicate 64 "0"
+            let indexPath = Path.Combine(root, "history.json")
+            ReleaseCapsule.saveHistoryIndex indexPath {
+                SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion
+                CurrentVersion = "1.0.0"
+                Entries = [ { Version = "1.0.0"; CapsulePath = None; CapsuleUrl = Some "https://example.com/1.0.0.zip"; CapsuleSha256 = hash } ]
+            }
+            let unreadable = Path.Combine(root, "index.html")
+            File.WriteAllText(unreadable, "<span>1.0.0</span>")
+            File.SetUnixFileMode(unreadable, UnixFileMode.None)
+            try
+                let error = Assert.Throws<InvalidOperationException>(fun () -> ReleaseHistoryCommands.verify indexPath root |> ignore)
+                Assert.Contains("Could not read generated page", error.Message)
+            finally
+                File.SetUnixFileMode(unreadable, UnixFileMode.UserRead ||| UnixFileMode.UserWrite)
+
+    [<Fact>]
     let ``history verification ignores pagefind assets`` () =
         let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore

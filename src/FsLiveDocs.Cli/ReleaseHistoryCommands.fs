@@ -5,6 +5,8 @@ open System.IO
 open System.Net.Http
 open System.Net.Http.Headers
 open System.Text.RegularExpressions
+open Axial
+open Axial.FileSystem
 open FsLiveDocs.Core
 open Newtonsoft.Json
 
@@ -33,6 +35,36 @@ module ReleaseHistoryCommands =
     type DiscoverySource =
         | GithubRepo of string
         | Command of string
+
+    type private RunnerEnvironment =
+        { FileSystem: IFileSystem }
+        interface IHasFileSystem with
+            member this.FileSystem = this.FileSystem
+
+    let private environment : RunnerEnvironment = { FileSystem = FileSystem.live }
+
+    /// Checks existence without throwing -- matches File.Exists'/Directory.Exists' own contract.
+    let private exists (flow: Flow<RunnerEnvironment, FileSystemError, bool>) =
+        match flow |> Flow.run environment with
+        | Exit.Success value -> value
+        | Exit.Failure _ -> false
+
+    let private fileExists path = exists (FileSystem.fileExists path)
+    let private directoryExists path = exists (FileSystem.directoryExists path)
+
+    /// Reads a generated page's text, raising a clear diagnostic instead of letting a raw,
+    /// unhandled I/O exception (a locked file, a permissions error) escape the verify command.
+    let private readGeneratedPage path =
+        match FileSystem.readAllText path |> Flow.run environment with
+        | Exit.Success text -> text
+        | Exit.Failure(Cause.Fail error) -> invalidOp $"Could not read generated page {path}: {FileSystemError.describe error}"
+        | Exit.Failure cause -> invalidOp $"Could not read generated page {path}: {cause}"
+
+    let private enumerateHtmlFiles root =
+        match FileSystem.enumerateFiles root "*.html" SearchOption.AllDirectories |> Flow.run environment with
+        | Exit.Success files -> files
+        | Exit.Failure(Cause.Fail error) -> invalidOp $"Could not scan generated pages under {root}: {FileSystemError.describe error}"
+        | Exit.Failure cause -> invalidOp $"Could not scan generated pages under {root}: {cause}"
 
     let private normalizedSha (context: string) (value: string) =
         let sha = value.Trim().ToLowerInvariant()
@@ -132,7 +164,7 @@ module ReleaseHistoryCommands =
 
     let sync (source: DiscoverySource) (indexPath: string) (expectedVersion: string option) (expectedUrl: string option) (expectedSha: string option) =
         let existing =
-            if File.Exists indexPath then (ReleaseCapsule.loadHistoryIndex indexPath).Entries
+            if fileExists indexPath then (ReleaseCapsule.loadHistoryIndex indexPath).Entries
             else []
         // The oldest committed entry is the repository's explicit compatibility floor. Capsules
         // predating that floor may use artifact contracts the current renderer intentionally does
@@ -179,12 +211,12 @@ module ReleaseHistoryCommands =
                 let path = Path.GetFullPath(Path.Combine(output, relative))
                 if path <> output && not (path.StartsWith(output + string Path.DirectorySeparatorChar, StringComparison.Ordinal)) then
                     Path.Combine(output, ".livedocs-unsafe-link")
-                elif Directory.Exists path then Path.Combine(path, "index.html")
+                elif directoryExists path then Path.Combine(path, "index.html")
                 else path
             if target.StartsWith '/' then
                 let relative = Uri.UnescapeDataString(target.TrimStart '/')
                 let direct = asFile relative
-                if File.Exists direct then Some direct
+                if fileExists direct then Some direct
                 else
                     let slash = relative.IndexOf '/'
                     Some(asFile (if slash >= 0 then relative.Substring(slash + 1) else relative))
@@ -199,18 +231,18 @@ module ReleaseHistoryCommands =
             else Path.Combine(root, "history", version, "index.html")
         for entry in index.Entries do
             let path = entryPoint entry.Version
-            if not (File.Exists path) then invalidOp $"Missing version entry point: {path}"
+            if not (fileExists path) then invalidOp $"Missing version entry point: {path}"
         let links = Regex("(?:href|src)=['\"]([^'\"]+)['\"]", RegexOptions.Compiled ||| RegexOptions.IgnoreCase)
         let failures = ResizeArray<string>()
-        for page in Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories) do
+        for page in enumerateHtmlFiles root do
             let relativePage = Path.GetRelativePath(root, page)
-            for found in links.Matches(File.ReadAllText page) do
+            for found in links.Matches(readGeneratedPage page) do
                 let href = found.Groups[1].Value
                 // Pagefind owns its own `pagefind/` directory and runs as a separate index step;
                 // its assets are not FsLiveDocs-generated links for this check to resolve.
                 if not (href.Contains "pagefind/") then
                     match localTarget root relativePage href with
-                    | Some target when not (File.Exists target) -> failures.Add($"{relativePage} -> {href}")
+                    | Some target when not (fileExists target) -> failures.Add($"{relativePage} -> {href}")
                     | _ -> ()
         if failures.Count > 0 then
             let detail = failures |> Seq.truncate 50 |> String.concat Environment.NewLine
@@ -219,17 +251,17 @@ module ReleaseHistoryCommands =
         for entry in index.Entries do
             let landingPath = entryPoint entry.Version
             let landingRelative = Path.GetRelativePath(root, landingPath)
-            for found in setLinks.Matches(File.ReadAllText landingPath) do
+            for found in setLinks.Matches(readGeneratedPage landingPath) do
                 let href = found.Groups[1].Value
                 let setId = found.Groups[2].Value
                 match localTarget root landingRelative href with
-                | Some target when File.Exists target ->
+                | Some target when fileExists target ->
                     let identity = $"data-docs-set-id=\"{setId}\""
-                    if not (File.ReadAllText(target).Contains(identity, StringComparison.Ordinal)) then
+                    if not ((readGeneratedPage target).Contains(identity, StringComparison.Ordinal)) then
                         invalidOp $"Documentation-set entry point for {setId} in {entry.Version} has the wrong set identity: {target}"
                 | _ -> invalidOp $"Documentation-set entry point for {setId} in {entry.Version} is missing: {href}"
-        let landing = File.ReadAllText(entryPoint index.CurrentVersion)
+        let landing = readGeneratedPage (entryPoint index.CurrentVersion)
         let positions = index.Entries |> List.map (fun entry -> landing.IndexOf($">{entry.Version}<", StringComparison.Ordinal))
         if positions |> List.exists (fun position -> position < 0) || positions <> List.sort positions then
             invalidOp "Version switcher is missing versions or is not newest-first."
-        Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories) |> Seq.length
+        enumerateHtmlFiles root |> Seq.length
