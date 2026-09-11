@@ -17,8 +17,10 @@ module internal ReleaseCapture =
 
     let private environment : RunnerEnvironment = { FileSystem = FileSystem.live }
 
-    /// Runs a file-system Flow synchronously, raising a clear diagnostic on any typed failure
-    /// instead of letting a raw I/O exception (disk full, permissions) escape uncaught.
+    /// Runs a composed file-system Flow synchronously, raising a clear diagnostic on any typed
+    /// failure instead of letting a raw I/O exception (disk full, permissions) escape uncaught.
+    /// Callers compose every step of one artifact-writing decision into a single Flow first, so
+    /// this runs once per decision -- not once per underlying file operation.
     let private run (description: string) (flow: Flow<RunnerEnvironment, FileSystemError, 'value>) =
         match flow |> Flow.run environment with
         | Exit.Success value -> value
@@ -192,9 +194,15 @@ module internal ReleaseCapture =
         else
             let reportPath = outputPath + ".report.json"
             let reportJson = Newtonsoft.Json.JsonConvert.SerializeObject(publicReport, Newtonsoft.Json.Formatting.Indented, Serialization.jsonSettings)
-            run $"Could not write the release report to {reportPath}" (FileSystem.writeAllText reportPath reportJson)
-            // A bare-checksum sidecar lets a CI publish step register the capsule with
-            // `history add --sha256-file` instead of parsing tool output.
             let sha256Path = outputPath + ".sha256"
-            run $"Could not write the checksum sidecar to {sha256Path}" (FileSystem.writeAllText sha256Path (publicReport.Sha256.ToLowerInvariant() + "\n"))
+            // A bare-checksum sidecar lets a CI publish step register the capsule with
+            // `history add --sha256-file` instead of parsing tool output. Both writes are one
+            // Flow, run once -- not two independently-run operations -- so they share one
+            // execution boundary the way a caller composing this into a larger workflow expects.
+            let writeArtifacts =
+                flow {
+                    do! FileSystem.writeAllText reportPath reportJson
+                    do! FileSystem.writeAllText sha256Path (publicReport.Sha256.ToLowerInvariant() + "\n")
+                }
+            run $"Could not write the release report and checksum sidecar for {outputPath}" writeArtifacts
             { Report = publicReport; ReportPath = Some(Path.GetFullPath reportPath); PlannedOutputPath = plannedOutputPath; DryRun = false }
