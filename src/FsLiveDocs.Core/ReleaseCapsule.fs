@@ -8,6 +8,8 @@ open System.Text
 open System.Net.Http
 open Newtonsoft.Json
 open Newtonsoft.Json.Serialization
+open Reified
+open FsLiveDocs.Core.Schema
 
 /// Creates, validates, inspects, and extracts deterministic release capsules.
 module ReleaseCapsule =
@@ -186,12 +188,20 @@ module ReleaseCapsule =
     let private sha256Bytes (bytes: byte array) =
         bytes |> SHA256.HashData |> Convert.ToHexString |> _.ToLowerInvariant()
 
-    let private serialize value =
-        JsonConvert.SerializeObject(value, Formatting.Indented, Serialization.jsonSettings)
-        |> Encoding.UTF8.GetBytes
+    // Every persisted release-artifact type is serialized through a Reified.Schema codec compiled
+    // from `FsLiveDocs.Core.Schema`, wire-compatible with the
+    // pre-Reified format (see `DocumentationSchema` for the shared compatibility rules).
+    let private apiCodec = Json.compile ApiSchema.apiModelArtifact
+    let private semanticCodec = Json.compile SemanticSchema.semanticDocumentationArtifact
+    let private contentCodec = Json.compile ReleaseSchema.releaseContentArtifact
+    let private manifestCodec = Json.compile ReleaseSchema.releaseCapsuleManifest
+    let private historyIndexCodec = Json.compile ReleaseSchema.releaseHistoryIndex
 
-    let private deserialize<'value> (bytes: byte array) =
-        JsonConvert.DeserializeObject<'value>(Encoding.UTF8.GetString bytes, Serialization.jsonSettings)
+    let private serializeWith codec value =
+        Json.serialize codec value |> Encoding.UTF8.GetBytes
+
+    let private deserializeWith codec (bytes: byte array) =
+        Json.deserialize codec (Encoding.UTF8.GetString bytes)
 
     let private normalizedEntryPath (path: string) =
         let normalized = path.Replace('\\', '/').TrimStart('/')
@@ -405,8 +415,8 @@ module ReleaseCapsule =
         let duplicates = normalizedAssets |> List.countBy fst |> List.filter (fun (_, count) -> count > 1)
         if not duplicates.IsEmpty then invalidOp $"Release content contains duplicate asset path: {fst duplicates.Head}"
 
-        let apiBytes = serialize api
-        let semanticBytes = serialize semantic
+        let apiBytes = serializeWith apiCodec api
+        let semanticBytes = serializeWith semanticCodec semantic
 
         let content: ReleaseContentArtifact =
             { SchemaVersion = ContentSchemaVersion
@@ -428,7 +438,7 @@ module ReleaseCapsule =
         validateApi api
         validateSemantic semantic
         validateContent content
-        let contentBytes = serialize content
+        let contentBytes = serializeWith contentCodec content
         let manifest =
             {
                 SchemaVersion = ManifestSchemaVersion
@@ -439,7 +449,7 @@ module ReleaseCapsule =
                 Semantic = createComponent semantic.SchemaVersion "semantic.json" semanticBytes
                 Content = createComponent content.SchemaVersion "content.json" contentBytes
             }
-        let manifestBytes = serialize manifest
+        let manifestBytes = serializeWith manifestCodec manifest
 
         use file = File.Create fullPath
         use archive = new ZipArchive(file, ZipArchiveMode.Create)
@@ -558,22 +568,21 @@ module ReleaseCapsule =
         let fullPath = Path.GetFullPath path
         if not (File.Exists fullPath) then invalidOp $"Release capsule is missing: {fullPath}"
         let entries = readEntries fullPath
-        let manifest = required "manifest.json" entries |> deserialize<ReleaseCapsuleManifest>
-        if isNull (box manifest) || manifest.SchemaVersion <> ManifestSchemaVersion then
-            let actual = if isNull (box manifest) then 0 else manifest.SchemaVersion
-            invalidOp $"Unsupported release capsule manifest schema {actual}; expected {ManifestSchemaVersion}."
-        let api = verifyComponent manifest.Api entries |> deserialize<ApiModelArtifact>
+        let manifest = required "manifest.json" entries |> deserializeWith manifestCodec
+        if manifest.SchemaVersion <> ManifestSchemaVersion then
+            invalidOp $"Unsupported release capsule manifest schema {manifest.SchemaVersion}; expected {ManifestSchemaVersion}."
+        let api = verifyComponent manifest.Api entries |> deserializeWith apiCodec
 
         let semantic =
             verifyComponent manifest.Semantic entries
-            |> deserialize<SemanticDocumentationArtifact>
+            |> deserializeWith semanticCodec
 
         let contentBytes = verifyComponent manifest.Content entries
         // The manifest records the exact persisted content contract. Deserialize against that
         // version's shape, then migrate supported older versions with a small deterministic step.
         let content =
             match manifest.Content.SchemaVersion with
-            | 3 -> deserialize<ReleaseContentArtifact> contentBytes
+            | 3 -> deserializeWith contentCodec contentBytes
             | 2 -> LegacyContent.migrateV2 contentBytes
             | 1 -> LegacyContent.migrate semantic.Prelude api (LegacyContent.deserialize contentBytes)
             | other ->
@@ -765,15 +774,14 @@ module ReleaseCapsule =
         let normalized = normalizeHistoryIndex index
         let directory = Path.GetDirectoryName(Path.GetFullPath path)
         Directory.CreateDirectory directory |> ignore
-        File.WriteAllText(path, JsonConvert.SerializeObject(normalized, Formatting.Indented, Serialization.jsonSettings) + Environment.NewLine)
+        File.WriteAllText(path, Json.serialize historyIndexCodec normalized + Environment.NewLine)
 
     /// Loads a capsule history index and validates its structural invariants.
     let loadHistoryIndex path =
         if not (File.Exists path) then invalidOp $"Release history index is missing: {path}"
-        let index = JsonConvert.DeserializeObject<ReleaseHistoryIndex>(File.ReadAllText path, Serialization.jsonSettings)
-        if isNull (box index) || index.SchemaVersion <> HistoryIndexSchemaVersion then
-            let actual = if isNull (box index) then 0 else index.SchemaVersion
-            invalidOp $"Unsupported release history index schema {actual}; expected {HistoryIndexSchemaVersion}."
+        let index = Json.deserialize historyIndexCodec (File.ReadAllText path)
+        if index.SchemaVersion <> HistoryIndexSchemaVersion then
+            invalidOp $"Unsupported release history index schema {index.SchemaVersion}; expected {HistoryIndexSchemaVersion}."
         if index.Entries.IsEmpty then invalidOp "Release history index must contain at least one entry."
         index.Entries |> List.iter (fun entry -> parseVersion entry.Version |> ignore)
         if index.Entries |> List.countBy _.Version |> List.exists (fun (_, count) -> count > 1) then

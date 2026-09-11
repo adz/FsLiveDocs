@@ -3,7 +3,8 @@ namespace FsLiveDocs.Core
 open System
 open System.IO
 open System.Security.Cryptography
-open Newtonsoft.Json
+open Reified
+open FsLiveDocs.Core.Schema
 
 /// <summary>Loads and verifies immutable inputs for a multi-version documentation build.</summary>
 module History =
@@ -17,8 +18,11 @@ module History =
     [<Literal>]
     let ManifestSchemaVersion = 1
 
-    let private deserialize<'value> path =
-        JsonConvert.DeserializeObject<'value>(File.ReadAllText(path), Serialization.jsonSettings)
+    let private apiCodec = Json.compile ApiSchema.apiModelArtifact
+    let private semanticCodec = Json.compile SemanticSchema.semanticDocumentationArtifact
+    let private historyManifestCodec = Json.compile HistorySchema.historyManifest
+
+    let private deserializeWith codec path = Json.deserialize codec (File.ReadAllText path)
 
     /// <summary>Computes the lowercase SHA-256 digest of a file.</summary>
     let sha256 path =
@@ -31,8 +35,7 @@ module History =
         let actualSha256 = sha256 path
         if not (actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase)) then
             invalidOp $"History API model checksum mismatch for {expectedVersion}: expected {expectedSha256}, got {actualSha256}."
-        let artifact = deserialize<ApiModelArtifact> path
-        if isNull (box artifact) then invalidOp $"History API model is empty: {path}"
+        let artifact = deserializeWith apiCodec path
         if artifact.SchemaVersion <> ApiModelSchemaVersion then
             invalidOp $"Unsupported API model schema {artifact.SchemaVersion} in {path}; expected {ApiModelSchemaVersion}."
         if artifact.Package.Version <> expectedVersion then
@@ -45,8 +48,7 @@ module History =
         let actualSha256 = sha256 path
         if not (actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase)) then
             invalidOp $"History semantic artifact checksum mismatch: expected {expectedSha256}, got {actualSha256}."
-        let artifact = deserialize<SemanticDocumentationArtifact> path
-        if isNull (box artifact) then invalidOp $"History semantic artifact is empty: {path}"
+        let artifact = deserializeWith semanticCodec path
         if artifact.SchemaVersion <> SemanticSchemaVersion then
             invalidOp $"Unsupported semantic documentation schema {artifact.SchemaVersion} in {path}; expected {SemanticSchemaVersion}."
         artifact.Pages
@@ -64,8 +66,7 @@ module History =
     /// <summary>Loads a history manifest and resolves entry paths relative to the manifest.</summary>
     let loadManifest path =
         if not (File.Exists(path)) then invalidOp $"History manifest is missing: {path}"
-        let manifest = deserialize<HistoryManifest> path
-        if isNull (box manifest) then invalidOp $"History manifest is empty: {path}"
+        let manifest = deserializeWith historyManifestCodec path
         if manifest.SchemaVersion <> ManifestSchemaVersion then
             invalidOp $"Unsupported history manifest schema {manifest.SchemaVersion}; expected {ManifestSchemaVersion}."
         if manifest.Entries |> List.isEmpty then invalidOp "History manifest must contain at least one entry."
