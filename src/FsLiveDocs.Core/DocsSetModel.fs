@@ -3,6 +3,7 @@ namespace FsLiveDocs.Core
 open System
 open System.IO
 open System.Text.RegularExpressions
+open Reified
 
 /// <summary>Author-facing configuration for one documentation set, read from the
 /// <c>docsSets</c> array in <c>.livedocs/config.json</c>.</summary>
@@ -69,15 +70,20 @@ module DocsSet =
     let private normalizeSegments (value: string) =
         value.Replace('\\', '/').Trim().Trim('/')
 
-    let private validateRelativePath field setId (value: string) =
-        let segments = value.Split('/', StringSplitOptions.RemoveEmptyEntries)
+    /// <summary>A named, independently checkable rule: not rooted, and no <c>.</c>/<c>..</c> segments
+    /// that could escape a repository-relative base.</summary>
+    let private isSafeRelativePath : Constraint<string> =
+        Constraint.custom
+            "must be a repository-relative path without '.' or '..' segments"
+            (fun value ->
+                let segments = value.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                not (Path.IsPathRooted value || segments |> Array.exists (fun segment -> segment = "." || segment = ".."))
+            )
 
-        if
-            Path.IsPathRooted value
-            || segments |> Array.exists (fun segment -> segment = "." || segment = "..")
-        then
-            invalidOp
-                $"Documentation set {setId} has an unsafe {field} path: '{value}'. Use a repository-relative path without '.' or '..' segments."
+    let private validateRelativePath field setId (value: string) =
+        match Constraint.check isSafeRelativePath value with
+        | Result.Error _ -> invalidOp $"Documentation set {setId} has an unsafe {field} path: '{value}'. Use a repository-relative path without '.' or '..' segments."
+        | Result.Ok() -> ()
 
         value
 

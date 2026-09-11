@@ -48,6 +48,7 @@
     <PackageReference Include="Axial.FileSystem" Version="0.9.1" />
     <PackageReference Include="Axial.PlatformService" Version="0.9.1" />
     <PackageReference Include="Axial.HttpClient" Version="0.9.1" />
+    <PackageReference Include="Reified.Constraint" Version="0.8.0" />
   </ItemGroup>
 
 </Project>
