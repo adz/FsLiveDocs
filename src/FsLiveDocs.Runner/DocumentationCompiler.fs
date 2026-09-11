@@ -2,7 +2,6 @@ namespace FsLiveDocs.Runner
 
 open System
 open System.Collections.Concurrent
-open System.Diagnostics
 open System.IO
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Diagnostics
@@ -48,34 +47,6 @@ module DocumentationCompiler =
         | null -> None
         | value -> value.Value<string>() |> Option.ofObj |> Option.filter (String.IsNullOrWhiteSpace >> not)
 
-    let private runMsBuild (fullPath: string) (arguments: string list) =
-        let startInfo = ProcessStartInfo("dotnet")
-        startInfo.WorkingDirectory <- Path.GetDirectoryName(fullPath)
-        startInfo.RedirectStandardOutput <- true
-        startInfo.RedirectStandardError <- true
-        startInfo.UseShellExecute <- false
-        startInfo.ArgumentList.Add("msbuild")
-        startInfo.ArgumentList.Add(fullPath)
-        for argument in arguments do startInfo.ArgumentList.Add(argument)
-        startInfo.ArgumentList.Add("-nologo")
-        use evaluationProcess = Process.Start(startInfo)
-        let output = evaluationProcess.StandardOutput.ReadToEnd()
-        let errors = evaluationProcess.StandardError.ReadToEnd()
-        evaluationProcess.WaitForExit()
-        if evaluationProcess.ExitCode <> 0 then
-            // MSBuild reports errors on either stream depending on the failure.
-            let detail = (errors + Environment.NewLine + output).Trim()
-            // A project outside the solution is never restored by a solution-level build, so this
-            // failure usually means the project list includes something the solution does not build.
-            if detail.Contains("NETSDK1004", StringComparison.Ordinal) then
-                invalidOp
-                    $"Project is not restored: {fullPath}\n\
-                      Run 'dotnet restore \"{fullPath}\"' first. If this project is not part of your solution, \
-                      a solution-level restore never covers it — check that you meant to pass it to livedocs."
-            else
-                invalidOp $"MSBuild evaluation failed for {fullPath}: {detail}"
-        JObject.Parse(output)
-
     /// Runs an inner-build ResolveReferences target so package, project, framework, and SDK references all come from MSBuild evaluation.
     /// For a cross-targeting project, the first framework declared in TargetFrameworks is the documentation context.
     let evaluateProjectFor (targetFramework: string option) (projectPath: string) =
@@ -85,7 +56,7 @@ module DocumentationCompiler =
         // outer build imports only the dispatch targets, so choose its first declared
         // framework before asking MSBuild for compiler references.
         let dimensions =
-            runMsBuild fullPath [ "-getProperty:TargetFramework,TargetFrameworks" ]
+            MsBuild.evaluate fullPath [ "-getProperty:TargetFramework,TargetFrameworks" ]
         let dimensionProperties = dimensions.["Properties"]
         let declaredFrameworks =
             match readString dimensionProperties "TargetFramework", readString dimensionProperties "TargetFrameworks" with
@@ -106,16 +77,16 @@ module DocumentationCompiler =
             |> fun properties -> readString properties "TargetPath"
             |> Option.exists File.Exists
         let defaultBuild =
-            runMsBuild fullPath (frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
+            MsBuild.evaluate fullPath (frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
         let configurationArgument =
             if targetExists defaultBuild then []
             else
                 let releaseArgument = [ "-property:Configuration=Release" ]
                 let releaseBuild =
-                    runMsBuild fullPath (releaseArgument @ frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
+                    MsBuild.evaluate fullPath (releaseArgument @ frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
                 if targetExists releaseBuild then releaseArgument else []
         let json =
-            runMsBuild
+            MsBuild.evaluate
                 fullPath
                 (configurationArgument
                  @ frameworkArgument

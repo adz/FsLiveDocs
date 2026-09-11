@@ -13,6 +13,7 @@
   <ItemGroup>
     <Compile Include="ProjectResolver.fs" />
     <Compile Include="CheckerPool.fs" />
+    <Compile Include="MsBuild.fs" />
     <Compile Include="DocumentationCompiler.fs" />
     <Compile Include="SemanticExtractor.fs" />
     <Compile Include="FsiTranscriptRunner.fs" />
@@ -30,6 +31,10 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="Axial" Version="0.9.1" />
     <PackageReference Include="Axial.Layers" Version="0.9.1" />
+    <PackageReference Include="Axial.Process" Version="0.9.1" />
+    <PackageReference Include="Axial.Console" Version="0.9.1" />
+    <PackageReference Include="Axial.FileSystem" Version="0.9.1" />
+    <PackageReference Include="Axial.PlatformService" Version="0.9.1" />
   </ItemGroup>
 
 </Project>
