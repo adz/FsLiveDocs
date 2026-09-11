@@ -24,6 +24,7 @@
     <Compile Include="Blog.fs" />
     <Compile Include="DocsSetModel.fs" />
     <Compile Include="ReleaseModel.fs" />
+    <Compile Include="Schema/DocumentationSchema.fs" />
     <Compile Include="Serialization.fs" />
     <Compile Include="History.fs" />
     <Compile Include="ReleaseCapsule.fs" />
@@ -49,6 +50,7 @@
     <PackageReference Include="Axial.PlatformService" Version="0.9.1" />
     <PackageReference Include="Axial.HttpClient" Version="0.9.1" />
     <PackageReference Include="Reified.Constraint" Version="0.8.0" />
+    <PackageReference Include="Reified.Schema" Version="0.8.0" />
   </ItemGroup>
 
 </Project>
