@@ -1,13 +1,32 @@
 namespace FsLiveDocs.Runner
 
+open System
 open System.IO
 open System.Xml.Linq
+open Axial
+open Axial.FileSystem
 open FsLiveDocs.Core
 
 /// <summary>Resolves source projects and built assemblies for doc-test execution.</summary>
 module ProjectResolver =
+
+    type private RunnerEnvironment =
+        { FileSystem: IFileSystem }
+        interface IHasFileSystem with
+            member this.FileSystem = this.FileSystem
+
+    let private environment : RunnerEnvironment = { FileSystem = FileSystem.live }
+
+    /// Runs a file-system Flow synchronously, falling back on any typed error -- this module
+    /// never throws for a missing file or directory, matching its pre-Axial.FileSystem contract.
+    let private run (flow: Flow<RunnerEnvironment, FileSystemError, 'value>) (fallback: 'value) =
+        match flow |> Flow.run environment with
+        | Exit.Success value -> value
+        | Exit.Failure _ -> fallback
+
     let resolveProjectPath (projectPath: string) =
-        if Path.IsPathRooted(projectPath) && File.Exists(projectPath) then projectPath
+        if Path.IsPathRooted(projectPath) && run (FileSystem.fileExists projectPath) false then
+            projectPath
         else
             let assemblyDir =
                 typeof<PackageModel>.Assembly.Location
@@ -27,7 +46,7 @@ module ProjectResolver =
                 )
                 |> Path.GetFullPath
 
-            if File.Exists(candidate) then candidate
+            if run (FileSystem.fileExists candidate) false then candidate
             else Path.GetFullPath(projectPath)
 
     let resolveAssemblyPath (projectPath: string) =
@@ -38,16 +57,15 @@ module ProjectResolver =
             document.Descendants(XName.Get "AssemblyName")
             |> Seq.tryHead
             |> Option.map _.Value
-            |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+            |> Option.filter (String.IsNullOrWhiteSpace >> not)
             |> Option.defaultValue projectName
 
         let rec ancestors directory =
-            seq {
-                if not (System.String.IsNullOrWhiteSpace directory) then
-                    yield directory
-                    let parent = Directory.GetParent(directory)
-                    if not (isNull parent) then yield! ancestors parent.FullName
-            }
+            [ if not (String.IsNullOrWhiteSpace directory) then
+                  yield directory
+                  match run (FileSystem.getParent directory) None with
+                  | Some parent -> yield! ancestors parent
+                  | None -> () ]
         let searchPaths =
             [ yield Path.Combine(projDir, "bin")
               for ancestor in ancestors projDir do
@@ -55,13 +73,13 @@ module ProjectResolver =
             |> List.distinct
 
         searchPaths
-        |> List.filter Directory.Exists
+        |> List.filter (fun path -> run (FileSystem.directoryExists path) false)
         |> List.collect (fun path ->
-            Directory.GetFiles(path, $"{assemblyName}.dll", SearchOption.AllDirectories)
-            |> Array.filter (fun assembly -> File.Exists(Path.ChangeExtension(assembly, ".xml")))
+            run (FileSystem.getFiles path $"{assemblyName}.dll" SearchOption.AllDirectories) [||]
+            |> Array.filter (fun assembly -> run (FileSystem.fileExists (Path.ChangeExtension(assembly, ".xml"))) false)
             |> Array.toList)
         |> List.distinct
-        |> List.sortByDescending File.GetLastWriteTimeUtc
+        |> List.sortByDescending (fun path -> run (FileSystem.getFileLastWriteTimeUtc path) DateTime.MinValue)
         |> List.tryHead
         |> Option.defaultValue ""
 

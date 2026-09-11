@@ -911,6 +911,40 @@ module DocTestRunnerTests =
         Assert.Equal(Path.Combine(ownOutput, "Actual.Name.dll"), resolved)
 
     [<Fact>]
+    let ``project resolver picks the most recently written assembly when multiple candidates match`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let projectDir = Path.Combine(root, "outer", "src", "Example.Project")
+        // Two ancestor levels each produce a matching `<ancestor>/artifacts/bin/Example.Project` candidate.
+        let olderOutput = Path.Combine(root, "outer", "artifacts", "bin", "Example.Project")
+        let newerOutput = Path.Combine(root, "artifacts", "bin", "Example.Project")
+        Directory.CreateDirectory(projectDir) |> ignore
+        Directory.CreateDirectory(olderOutput) |> ignore
+        Directory.CreateDirectory(newerOutput) |> ignore
+        let projectPath = Path.Combine(projectDir, "Example.Project.fsproj")
+        File.WriteAllText(projectPath, "<Project><PropertyGroup><AssemblyName>Actual.Name</AssemblyName></PropertyGroup></Project>")
+        for directory in [ olderOutput; newerOutput ] do
+            File.WriteAllText(Path.Combine(directory, "Actual.Name.dll"), "fixture")
+            File.WriteAllText(Path.Combine(directory, "Actual.Name.xml"), "<doc />")
+        File.SetLastWriteTimeUtc(Path.Combine(olderOutput, "Actual.Name.dll"), DateTime.UtcNow.AddDays(-1.0))
+        File.SetLastWriteTimeUtc(Path.Combine(newerOutput, "Actual.Name.dll"), DateTime.UtcNow)
+
+        let resolved = ProjectResolver.resolveAssemblyPath projectPath
+
+        Assert.Equal(Path.Combine(newerOutput, "Actual.Name.dll"), resolved)
+
+    [<Fact>]
+    let ``project resolver returns an empty assembly path when no artifacts directory exists`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let projectDir = Path.Combine(root, "src", "Example.Project")
+        Directory.CreateDirectory(projectDir) |> ignore
+        let projectPath = Path.Combine(projectDir, "Example.Project.fsproj")
+        File.WriteAllText(projectPath, "<Project><PropertyGroup><AssemblyName>Actual.Name</AssemblyName></PropertyGroup></Project>")
+
+        let resolved = ProjectResolver.resolveAssemblyPath projectPath
+
+        Assert.Equal("", resolved)
+
+    [<Fact>]
     let ``ExampleTranscript parses FSI sessions`` () =
         let parsed =
             ExampleTranscript.parse
