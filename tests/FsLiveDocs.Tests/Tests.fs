@@ -342,7 +342,8 @@ module ReleaseCapsuleTests =
             File.SetUnixFileMode(unreadable, UnixFileMode.None)
             try
                 let error = Assert.Throws<InvalidOperationException>(fun () -> ReleaseHistoryCommands.verify indexPath root |> ignore)
-                Assert.Contains("Could not read generated page", error.Message)
+                Assert.Contains("Could not verify generated pages", error.Message)
+                Assert.Contains(unreadable, error.Message)
             finally
                 File.SetUnixFileMode(unreadable, UnixFileMode.UserRead ||| UnixFileMode.UserWrite)
 

@@ -50,21 +50,16 @@ module ReleaseHistoryCommands =
         | Exit.Failure _ -> false
 
     let private fileExists path = exists (FileSystem.fileExists path)
-    let private directoryExists path = exists (FileSystem.directoryExists path)
 
-    /// Reads a generated page's text, raising a clear diagnostic instead of letting a raw,
-    /// unhandled I/O exception (a locked file, a permissions error) escape the verify command.
-    let private readGeneratedPage path =
-        match FileSystem.readAllText path |> Flow.run environment with
-        | Exit.Success text -> text
-        | Exit.Failure(Cause.Fail error) -> invalidOp $"Could not read generated page {path}: {FileSystemError.describe error}"
-        | Exit.Failure cause -> invalidOp $"Could not read generated page {path}: {cause}"
-
-    let private enumerateHtmlFiles root =
-        match FileSystem.enumerateFiles root "*.html" SearchOption.AllDirectories |> Flow.run environment with
-        | Exit.Success files -> files
-        | Exit.Failure(Cause.Fail error) -> invalidOp $"Could not scan generated pages under {root}: {FileSystemError.describe error}"
-        | Exit.Failure cause -> invalidOp $"Could not scan generated pages under {root}: {cause}"
+    /// Runs one composed Flow synchronously, raising a clear diagnostic on any typed failure
+    /// instead of letting a raw I/O exception (disk full, permissions) escape uncaught. Callers
+    /// compose every file-system step a command needs into a single Flow first, so this runs
+    /// once per command, not once per underlying file operation.
+    let private runOrRaise (description: string) (flow: Flow<RunnerEnvironment, FileSystemError, 'value>) =
+        match flow |> Flow.run environment with
+        | Exit.Success value -> value
+        | Exit.Failure(Cause.Fail error) -> invalidOp $"{description}: {FileSystemError.describe error}"
+        | Exit.Failure cause -> invalidOp $"{description}: {cause}"
 
     let private normalizedSha (context: string) (value: string) =
         let sha = value.Trim().ToLowerInvariant()
@@ -199,29 +194,113 @@ module ReleaseHistoryCommands =
         ReleaseCapsule.loadHistoryIndex indexPath |> ignore
         updated
 
-    let private localTarget (output: string) (page: string) (target: string) =
+    /// Resolves a page-relative href to the local file it would materialize as, or None for an
+    /// external/non-local target. An unsafe path (one that would escape `output`) resolves to a
+    /// sentinel file instead, matching the guard `verify` relies on to report it as broken.
+    let private localTarget (output: string) (page: string) (target: string) : Flow<RunnerEnvironment, FileSystemError, string option> =
         let target = target.Split([| '#'; '?' |], 2)[0]
         if String.IsNullOrWhiteSpace target
            || target.StartsWith("http:", StringComparison.OrdinalIgnoreCase)
            || target.StartsWith("https:", StringComparison.OrdinalIgnoreCase)
            || target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)
-           || target.StartsWith("data:", StringComparison.OrdinalIgnoreCase) then None
+           || target.StartsWith("data:", StringComparison.OrdinalIgnoreCase) then
+            Flow.succeed None
         else
-            let asFile (relative: string) =
+            let asFile (relative: string) : Flow<RunnerEnvironment, FileSystemError, string> =
                 let path = Path.GetFullPath(Path.Combine(output, relative))
                 if path <> output && not (path.StartsWith(output + string Path.DirectorySeparatorChar, StringComparison.Ordinal)) then
-                    Path.Combine(output, ".livedocs-unsafe-link")
-                elif directoryExists path then Path.Combine(path, "index.html")
-                else path
-            if target.StartsWith '/' then
-                let relative = Uri.UnescapeDataString(target.TrimStart '/')
-                let direct = asFile relative
-                if fileExists direct then Some direct
+                    Flow.succeed (Path.Combine(output, ".livedocs-unsafe-link"))
                 else
-                    let slash = relative.IndexOf '/'
-                    Some(asFile (if slash >= 0 then relative.Substring(slash + 1) else relative))
+                    FileSystem.directoryExists path
+                    |> Flow.map (fun isDirectory -> if isDirectory then Path.Combine(path, "index.html") else path)
+            if target.StartsWith '/' then
+                flow {
+                    let relative = Uri.UnescapeDataString(target.TrimStart '/')
+                    let! direct = asFile relative
+                    let! directExists = FileSystem.fileExists direct
+                    if directExists then
+                        return Some direct
+                    else
+                        let slash = relative.IndexOf '/'
+                        let! fallback = asFile (if slash >= 0 then relative.Substring(slash + 1) else relative)
+                        return Some fallback
+                }
             else
-                Some(asFile (Path.Combine(Path.GetDirectoryName page, Uri.UnescapeDataString target)))
+                asFile (Path.Combine(Path.GetDirectoryName page, Uri.UnescapeDataString target))
+                |> Flow.map Some
+
+    let private linkPattern = Regex("(?:href|src)=['\"]([^'\"]+)['\"]", RegexOptions.Compiled ||| RegexOptions.IgnoreCase)
+    let private setLinkPattern = Regex("<a[^>]*href=['\"]([^'\"]+)['\"][^>]*data-docs-set-link=['\"]([^'\"]+)['\"]", RegexOptions.Compiled ||| RegexOptions.IgnoreCase)
+
+    /// Every file-system fact `verify` needs about one rendered site: which pages exist, their
+    /// full text, and where every local link and documentation-set entry point on those pages
+    /// resolves to. Gathered as one Flow so `verify` touches the file system exactly once, then
+    /// validates a pure, already-materialized snapshot -- no file-system call after this point.
+    type private VerificationFacts =
+        { Pages: string list
+          EntryPoints: (ReleaseHistoryEntry * string * bool * string) list
+          ResolvedLinks: (string * string * bool option) list
+          SetLinkTargets: (ReleaseHistoryEntry * string * string * (string * bool * string option) option) list }
+
+    let private gatherVerificationFacts (index: ReleaseHistoryIndex) (root: string) (entryPoint: string -> string) =
+        flow {
+            let! pageArray = FileSystem.enumerateFiles root "*.html" SearchOption.AllDirectories
+            let pages = pageArray |> Seq.toList
+            let! pageTexts = pages |> Flow.traverse (fun page -> FileSystem.readAllText page |> Flow.map (fun text -> page, text))
+            let pageTextByPath = pageTexts |> Map.ofList
+
+            let! entryPoints =
+                index.Entries
+                |> Flow.traverse (fun entry ->
+                    let path = entryPoint entry.Version
+                    FileSystem.fileExists path
+                    |> Flow.map (fun exists -> entry, path, exists, (if exists then pageTextByPath |> Map.tryFind path |> Option.defaultValue "" else "")))
+
+            // Pagefind owns its own `pagefind/` directory and runs as a separate index step; its
+            // assets are not FsLiveDocs-generated links for this check to resolve.
+            let linkReferences =
+                [ for page, text in pageTexts do
+                      let relativePage = Path.GetRelativePath(root, page)
+                      for found in linkPattern.Matches(text) do
+                          let href = found.Groups[1].Value
+                          if not (href.Contains "pagefind/") then yield relativePage, href ]
+            let! resolvedLinks =
+                linkReferences
+                |> Flow.traverse (fun (relativePage, href) ->
+                    flow {
+                        let! target = localTarget root relativePage href
+                        match target with
+                        | Some path ->
+                            let! exists = FileSystem.fileExists path
+                            return relativePage, href, Some exists
+                        | None -> return relativePage, href, None
+                    })
+
+            let setLinkReferences =
+                [ for entry, path, exists, text in entryPoints do
+                      if exists then
+                          let landingRelative = Path.GetRelativePath(root, path)
+                          for found in setLinkPattern.Matches(text) do
+                              yield entry, found.Groups[1].Value, found.Groups[2].Value, landingRelative ]
+            let! setLinkTargets =
+                setLinkReferences
+                |> Flow.traverse (fun (entry, href, setId, landingRelative) ->
+                    flow {
+                        let! target = localTarget root landingRelative href
+                        match target with
+                        | Some path ->
+                            let! exists = FileSystem.fileExists path
+                            let! text = if exists then FileSystem.readAllText path |> Flow.map Some else Flow.succeed None
+                            return entry, href, setId, Some(path, exists, text)
+                        | None -> return entry, href, setId, None
+                    })
+
+            return
+                { Pages = pages
+                  EntryPoints = entryPoints
+                  ResolvedLinks = resolvedLinks
+                  SetLinkTargets = setLinkTargets }
+        }
 
     let verify (indexPath: string) (output: string) =
         let index = ReleaseCapsule.loadHistoryIndex indexPath
@@ -229,39 +308,34 @@ module ReleaseHistoryCommands =
         let entryPoint version =
             if version = index.CurrentVersion then Path.Combine(root, "index.html")
             else Path.Combine(root, "history", version, "index.html")
-        for entry in index.Entries do
-            let path = entryPoint entry.Version
-            if not (fileExists path) then invalidOp $"Missing version entry point: {path}"
-        let links = Regex("(?:href|src)=['\"]([^'\"]+)['\"]", RegexOptions.Compiled ||| RegexOptions.IgnoreCase)
-        let failures = ResizeArray<string>()
-        for page in enumerateHtmlFiles root do
-            let relativePage = Path.GetRelativePath(root, page)
-            for found in links.Matches(readGeneratedPage page) do
-                let href = found.Groups[1].Value
-                // Pagefind owns its own `pagefind/` directory and runs as a separate index step;
-                // its assets are not FsLiveDocs-generated links for this check to resolve.
-                if not (href.Contains "pagefind/") then
-                    match localTarget root relativePage href with
-                    | Some target when not (fileExists target) -> failures.Add($"{relativePage} -> {href}")
-                    | _ -> ()
-        if failures.Count > 0 then
-            let detail = failures |> Seq.truncate 50 |> String.concat Environment.NewLine
+
+        let facts = runOrRaise $"Could not verify generated pages under {root}" (gatherVerificationFacts index root entryPoint)
+
+        for _, path, exists, _ in facts.EntryPoints do
+            if not exists then invalidOp $"Missing version entry point: {path}"
+
+        let failures =
+            facts.ResolvedLinks
+            |> List.choose (fun (relativePage, href, exists) -> if exists = Some false then Some $"{relativePage} -> {href}" else None)
+        if not failures.IsEmpty then
+            let detail = failures |> List.truncate 50 |> String.concat Environment.NewLine
             invalidOp $"Generated links do not resolve:{Environment.NewLine}{detail}"
-        let setLinks = Regex("<a[^>]*href=['\"]([^'\"]+)['\"][^>]*data-docs-set-link=['\"]([^'\"]+)['\"]", RegexOptions.Compiled ||| RegexOptions.IgnoreCase)
-        for entry in index.Entries do
-            let landingPath = entryPoint entry.Version
-            let landingRelative = Path.GetRelativePath(root, landingPath)
-            for found in setLinks.Matches(readGeneratedPage landingPath) do
-                let href = found.Groups[1].Value
-                let setId = found.Groups[2].Value
-                match localTarget root landingRelative href with
-                | Some target when fileExists target ->
-                    let identity = $"data-docs-set-id=\"{setId}\""
-                    if not ((readGeneratedPage target).Contains(identity, StringComparison.Ordinal)) then
-                        invalidOp $"Documentation-set entry point for {setId} in {entry.Version} has the wrong set identity: {target}"
-                | _ -> invalidOp $"Documentation-set entry point for {setId} in {entry.Version} is missing: {href}"
-        let landing = readGeneratedPage (entryPoint index.CurrentVersion)
+
+        for entry, href, setId, resolution in facts.SetLinkTargets do
+            match resolution with
+            | Some(target, true, Some text) ->
+                let identity = $"data-docs-set-id=\"{setId}\""
+                if not (text.Contains(identity, StringComparison.Ordinal)) then
+                    invalidOp $"Documentation-set entry point for {setId} in {entry.Version} has the wrong set identity: {target}"
+            | _ -> invalidOp $"Documentation-set entry point for {setId} in {entry.Version} is missing: {href}"
+
+        let landing =
+            facts.EntryPoints
+            |> List.tryFind (fun (entry, _, _, _) -> entry.Version = index.CurrentVersion)
+            |> Option.map (fun (_, _, _, text) -> text)
+            |> Option.defaultValue ""
         let positions = index.Entries |> List.map (fun entry -> landing.IndexOf($">{entry.Version}<", StringComparison.Ordinal))
         if positions |> List.exists (fun position -> position < 0) || positions <> List.sort positions then
             invalidOp "Version switcher is missing versions or is not newest-first."
-        enumerateHtmlFiles root |> Seq.length
+
+        List.length facts.Pages
