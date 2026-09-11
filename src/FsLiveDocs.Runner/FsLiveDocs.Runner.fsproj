@@ -11,6 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Effects/LiveEnvironment.fs" />
+    <Compile Include="Effects/Run.fs" />
     <Compile Include="ProjectResolver.fs" />
     <Compile Include="CheckerPool.fs" />
     <Compile Include="MsBuild.fs" />

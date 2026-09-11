@@ -8,6 +8,7 @@ open System.Text.RegularExpressions
 open Axial
 open Axial.FileSystem
 open FsLiveDocs.Core
+open FsLiveDocs.Runner.Effects
 open Newtonsoft.Json
 
 [<CLIMutable>]
@@ -36,30 +37,8 @@ module ReleaseHistoryCommands =
         | GithubRepo of string
         | Command of string
 
-    type private RunnerEnvironment =
-        { FileSystem: IFileSystem }
-        interface IHasFileSystem with
-            member this.FileSystem = this.FileSystem
-
-    let private environment : RunnerEnvironment = { FileSystem = FileSystem.live }
-
-    /// Checks existence without throwing -- matches File.Exists'/Directory.Exists' own contract.
-    let private exists (flow: Flow<RunnerEnvironment, FileSystemError, bool>) =
-        match flow |> Flow.run environment with
-        | Exit.Success value -> value
-        | Exit.Failure _ -> false
-
-    let private fileExists path = exists (FileSystem.fileExists path)
-
-    /// Runs one composed Flow synchronously, raising a clear diagnostic on any typed failure
-    /// instead of letting a raw I/O exception (disk full, permissions) escape uncaught. Callers
-    /// compose every file-system step a command needs into a single Flow first, so this runs
-    /// once per command, not once per underlying file operation.
-    let private runOrRaise (description: string) (flow: Flow<RunnerEnvironment, FileSystemError, 'value>) =
-        match flow |> Flow.run environment with
-        | Exit.Success value -> value
-        | Exit.Failure(Cause.Fail error) -> invalidOp $"{description}: {FileSystemError.describe error}"
-        | Exit.Failure cause -> invalidOp $"{description}: {cause}"
+    let private fileExists path = Run.orFallback (FileSystem.fileExists path) false
+    let private runOrRaise description flow = Run.orRaise FileSystemError.describe description flow
 
     let private normalizedSha (context: string) (value: string) =
         let sha = value.Trim().ToLowerInvariant()
@@ -197,7 +176,7 @@ module ReleaseHistoryCommands =
     /// Resolves a page-relative href to the local file it would materialize as, or None for an
     /// external/non-local target. An unsafe path (one that would escape `output`) resolves to a
     /// sentinel file instead, matching the guard `verify` relies on to report it as broken.
-    let private localTarget (output: string) (page: string) (target: string) : Flow<RunnerEnvironment, FileSystemError, string option> =
+    let private localTarget (output: string) (page: string) (target: string) : Flow<LiveEnvironment, FileSystemError, string option> =
         let target = target.Split([| '#'; '?' |], 2)[0]
         if String.IsNullOrWhiteSpace target
            || target.StartsWith("http:", StringComparison.OrdinalIgnoreCase)
@@ -206,7 +185,7 @@ module ReleaseHistoryCommands =
            || target.StartsWith("data:", StringComparison.OrdinalIgnoreCase) then
             Flow.succeed None
         else
-            let asFile (relative: string) : Flow<RunnerEnvironment, FileSystemError, string> =
+            let asFile (relative: string) : Flow<LiveEnvironment, FileSystemError, string> =
                 let path = Path.GetFullPath(Path.Combine(output, relative))
                 if path <> output && not (path.StartsWith(output + string Path.DirectorySeparatorChar, StringComparison.Ordinal)) then
                     Flow.succeed (Path.Combine(output, ".livedocs-unsafe-link"))
@@ -290,7 +269,11 @@ module ReleaseHistoryCommands =
                         match target with
                         | Some path ->
                             let! exists = FileSystem.fileExists path
-                            let! text = if exists then FileSystem.readAllText path |> Flow.map Some else Flow.succeed None
+                            let! text =
+                                match exists, pageTextByPath |> Map.tryFind path with
+                                | true, Some cached -> Flow.succeed (Some cached)
+                                | true, None -> FileSystem.readAllText path |> Flow.map Some
+                                | false, _ -> Flow.succeed None
                             return entry, href, setId, Some(path, exists, text)
                         | None -> return entry, href, setId, None
                     })

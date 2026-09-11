@@ -6,26 +6,12 @@ open Axial
 open Axial.FileSystem
 open FsLiveDocs.Core
 open FsLiveDocs.Runner
+open FsLiveDocs.Runner.Effects
 
 /// Owns release extraction, verification, renderer-neutral assembly, and capsule persistence.
 module internal ReleaseCapture =
 
-    type private RunnerEnvironment =
-        { FileSystem: IFileSystem }
-        interface IHasFileSystem with
-            member this.FileSystem = this.FileSystem
-
-    let private environment : RunnerEnvironment = { FileSystem = FileSystem.live }
-
-    /// Runs a composed file-system Flow synchronously, raising a clear diagnostic on any typed
-    /// failure instead of letting a raw I/O exception (disk full, permissions) escape uncaught.
-    /// Callers compose every step of one artifact-writing decision into a single Flow first, so
-    /// this runs once per decision -- not once per underlying file operation.
-    let private run (description: string) (flow: Flow<RunnerEnvironment, FileSystemError, 'value>) =
-        match flow |> Flow.run environment with
-        | Exit.Success value -> value
-        | Exit.Failure(Cause.Fail error) -> invalidOp $"{description}: {FileSystemError.describe error}"
-        | Exit.Failure cause -> invalidOp $"{description}: {cause}"
+    let private run description flow = Run.orRaise FileSystemError.describe description flow
 
     type Request =
         {

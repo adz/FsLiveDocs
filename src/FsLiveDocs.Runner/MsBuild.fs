@@ -3,23 +3,14 @@ namespace FsLiveDocs.Runner
 open System
 open System.IO
 open Axial
-open Axial.Console
-open Axial.FileSystem
-open Axial.PlatformService
 open Axial.Process
+open FsLiveDocs.Runner.Effects
 open Newtonsoft.Json.Linq
 
 /// Runs `dotnet msbuild` for one project and parses its JSON property output. Hides process
 /// execution (Axial.Process) behind one synchronous call that raises on failure, matching the
 /// module's existing synchronous evaluation contract -- callers see no Flow, no Axial types.
 module MsBuild =
-
-    type private RunnerEnvironment =
-        { Process: IProcess }
-        interface IHasProcess with
-            member this.Process = this.Process
-
-    let private environment : RunnerEnvironment = { Process = Process.live Clock.live FileSystem.live Console.live }
 
     let private failure (fullPath: string) (detail: string) =
         // A project outside the solution is never restored by a solution-level build, so this
@@ -34,13 +25,15 @@ module MsBuild =
 
     /// Runs `dotnet msbuild <fullPath> ...arguments -nologo` and parses stdout as JSON.
     /// Raises InvalidOperationException with a message built from both streams on failure,
-    /// since MSBuild reports errors on either stream depending on the failure kind.
+    /// since MSBuild reports errors on either stream depending on the failure kind. This is the
+    /// one place in the module that needs the raw ProcessError shape (to combine both streams),
+    /// so it matches on it directly rather than going through Run.orRaise's single-message form.
     let evaluate (fullPath: string) (arguments: string list) : JObject =
         let specification =
             Process.commandArgs "dotnet" ([ "msbuild"; fullPath ] @ arguments @ [ "-nologo" ])
             |> Process.workingDirectory (Path.GetDirectoryName(fullPath))
             |> Process.capture
-        match specification |> Flow.run environment with
+        match specification |> Flow.run LiveEnvironment.instance with
         | Exit.Success result -> JObject.Parse(result.StdOut)
         | Exit.Failure(Cause.Fail(ProcessError.StageFailed stageFailure)) ->
             let detail = (stageFailure.Result.StdErr + Environment.NewLine + stageFailure.Result.StdOut).Trim()

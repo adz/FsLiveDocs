@@ -6,25 +6,12 @@ open System.Xml.Linq
 open Axial
 open Axial.FileSystem
 open FsLiveDocs.Core
+open FsLiveDocs.Runner.Effects
 
-/// <summary>Resolves source projects and built assemblies for doc-test execution.</summary>
+/// <summary>Resolves source projects and built assemblies for doc-test execution. Never throws
+/// for a missing file or directory -- matches its pre-Axial.FileSystem contract -- so every
+/// resolution falls back through Run.orFallback rather than raising.</summary>
 module ProjectResolver =
-
-    type private RunnerEnvironment =
-        { FileSystem: IFileSystem }
-        interface IHasFileSystem with
-            member this.FileSystem = this.FileSystem
-
-    let private environment : RunnerEnvironment = { FileSystem = FileSystem.live }
-
-    /// Runs one composed file-system Flow synchronously, falling back on any typed error -- this
-    /// module never throws for a missing file or directory, matching its pre-Axial.FileSystem
-    /// contract. Callers compose every step of one resolution into a single Flow first, so this
-    /// runs once per public function, not once per underlying file check.
-    let private run (flow: Flow<RunnerEnvironment, FileSystemError, 'value>) (fallback: 'value) =
-        match flow |> Flow.run environment with
-        | Exit.Success value -> value
-        | Exit.Failure _ -> fallback
 
     let resolveProjectPath (projectPath: string) =
         let assemblyDir =
@@ -56,7 +43,7 @@ module ProjectResolver =
                     let! candidateExists = FileSystem.fileExists candidate
                     return if candidateExists then candidate else Path.GetFullPath(projectPath)
             }
-        run resolution (Path.GetFullPath(projectPath))
+        Run.orFallback resolution (Path.GetFullPath(projectPath))
 
     let resolveAssemblyPath (projectPath: string) =
         let projectName = Path.GetFileNameWithoutExtension(projectPath)
@@ -69,7 +56,7 @@ module ProjectResolver =
             |> Option.filter (String.IsNullOrWhiteSpace >> not)
             |> Option.defaultValue projectName
 
-        let rec ancestors directory : Flow<RunnerEnvironment, FileSystemError, string list> =
+        let rec ancestors directory : Flow<LiveEnvironment, FileSystemError, string list> =
             flow {
                 if String.IsNullOrWhiteSpace directory then
                     return []
@@ -123,7 +110,7 @@ module ProjectResolver =
                     |> Option.map fst
                     |> Option.defaultValue ""
             }
-        run resolution ""
+        Run.orFallback resolution ""
 
     let resolve (projectPath: string) =
         let resolvedProjectPath = resolveProjectPath projectPath
