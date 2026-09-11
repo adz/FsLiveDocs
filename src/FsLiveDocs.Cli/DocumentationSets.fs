@@ -2,7 +2,10 @@ namespace FsLiveDocs.Cli
 
 open System
 open System.IO
+open Axial
+open Axial.FileSystem
 open FsLiveDocs.Core
+open FsLiveDocs.Core.Effects
 open FsLiveDocs.Renderer
 
 /// Resolves documentation-set ownership and produces the common renderer/capture inputs.
@@ -96,25 +99,34 @@ module internal DocumentationSets =
         (artifact: SemanticDocumentationArtifact)
         siteRootPath
         =
-        let root = Directory.GetCurrentDirectory()
+        let root = Run.orFallback FileSystem.getCurrentDirectory (Directory.GetCurrentDirectory())
         let capturedSets = releaseSets sets package
 
-        let ownedFiles =
+        let ownedFilesWork =
             sets
-            |> List.map (fun set ->
+            |> Flow.traverse (fun set ->
                 let sourceDir = Path.GetFullPath(set.Source, root)
 
-                let files =
-                    if Directory.Exists sourceDir then
-                        Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories)
-                        |> Array.filter (fun path ->
-                            let relative = Path.GetRelativePath(root, path).Replace('\\', '/')
-                            DocsSet.ownerOf sets relative |> Option.exists (fun owner -> owner.Id = set.Id))
-                        |> Array.toList
-                    else
-                        []
+                flow {
+                    let! sourceDirExists = FileSystem.directoryExists sourceDir
 
-                set, sourceDir, files)
+                    let! files =
+                        if sourceDirExists then
+                            FileSystem.getFiles sourceDir "*" SearchOption.AllDirectories
+                            |> Flow.map (
+                                Array.filter (fun path ->
+                                    let relative = Path.GetRelativePath(root, path).Replace('\\', '/')
+                                    DocsSet.ownerOf sets relative |> Option.exists (fun owner -> owner.Id = set.Id))
+                                >> Array.toList
+                            )
+                        else
+                            Flow.succeed []
+
+                    return set, sourceDir, files
+                })
+
+        let ownedFiles =
+            Run.orRaise FileSystemError.describe "Could not scan documentation set sources" ownedFilesWork
 
         let guideOutputs =
             ownedFiles
@@ -270,8 +282,14 @@ module internal DocumentationSets =
           StaticFiles = [] }
 
     let captureAssets (prepared: Prepared) =
-        prepared.StaticFiles
-        |> List.collect (fun (sourceDir, prefix, files) ->
-            files
-            |> List.map (fun path ->
-                prefix + Path.GetRelativePath(sourceDir, path).Replace('\\', '/'), File.ReadAllBytes path))
+        let work =
+            prepared.StaticFiles
+            |> Flow.traverse (fun (sourceDir, prefix, files) ->
+                files
+                |> Flow.traverse (fun path ->
+                    FileSystem.readAllBytes path
+                    |> Flow.map (fun bytes ->
+                        prefix + Path.GetRelativePath(sourceDir, path).Replace('\\', '/'), bytes)))
+            |> Flow.map List.concat
+
+        Run.orRaise FileSystemError.describe "Could not read documentation set static assets" work
