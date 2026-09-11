@@ -4,7 +4,10 @@ open System
 open System.IO
 open Argu
 open Spectre.Console
+open Axial
+open Axial.FileSystem
 open FsLiveDocs.Core
+open FsLiveDocs.Core.Effects
 open FsLiveDocs.Runner
 open FsLiveDocs.Renderer
 open Microsoft.AspNetCore.Builder
@@ -68,7 +71,7 @@ module Program =
             0
         else
             let label = if warnAsError then "[red]error[/]" else "[yellow]warning[/]"
-            let root = Directory.GetCurrentDirectory()
+            let root = Run.orRaise FileSystemError.describe "Could not determine the current directory" FileSystem.getCurrentDirectory
             let relative (path: string) =
                 if String.IsNullOrWhiteSpace path then "(unknown source)"
                 elif Path.IsPathRooted path then Path.GetRelativePath(root, path).Replace('\\', '/')
@@ -226,8 +229,13 @@ module Program =
         match checksum, sha256File with
         | Some value, _ -> value.Trim().ToLowerInvariant()
         | None, Some file ->
-            if not (File.Exists file) then invalidOp $"SHA-256 file is missing: {Path.GetFullPath file}"
-            (File.ReadAllText file).Trim().ToLowerInvariant()
+            let work =
+                flow {
+                    let! exists = FileSystem.fileExists file
+                    if not exists then invalidOp $"SHA-256 file is missing: {Path.GetFullPath file}"
+                    return! FileSystem.readAllText file
+                }
+            (Run.orRaise FileSystemError.describe $"Could not read SHA-256 file {file}" work).Trim().ToLowerInvariant()
         | None, None ->
             match localCapsule with
             | Some path -> History.sha256 path
@@ -235,7 +243,7 @@ module Program =
 
     let historyAddAction indexPath version capsulePath capsuleUrl checksum sha256File =
         let index =
-            if File.Exists indexPath then ReleaseCapsule.loadHistoryIndex indexPath
+            if Run.orFallback (FileSystem.fileExists indexPath) false then ReleaseCapsule.loadHistoryIndex indexPath
             else { SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion; CurrentVersion = version; Entries = [] }
         if index.Entries |> List.exists (fun entry -> entry.Version = version) then
             invalidOp $"Release history already contains version {version}. Published entries are immutable."
@@ -247,7 +255,8 @@ module Program =
             match capsulePath, (capsuleUrl |> Option.orElse configuredUrl) with
             | Some path, _ ->
                 let fullPath = Path.GetFullPath path
-                if not (File.Exists fullPath) then invalidOp $"Release capsule is missing: {fullPath}"
+                if not (Run.orRaise FileSystemError.describe $"Could not check release capsule {fullPath}" (FileSystem.fileExists fullPath)) then
+                    invalidOp $"Release capsule is missing: {fullPath}"
                 Some(Path.GetRelativePath(indexRoot, fullPath)), None, resolveChecksum checksum sha256File (Some fullPath)
             | None, Some url ->
                 None, Some url, resolveChecksum checksum sha256File None
@@ -273,7 +282,7 @@ module Program =
             1
         else
             let outputDir = Path.GetFullPath("tests/FsLiveDocs.SnapshotTests")
-            if not (Directory.Exists(outputDir)) then Directory.CreateDirectory(outputDir) |> ignore
+            Run.orRaise FileSystemError.describe $"Could not create directory {outputDir}" (FileSystem.createDirectory outputDir)
             let eol = Environment.NewLine
 
             let resolvedProjects =
@@ -388,7 +397,7 @@ module Program =
             else
                 deferredApiDiagnostics <- apiDiagnostics
             reportStage "Rendering documentation site"
-            let sourceDir = Directory.GetCurrentDirectory()
+            let sourceDir = Run.orRaise FileSystemError.describe "Could not determine the current directory" FileSystem.getCurrentDirectory
             let semanticCode =
                 { SemanticCode.defaults with
                     Artifact = Some semanticArtifact
@@ -397,7 +406,7 @@ module Program =
             let config = Workspace.loadSiteConfig ()
 
             let historyDir = ".livedocs/history"
-            if not (Directory.Exists(historyDir)) then Directory.CreateDirectory(historyDir) |> ignore
+            Run.orRaise FileSystemError.describe $"Could not create directory {historyDir}" (FileSystem.createDirectory historyDir)
 
             match configuredDocsSets projectPaths with
             | Some sets ->
@@ -418,13 +427,22 @@ module Program =
                       StaticRoot = None
                       UsesDocumentationSets = true }
 
+                let historyWork =
+                    flow {
+                        let! files = FileSystem.getFiles historyDir "*.json" SearchOption.TopDirectoryOnly
+                        return!
+                            files
+                            |> Array.toList
+                            |> Flow.traverse (fun path -> FileSystem.readAllText path |> Flow.map (fun text -> path, text))
+                    }
+                let historyFiles = Run.orRaise FileSystemError.describe $"Could not scan history directory {historyDir}" historyWork
+
                 let historical =
-                    Directory.GetFiles(historyDir, "*.json")
-                    |> Array.toList
-                    |> List.map (fun path ->
+                    historyFiles
+                    |> List.map (fun (path, text) ->
                         let historicalPackage =
                             Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(
-                                File.ReadAllText path,
+                                text,
                                 Serialization.jsonSettings
                             )
 
@@ -565,7 +583,7 @@ module Program =
     /// `build-history` (which then indexes the site) and `history check` (which verifies it).
     let renderHistoryInto (manifestPath: string) (theme: string) (retryAttempts: int) (outputDir: string) =
         if retryAttempts < 1 then invalidArg "retry" "Retry attempts must be at least one."
-        let raw = File.ReadAllText manifestPath
+        let raw = Run.orRaise FileSystemError.describe $"Could not read {manifestPath}" (FileSystem.readAllText manifestPath)
         let isCapsuleIndex =
             raw.Contains("\"CapsulePath\"", StringComparison.OrdinalIgnoreCase)
             || raw.Contains("\"CapsuleUrl\"", StringComparison.OrdinalIgnoreCase)
@@ -573,7 +591,7 @@ module Program =
             let index = ReleaseCapsule.loadHistoryIndex manifestPath
             let indexRoot = Path.GetDirectoryName(Path.GetFullPath manifestPath)
             let temporaryRoot = Path.Combine(Path.GetTempPath(), "fslivedocs-history-" + Guid.NewGuid().ToString("N"))
-            Directory.CreateDirectory temporaryRoot |> ignore
+            Run.orRaise FileSystemError.describe $"Could not create directory {temporaryRoot}" (FileSystem.createDirectory temporaryRoot)
             try
                 let loaded =
                     index.Entries
@@ -629,14 +647,27 @@ module Program =
                 let sites = loaded |> List.map fst
                 SiteBuilder.buildDocsSetsHistory index.CurrentVersion sites config theme outputDir
             finally
-                if Directory.Exists temporaryRoot then Directory.Delete(temporaryRoot, true)
+                let cleanupWork =
+                    flow {
+                        let! exists = FileSystem.directoryExists temporaryRoot
+                        if exists then do! FileSystem.deleteDirectory temporaryRoot true
+                    }
+                Run.orRaise FileSystemError.describe $"Could not remove temporary directory {temporaryRoot}" cleanupWork
         else
             let manifest, entries = History.loadManifest manifestPath
             let config = Workspace.loadSiteConfig()
+            let docsDirExistence =
+                let work =
+                    entries
+                    |> List.map (fun (_, _, docsDir) -> docsDir)
+                    |> List.distinct
+                    |> Flow.traverse (fun docsDir -> FileSystem.directoryExists docsDir |> Flow.map (fun exists -> docsDir, exists))
+                Run.orRaise FileSystemError.describe "Could not check history docs trees" work
+                |> Map.ofList
             let sites =
                 entries
                 |> List.map (fun (entry, modelPath, docsDir) ->
-                    if not (Directory.Exists(docsDir)) then
+                    if not (docsDirExistence |> Map.find docsDir) then
                         invalidOp $"History docs tree is missing for {entry.Version}: {docsDir}"
                     let packageRaw = History.loadArtifact entry.Version entry.ModelSha256 modelPath
                     let sourceDir = Path.GetDirectoryName(docsDir)
@@ -670,7 +701,7 @@ module Program =
     /// Renders the committed history — optionally with a local candidate capsule spliced in as
     /// the release under test — into a temporary directory and verifies it. Never writes the index.
     let historyCheckAction (indexPath: string) (candidateCapsule: string option) (candidateVersion: string option) (theme: string) (retryAttempts: int) =
-        if not (File.Exists indexPath) then
+        if not (Run.orRaise FileSystemError.describe $"Could not check {indexPath}" (FileSystem.fileExists indexPath)) then
             invalidOp $"Release history index is missing: {Path.GetFullPath indexPath}"
         let index = ReleaseCapsule.loadHistoryIndex indexPath
         let indexRoot = Path.GetDirectoryName(Path.GetFullPath indexPath)
@@ -685,7 +716,8 @@ module Program =
             match candidateCapsule, candidateVersion with
             | Some capsule, Some version ->
                 let fullPath = Path.GetFullPath capsule
-                if not (File.Exists fullPath) then invalidOp $"Release capsule is missing: {fullPath}"
+                if not (Run.orRaise FileSystemError.describe $"Could not check release capsule {fullPath}" (FileSystem.fileExists fullPath)) then
+                    invalidOp $"Release capsule is missing: {fullPath}"
                 if index.Entries |> List.exists (fun entry -> entry.Version = version) then
                     invalidOp $"Release history already contains version {version}. Published entries are immutable."
                 Some { Version = version; CapsulePath = Some fullPath; CapsuleUrl = None; CapsuleSha256 = History.sha256 fullPath }
@@ -696,7 +728,7 @@ module Program =
             ReleaseCapsule.normalizeHistoryIndex
                 { index with Entries = (candidate |> Option.toList) @ absoluteEntries }
         let workRoot = Path.Combine(Path.GetTempPath(), "fslivedocs-check-" + Guid.NewGuid().ToString("N"))
-        Directory.CreateDirectory workRoot |> ignore
+        Run.orRaise FileSystemError.describe $"Could not create directory {workRoot}" (FileSystem.createDirectory workRoot)
         let tempIndex = Path.Combine(workRoot, "history.json")
         let tempOutput = Path.Combine(workRoot, "output")
         try
@@ -712,7 +744,12 @@ module Program =
             AnsiConsole.MarkupLine($"  Releases: {merged.Entries.Length}, pages: {pageCount}")
             0
         finally
-            if Directory.Exists workRoot then Directory.Delete(workRoot, true)
+            let cleanupWork =
+                flow {
+                    let! exists = FileSystem.directoryExists workRoot
+                    if exists then do! FileSystem.deleteDirectory workRoot true
+                }
+            Run.orRaise FileSystemError.describe $"Could not remove temporary directory {workRoot}" cleanupWork
 
     /// <summary>CLI entry point.</summary>
     [<EntryPoint>]
@@ -759,10 +796,15 @@ module Program =
                     match results.GetResult(Provider, defaultValue = "github").ToLowerInvariant() with
                     | "github" ->
                         AnsiConsole.MarkupLine("[blue]Generating GitHub Actions workflow...[/]")
-                        if not (Directory.Exists(".github/workflows")) then Directory.CreateDirectory(".github/workflows") |> ignore
-                        if File.Exists(".github/workflows/livedocs.yml") then
-                            invalidOp ".github/workflows/livedocs.yml already exists. Delete it to regenerate."
-                        File.WriteAllText(".github/workflows/livedocs.yml", Templates.GitHubWorkflow)
+                        let workflowPath = ".github/workflows/livedocs.yml"
+                        let work =
+                            flow {
+                                do! FileSystem.createDirectory ".github/workflows"
+                                let! exists = FileSystem.fileExists workflowPath
+                                if exists then invalidOp $"{workflowPath} already exists. Delete it to regenerate."
+                                do! FileSystem.writeAllText workflowPath Templates.GitHubWorkflow
+                            }
+                        Run.orRaise FileSystemError.describe $"Could not write {workflowPath}" work
                         AnsiConsole.MarkupLine("[green]✔ Done:[/] .github/workflows/livedocs.yml")
                         0
                     | other -> invalidOp $"Unknown --provider '{other}'. Supported: github. Other hosts follow the generic recipe in docs/guides/continuous-integration.md."
@@ -860,16 +902,20 @@ module Program =
                         let json = Newtonsoft.Json.JsonConvert.SerializeObject(artifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings)
                         let fileName = results.GetResult(Output, defaultValue = $".livedocs/models/{version}.json")
                         let outputDirectory = Path.GetDirectoryName(fileName)
-                        if not (String.IsNullOrWhiteSpace outputDirectory) && not (Directory.Exists(outputDirectory)) then
-                            Directory.CreateDirectory(outputDirectory) |> ignore
-                        File.WriteAllText(fileName, json)
                         let semanticArtifact, _ = createSemanticArtifact projectPaths package
                         let semanticJson = Newtonsoft.Json.JsonConvert.SerializeObject(semanticArtifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings)
                         let semanticDirectory = Path.GetDirectoryName(fileName) |> Option.ofObj |> Option.filter (String.IsNullOrWhiteSpace >> not) |> Option.defaultValue "."
                         let outputStem = Path.GetFileNameWithoutExtension(fileName)
                         let semanticStem = if outputStem.EndsWith(".api", StringComparison.OrdinalIgnoreCase) then outputStem.Substring(0, outputStem.Length - 4) else outputStem
                         let semanticFileName = Path.Combine(semanticDirectory, semanticStem + ".semantic.json")
-                        File.WriteAllText(semanticFileName, semanticJson)
+                        let writeWork =
+                            flow {
+                                if not (String.IsNullOrWhiteSpace outputDirectory) then
+                                    do! FileSystem.createDirectory outputDirectory
+                                do! FileSystem.writeAllText fileName json
+                                do! FileSystem.writeAllText semanticFileName semanticJson
+                            }
+                        Run.orRaise FileSystemError.describe $"Could not write {fileName}" writeWork
                     )
                     AnsiConsole.MarkupLine("[green]✔ API and semantic documentation extraction complete.[/]")
                     printApiDiagnostics (results.Contains Warn_As_Error) extractDiagnostics
@@ -990,7 +1036,8 @@ module Program =
                         let app = builder.Build()
                         
                         app.UseDefaultFiles() |> ignore
-                        let outputDir = Path.Combine(Directory.GetCurrentDirectory(), "output")
+                        let currentDirectory = Run.orRaise FileSystemError.describe "Could not determine the current directory" FileSystem.getCurrentDirectory
+                        let outputDir = Path.Combine(currentDirectory, "output")
                         app.UseStaticFiles(StaticFileOptions(
                             FileProvider = new PhysicalFileProvider(outputDir),
                             RequestPath = "",
@@ -1012,7 +1059,7 @@ module Program =
                             AnsiConsole.MarkupLine($"   [grey]Browse locally:[/] http://localhost:{port}")
                         let watchers =
                             PreviewWatcher.start
-                                (Directory.GetCurrentDirectory())
+                                currentDirectory
                                 (PreviewWatcher.parseIgnored (results.GetResults Ignore))
                                 buildPreview
                         AnsiConsole.MarkupLine("")
