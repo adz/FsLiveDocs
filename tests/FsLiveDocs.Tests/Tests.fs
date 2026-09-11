@@ -326,6 +326,33 @@ module ReleaseCapsuleTests =
         Assert.Contains("links do not resolve", error.Message)
 
     [<Fact>]
+    let ``history verification checks documentation-set entry point identity`` () =
+        // Every documentation-set link target is also one of the pages `verify` already scanned
+        // (it's an .html file under root, like every local link target), so this specifically
+        // exercises gatherVerificationFacts' cached-page-text reuse for set-link targets, not a
+        // fresh read -- proving the cache key (a resolved target path) actually matches how that
+        // same page's path was enumerated.
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let setDirectory = Path.Combine(root, "sets", "foo")
+        Directory.CreateDirectory(setDirectory) |> ignore
+        let hash = String.replicate 64 "0"
+        let indexPath = Path.Combine(root, "history.json")
+        ReleaseCapsule.saveHistoryIndex indexPath {
+            SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion
+            CurrentVersion = "1.0.0"
+            Entries = [ { Version = "1.0.0"; CapsulePath = None; CapsuleUrl = Some "https://example.com/1.0.0.zip"; CapsuleSha256 = hash } ]
+        }
+        File.WriteAllText(
+            Path.Combine(root, "index.html"),
+            "<span>1.0.0</span><a href=\"sets/foo/index.html\" data-docs-set-link=\"foo\">Foo</a>")
+        File.WriteAllText(Path.Combine(setDirectory, "index.html"), "<span data-docs-set-id=\"foo\">Foo</span>")
+        Assert.Equal(2, ReleaseHistoryCommands.verify indexPath root)
+
+        File.WriteAllText(Path.Combine(setDirectory, "index.html"), "<span data-docs-set-id=\"wrong\">Foo</span>")
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ReleaseHistoryCommands.verify indexPath root |> ignore)
+        Assert.Contains("wrong set identity", error.Message)
+
+    [<Fact>]
     let ``history verification reports an unreadable page instead of crashing`` () =
         if not (OperatingSystem.IsWindows()) then
             let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
