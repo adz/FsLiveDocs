@@ -47,6 +47,7 @@
     <PackageReference Include="Axial.Console" Version="0.9.1" />
     <PackageReference Include="Axial.FileSystem" Version="0.9.1" />
     <PackageReference Include="Axial.PlatformService" Version="0.9.1" />
+    <PackageReference Include="Axial.HttpClient" Version="0.9.1" />
   </ItemGroup>
 
 </Project>

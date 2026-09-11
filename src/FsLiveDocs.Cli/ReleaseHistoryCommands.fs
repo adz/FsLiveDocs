@@ -2,11 +2,11 @@ namespace FsLiveDocs.Cli
 
 open System
 open System.IO
-open System.Net.Http
-open System.Net.Http.Headers
 open System.Text.RegularExpressions
 open Axial
 open Axial.FileSystem
+open Axial.HttpClient
+open Axial.PlatformService
 open FsLiveDocs.Core
 open FsLiveDocs.Core.Effects
 open Newtonsoft.Json
@@ -93,21 +93,40 @@ module ReleaseHistoryCommands =
         if String.IsNullOrWhiteSpace repository || repository.Split('/').Length <> 2 then
             invalidArg "repository" "GitHub repository must have the form owner/name."
         let repositoryName = repository.Split('/')[1]
-        use client = new HttpClient()
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("FsLiveDocs")
-        client.DefaultRequestHeaders.Accept.Add(MediaTypeWithQualityHeaderValue("application/vnd.github+json"))
-        match Environment.GetEnvironmentVariable "GH_TOKEN" |> Option.ofObj |> Option.filter (String.IsNullOrWhiteSpace >> not) with
-        | Some token -> client.DefaultRequestHeaders.Authorization <- AuthenticationHeaderValue("Bearer", token)
-        | None -> ()
-        let rec load page accumulated =
-            let uri = $"https://api.github.com/repos/{repository}/releases?per_page=100&page={page}"
-            use response = client.GetAsync(uri).GetAwaiter().GetResult()
-            response.EnsureSuccessStatusCode() |> ignore
-            let releases = JsonConvert.DeserializeObject<GitHubRelease array>(response.Content.ReadAsStringAsync().GetAwaiter().GetResult())
-            let releases = if isNull releases then [||] else releases
-            let combined = Array.append accumulated releases
-            if releases.Length = 100 then load (page + 1) combined else combined
-        load 1 [||]
+
+        // The token is read once and reused across every page, matching the original's one
+        // client-configured-once-then-paginated shape.
+        let work =
+            flow {
+                let! token =
+                    EnvironmentVariables.tryGet "GH_TOKEN"
+                    |> Flow.map (Option.filter (String.IsNullOrWhiteSpace >> not))
+
+                let rec load page accumulated =
+                    flow {
+                        let uri = $"https://api.github.com/repos/{repository}/releases?per_page=100&page={page}"
+                        let request =
+                            Http.get uri
+                            |> Request.userAgent "FsLiveDocs"
+                            |> Request.accept "application/vnd.github+json"
+                        let request = match token with Some value -> request |> Request.bearer value | None -> request
+                        let! text = Http.text request
+                        let releases = JsonConvert.DeserializeObject<GitHubRelease array>(text)
+                        let releases = if isNull releases then [||] else releases
+                        let combined = Array.append accumulated releases
+                        if releases.Length = 100 then return! load (page + 1) combined else return combined
+                    }
+
+                return! load 1 [||]
+            }
+
+        let releases =
+            match work |> Flow.run LiveEnvironment.instance with
+            | Exit.Success releases -> releases
+            | Exit.Failure(Cause.Fail error) -> invalidOp $"Could not list GitHub releases for {repository}: {HttpError.describe error}"
+            | Exit.Failure cause -> invalidOp $"Could not list GitHub releases for {repository}: {cause}"
+
+        releases
         |> Array.filter (fun release -> not release.Draft && not (String.IsNullOrWhiteSpace release.TagName))
         |> Array.choose (fun release ->
             let version = if release.TagName.StartsWith 'v' then release.TagName.Substring 1 else release.TagName
