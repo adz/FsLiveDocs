@@ -556,22 +556,22 @@ module SymbolLister =
         |> Option.defaultValue []
 
     /// <summary>
-    /// Loads an assembly by path, reusing an already-loaded assembly of the same identity instead
+    /// Loads an assembly by path, reusing an already-loaded assembly with the same simple name instead
     /// of loading it again.
     /// </summary>
     /// <remarks>
     /// A dependency shared by several audited projects (each with its own copy in its own output
-    /// directory) is the same assembly identity at a different path each time. The runtime's
-    /// default load context refuses a second load of one identity from a different path, so a
-    /// fresh <c>LoadFrom</c> per project reliably crashes once two projects share a dependency.
+    /// directory) can be present at a different version after a release build. The runtime's
+    /// default load context still refuses a second load with that simple name from a different path,
+    /// so scenario discovery must reuse the assembly already loaded into that context. Scenario
+    /// discovery reads only metadata and does not execute the target assembly.
     /// </remarks>
     let private loadAssemblyByIdentity (dllPath: string) =
         let name = AssemblyName.GetAssemblyName(dllPath)
         AppDomain.CurrentDomain.GetAssemblies()
         |> Array.tryFind (fun loaded ->
             not loaded.IsDynamic
-            && loaded.GetName().Name = name.Name
-            && loaded.GetName().Version = name.Version)
+            && loaded.GetName().Name = name.Name)
         |> Option.defaultWith (fun () -> Assembly.LoadFrom(dllPath))
 
     let private extractScenariosFromAssembly (dllPath: string) =
