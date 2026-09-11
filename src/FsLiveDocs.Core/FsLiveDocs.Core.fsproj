@@ -25,6 +25,11 @@
     <Compile Include="DocsSetModel.fs" />
     <Compile Include="ReleaseModel.fs" />
     <Compile Include="Schema/DocumentationSchema.fs" />
+    <Compile Include="Schema/ApiSchema.fs" />
+    <Compile Include="Schema/SemanticSchema.fs" />
+    <Compile Include="Schema/HistorySchema.fs" />
+    <Compile Include="Schema/SiteSchema.fs" />
+    <Compile Include="Schema/ReleaseSchema.fs" />
     <Compile Include="Serialization.fs" />
     <Compile Include="History.fs" />
     <Compile Include="ReleaseCapsule.fs" />
