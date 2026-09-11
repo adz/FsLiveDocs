@@ -2,7 +2,10 @@ namespace FsLiveDocs.Cli
 
 open System
 open System.IO
+open Axial
+open Axial.FileSystem
 open FsLiveDocs.Core
+open FsLiveDocs.Core.Effects
 open FsLiveDocs.Runner
 
 /// Discovers and compiler-checks canonical documentation pages.
@@ -63,16 +66,70 @@ module internal DocAnalysis =
         if List.isEmpty projectPaths then
             invalidOp "Documentation analysis requires at least one project path."
 
-        let sourceDir = Directory.GetCurrentDirectory()
+        let sourceDir = Run.orFallback FileSystem.getCurrentDirectory (Directory.GetCurrentDirectory())
         let resolvedProjects = projectPaths |> List.map Path.GetFullPath
 
         let describe (path: string) =
             Path.GetRelativePath(sourceDir, path).Replace('\\', '/')
 
-        let resolveSetProject (set: DocsSet) project =
-            let full = Path.GetFullPath(project, sourceDir)
+        // Every existence check, directory listing, and file read this scan needs is gathered
+        // into one Flow and run exactly once; the loop below is pure, consuming the gathered
+        // results and raising the same validation errors the original imperative walk raised.
+        let gatherWork =
+            sets
+            |> Flow.traverse (fun set ->
+                let docsDir = Path.GetFullPath(set.Source, sourceDir)
 
-            if not (File.Exists full) then
+                flow {
+                    let! docsDirExists = FileSystem.directoryExists docsDir
+
+                    let! setProjectChecks =
+                        set.Projects
+                        |> Flow.traverse (fun project ->
+                            let full = Path.GetFullPath(project, sourceDir)
+                            FileSystem.fileExists full |> Flow.map (fun exists -> project, full, exists))
+
+                    let! files =
+                        if docsDirExists then
+                            FileSystem.getFiles docsDir "*.md" SearchOption.AllDirectories
+                            |> Flow.map (Array.sort >> Array.toList)
+                        else
+                            Flow.succeed []
+
+                    let! fileData =
+                        files
+                        |> Flow.traverse (fun path ->
+                            flow {
+                                let! raw = FileSystem.readAllText path
+                                let frontMatter = ContentProvider.parseFrontMatter raw
+
+                                let configuredProject =
+                                    frontMatter |> Option.bind (fun (metadata, _) -> metadata.Project)
+
+                                let! candidates =
+                                    match configuredProject with
+                                    | None -> Flow.succeed None
+                                    | Some configured ->
+                                        [ Path.GetFullPath(configured, sourceDir)
+                                          Path.GetFullPath(configured, docsDir) ]
+                                        |> Flow.traverse (fun p ->
+                                            FileSystem.fileExists p |> Flow.map (fun exists -> p, exists))
+                                        |> Flow.map Some
+
+                                return path, raw, candidates
+                            })
+
+                    return set, docsDir, docsDirExists, setProjectChecks, fileData
+                })
+
+        let gathered =
+            Run.orRaise FileSystemError.describe "Could not scan documentation sets" gatherWork
+
+        let resolveSetProject (set: DocsSet) (setProjectChecks: (string * string * bool) list) project =
+            let _, full, exists =
+                setProjectChecks |> List.find (fun (candidate, _, _) -> candidate = project)
+
+            if not exists then
                 invalidOp $"Documentation set {set.Id} project does not exist: {project}"
 
             if not (resolvedProjects |> List.contains full) then
@@ -81,18 +138,16 @@ module internal DocAnalysis =
 
             full
 
-        [ for set in sets do
-              let docsDir = Path.GetFullPath(set.Source, sourceDir)
-
-              if not (Directory.Exists docsDir) then
+        [ for set, docsDir, docsDirExists, setProjectChecks, fileData in gathered do
+              if not docsDirExists then
                   invalidOp $"Documentation directory for set {set.Id} is missing: {docsDir}"
 
-              let setProjects = set.Projects |> List.map (resolveSetProject set)
+              let setProjects = set.Projects |> List.map (resolveSetProject set setProjectChecks)
 
               let defaultProject =
                   setProjects |> List.tryHead |> Option.defaultValue (List.head resolvedProjects)
 
-              for path in Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories) |> Array.sort do
+              for path, raw, candidates in fileData do
                   let repositoryRelative = Path.GetRelativePath(sourceDir, path).Replace('\\', '/')
 
                   match DocsSet.ownerOf sets repositoryRelative with
@@ -105,7 +160,6 @@ module internal DocAnalysis =
                           else
                               sourcePath
 
-                      let raw = File.ReadAllText(path)
                       let frontMatter = ContentProvider.parseFrontMatter raw
                       let body = frontMatter |> Option.map snd |> Option.defaultValue raw
 
@@ -119,9 +173,9 @@ module internal DocAnalysis =
                           match frontMatter |> Option.bind (fun (metadata, _) -> metadata.Project) with
                           | None -> defaultProject
                           | Some configured ->
-                              [ Path.GetFullPath(configured, sourceDir)
-                                Path.GetFullPath(configured, docsDir) ]
-                              |> List.tryFind File.Exists
+                              candidates.Value
+                              |> List.tryFind snd
+                              |> Option.map fst
                               |> Option.defaultWith (fun () ->
                                   invalidOp $"Documentation project in {relative} does not exist: {configured}")
 
@@ -219,10 +273,24 @@ module internal DocAnalysis =
         let cacheDirectory = Path.Combine(".livedocs", "cache")
         let cachePath = Path.Combine(cacheDirectory, sha256Text contextFingerprint + ".semantic.json") |> Path.GetFullPath
         let cachedArtifact =
-            if File.Exists cachePath then
-                let artifact = Newtonsoft.Json.JsonConvert.DeserializeObject<SemanticDocumentationArtifact>(File.ReadAllText(cachePath), FsLiveDocs.Core.Serialization.jsonSettings)
-                if isNull (box artifact) || artifact.SchemaVersion <> History.SemanticSchemaVersion then None else Some artifact
-            else None
+            let work =
+                flow {
+                    let! exists = FileSystem.fileExists cachePath
+                    if exists then
+                        let! text = FileSystem.readAllText cachePath
+                        let artifact =
+                            Newtonsoft.Json.JsonConvert.DeserializeObject<SemanticDocumentationArtifact>(
+                                text,
+                                FsLiveDocs.Core.Serialization.jsonSettings)
+                        return
+                            if isNull (box artifact) || artifact.SchemaVersion <> History.SemanticSchemaVersion then
+                                None
+                            else
+                                Some artifact
+                    else
+                        return None
+                }
+            Run.orRaise FileSystemError.describe $"Could not read semantic cache {cachePath}" work
         let results =
             match cachedArtifact with
             | Some _ ->
@@ -318,16 +386,24 @@ module internal DocAnalysis =
         | None ->
             let artifact = SemanticExtractor.artifact analysis.Results
             let directory = Path.GetDirectoryName analysis.CachePath
-            Directory.CreateDirectory(directory) |> ignore
-            File.WriteAllText(
-                analysis.CachePath,
+            let serialized =
                 Newtonsoft.Json.JsonConvert.SerializeObject(
                     artifact,
                     Newtonsoft.Json.Formatting.Indented,
-                    Serialization.jsonSettings))
-            for stale in Directory.GetFiles(directory, "*.semantic.json") do
-                if not (Path.GetFullPath(stale).Equals(Path.GetFullPath(analysis.CachePath), StringComparison.Ordinal)) then
-                    File.Delete(stale)
+                    Serialization.jsonSettings)
+
+            let work =
+                flow {
+                    do! FileSystem.createDirectory directory
+                    do! FileSystem.writeAllText analysis.CachePath serialized
+                    let! staleFiles = FileSystem.getFiles directory "*.semantic.json" SearchOption.TopDirectoryOnly
+
+                    for stale in staleFiles do
+                        if not (Path.GetFullPath(stale).Equals(Path.GetFullPath(analysis.CachePath), StringComparison.Ordinal)) then
+                            do! FileSystem.deleteFile stale
+                }
+
+            Run.orRaise FileSystemError.describe $"Could not write semantic cache {analysis.CachePath}" work
             artifact
 
     /// Counts authored blocks with compiler errors, independent of how a caller presents them.
