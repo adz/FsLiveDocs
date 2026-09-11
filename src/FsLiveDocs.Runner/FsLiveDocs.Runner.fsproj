@@ -27,6 +27,8 @@
   <ItemGroup>
     <PackageReference Include="FSharp.Compiler.Service" Version="43.12.201" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Axial" Version="0.9.1" />
+    <PackageReference Include="Axial.Layers" Version="0.9.1" />
   </ItemGroup>
 
 </Project>

@@ -23,7 +23,7 @@
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
   <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.fsproj' and '$(MSBuildProjectName)' != 'FsLiveDocs.SnapshotTests'">
-    <PackageReference Include="FSharp.Core" Version="10.1.201" />
+    <PackageReference Include="FSharp.Core" Version="10.1.401" />
   </ItemGroup>
   <ItemGroup Condition="'$(IsPackable)' != 'false'">
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Link="README.md" />
