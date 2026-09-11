@@ -4,8 +4,6 @@ open System
 open System.Collections.Concurrent
 open System.Diagnostics
 open System.IO
-open Axial
-open Axial.Layers
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Text
@@ -201,16 +199,8 @@ module DocumentationCompiler =
         }
 
     let private checkerCount = min 4 (max 1 Environment.ProcessorCount)
-
-    /// A pooled, round-robin set of live checkers. Provisioned once via Axial.Layers.Layer.pool
-    /// instead of hand-rolled Interlocked indexing over a fixed array.
-    let private checkerPool : Pool<FSharpChecker> =
-        let layer = Layer.pool checkerCount (fun _ -> Layer.succeed (FSharpChecker.Create(keepAssemblyContents = true)))
-        match Flow.env<Pool<FSharpChecker>, string> |> Layer.provide layer |> Flow.run () with
-        | Exit.Success pool -> pool
-        | Exit.Failure cause -> failwithf "Failed to provision the F# checker pool: %O" cause
-
-    let private optionChecker = checkerPool.Instances |> Seq.head
+    let private checkerPool = CheckerPool.create checkerCount
+    let private optionChecker = CheckerPool.anyOne checkerPool
 
     let private optionsCache = ConcurrentDictionary<string, Lazy<FSharpProjectOptions * FSharpDiagnostic list>>()
 
@@ -232,7 +222,7 @@ module DocumentationCompiler =
 
     /// Checks one page or isolated unit. It never evaluates the resulting script.
     let checkUnit (project: EvaluatedProject) (unit: CompilationUnit) = async {
-        let checker = checkerPool.Next()
+        let checker = CheckerPool.next checkerPool
         let source, ranges = syntheticSource unit
         let fileName = Path.Combine(Path.GetTempPath(), "fslivedocs", unit.Id.Replace('/', '_').Replace('#', '_') + ".fsx")
         let otherFlags =

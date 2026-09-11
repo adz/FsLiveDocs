@@ -36,6 +36,26 @@ module IntegrationTests =
     }
 
     [<Fact>]
+    let ``documentation compiler checks blocks correctly when compilation units exceed the checker pool size`` () = async {
+        let markdown =
+            [ 1 .. 8 ]
+            |> List.map (fun index -> $"```fsharp isolated\nlet value{index} : int = {index}\n```")
+            |> String.concat "\n"
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" (Some coreProject) markdown
+        let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
+        Assert.Equal(8, results.Length)
+        Assert.All(results, fun result ->
+            let errors = result.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
+            Assert.Empty(errors))
+        for index in 1 .. 8 do
+            let result = results.[index - 1]
+            Assert.Contains($"value{index}", result.SyntheticSource)
+            for other in 1 .. 8 do
+                if other <> index then
+                    Assert.DoesNotContain($"value{other}", result.SyntheticSource)
+    }
+
+    [<Fact>]
     let ``transcript references do not assume assembly names are namespaces`` () =
         let context : FsiTranscriptRunner.DocTestExecutionContext =
             { Project =

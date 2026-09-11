@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <Compile Include="ProjectResolver.fs" />
+    <Compile Include="CheckerPool.fs" />
     <Compile Include="DocumentationCompiler.fs" />
     <Compile Include="SemanticExtractor.fs" />
     <Compile Include="FsiTranscriptRunner.fs" />
