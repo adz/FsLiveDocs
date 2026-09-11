@@ -535,6 +535,22 @@ module SymbolListerTests =
 
         Assert.Equal<string list>([ "Example.CoreFlow"; "Example.Http" ], root.Entities |> List.map _.Id |> List.sort)
 
+    [<Fact>]
+    let ``extractFromProject returns an empty package when no built assembly can be found`` () =
+        // The Axial.FileSystem migration rewired dll/xml discovery (bin/artifacts search,
+        // existence and timestamp checks) into a single composed Flow. This pins down that the
+        // "nothing found" branch still yields the same empty-package fallback it did before the
+        // migration, rather than raising, for a project with no build output anywhere nearby.
+        let projectPath =
+            Path.Combine(Path.GetTempPath(), $"NoBuildOutput-{Guid.NewGuid():N}", "NoBuildOutput.fsproj")
+
+        let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
+
+        Assert.Equal("0.1.0", package.Version)
+        Assert.Empty(package.Entities)
+        Assert.Empty(package.Scenarios)
+        Assert.Empty(package.Packages)
+
 module ContentProviderTests =
 
     let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
