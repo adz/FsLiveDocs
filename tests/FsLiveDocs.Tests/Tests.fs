@@ -2718,3 +2718,39 @@ module BlogTests =
         let index = Blog.buildPostIndex false [ { Metadata = metadata; ContentHtml = ""; Markdown = "Body"; FilePath = "post.md"; OutputPath = "blog/post/index.html"; SectionOrder = 0 } ]
         Assert.Single(index.ByDateDesc) |> ignore
         Assert.Empty(index.ByTag)
+
+module WorkspaceTests =
+
+    let private tempFile extension =
+        Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + extension)
+
+    [<Fact>]
+    let ``writeIfChanged creates a missing file and its directory`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let path = Path.Combine(root, "nested", "file.txt")
+
+        Workspace.writeIfChanged path "hello"
+
+        Assert.True(File.Exists path)
+        Assert.Equal("hello\n", File.ReadAllText path)
+
+    [<Fact>]
+    let ``writeIfChanged does not rewrite a file whose normalized content already matches`` () =
+        let path = tempFile ".txt"
+        File.WriteAllText(path, "hello\n")
+        let before = File.GetLastWriteTimeUtc path
+        System.Threading.Thread.Sleep 20
+
+        Workspace.writeIfChanged path "hello"
+
+        Assert.Equal(before, File.GetLastWriteTimeUtc path)
+        Assert.Equal("hello\n", File.ReadAllText path)
+
+    [<Fact>]
+    let ``writeIfChanged rewrites a file whose normalized content differs`` () =
+        let path = tempFile ".txt"
+        File.WriteAllText(path, "old\n")
+
+        Workspace.writeIfChanged path "new"
+
+        Assert.Equal("new\n", File.ReadAllText path)
