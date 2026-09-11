@@ -2,11 +2,28 @@ namespace FsLiveDocs.Cli
 
 open System
 open System.IO
+open Axial
+open Axial.FileSystem
 open FsLiveDocs.Core
 open FsLiveDocs.Runner
 
 /// Owns release extraction, verification, renderer-neutral assembly, and capsule persistence.
 module internal ReleaseCapture =
+
+    type private RunnerEnvironment =
+        { FileSystem: IFileSystem }
+        interface IHasFileSystem with
+            member this.FileSystem = this.FileSystem
+
+    let private environment : RunnerEnvironment = { FileSystem = FileSystem.live }
+
+    /// Runs a file-system Flow synchronously, raising a clear diagnostic on any typed failure
+    /// instead of letting a raw I/O exception (disk full, permissions) escape uncaught.
+    let private run (description: string) (flow: Flow<RunnerEnvironment, FileSystemError, 'value>) =
+        match flow |> Flow.run environment with
+        | Exit.Success value -> value
+        | Exit.Failure(Cause.Fail error) -> invalidOp $"{description}: {FileSystemError.describe error}"
+        | Exit.Failure cause -> invalidOp $"{description}: {cause}"
 
     type Request =
         {
@@ -170,12 +187,14 @@ module internal ReleaseCapture =
         let plannedOutputPath = Path.GetFullPath outputPath
         let publicReport = { report with Path = plannedOutputPath }
         if request.DryRun then
-            File.Delete actualOutputPath
+            run $"Could not remove the dry-run capsule at {actualOutputPath}" (FileSystem.deleteFile actualOutputPath)
             { Report = publicReport; ReportPath = None; PlannedOutputPath = plannedOutputPath; DryRun = true }
         else
             let reportPath = outputPath + ".report.json"
-            File.WriteAllText(reportPath, Newtonsoft.Json.JsonConvert.SerializeObject(publicReport, Newtonsoft.Json.Formatting.Indented, Serialization.jsonSettings))
+            let reportJson = Newtonsoft.Json.JsonConvert.SerializeObject(publicReport, Newtonsoft.Json.Formatting.Indented, Serialization.jsonSettings)
+            run $"Could not write the release report to {reportPath}" (FileSystem.writeAllText reportPath reportJson)
             // A bare-checksum sidecar lets a CI publish step register the capsule with
             // `history add --sha256-file` instead of parsing tool output.
-            File.WriteAllText(outputPath + ".sha256", publicReport.Sha256.ToLowerInvariant() + "\n")
+            let sha256Path = outputPath + ".sha256"
+            run $"Could not write the checksum sidecar to {sha256Path}" (FileSystem.writeAllText sha256Path (publicReport.Sha256.ToLowerInvariant() + "\n"))
             { Report = publicReport; ReportPath = Some(Path.GetFullPath reportPath); PlannedOutputPath = plannedOutputPath; DryRun = false }
