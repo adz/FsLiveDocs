@@ -8,9 +8,164 @@ open Axial
 open Axial.FileSystem
 open FsLiveDocs.Core
 open FsLiveDocs.Core.Effects
+open FsLiveDocs.Renderer.Rendering
 
-/// <summary>The high-level site assembly engine.</summary>
+/// <summary>The high-level site assembly engine: decides which pages exist and where they go.
+/// Page-by-page HTML templating is a deep module of its own -- see
+/// <see cref="T:FsLiveDocs.Renderer.Rendering.PageRenderer"/>.</summary>
 module SiteBuilder =
+
+    /// <summary>Shared inputs for rendering a documentation page.</summary>
+    type SiteRenderContext = PageRenderer.SiteRenderContext
+
+    /// <summary>Renders a single Markdown guide page.</summary>
+    let renderPage page context = PageRenderer.renderPage page context
+
+    /// <summary>Renders a single API entity page.</summary>
+    let renderEntityPage entity context = PageRenderer.renderEntityPage entity context
+
+    /// <summary>Generates a text-based summary of the API for LLM consumption.</summary>
+    let generateLlmsTxt package = PageRenderer.generateLlmsTxt package
+
+    /// <summary>One renderer-generated blog listing page before it is placed in the site layout.</summary>
+    type private BlogListingPage = { Path: string; Title: string; Body: string }
+
+    /// Builds the generated blog index, archive, and series pages from the non-draft dated posts.
+    /// Every link is relative to the generated page itself, so the output works under any hosting
+    /// sub-path and inside versioned history directories.
+    let private blogListingPages (pages: ContentPage list) =
+        let index = Blog.buildPostIndex true pages
+        let encode = Net.WebUtility.HtmlEncode
+        let rootFor (path: string) = String.replicate (path.Split('/').Length - 1) "../"
+        let card root (post: ContentPage) =
+            let date = post.Metadata.Date |> Option.map (fun value -> value.ToString("yyyy-MM-dd")) |> Option.defaultValue ""
+            let tags =
+                post.Metadata.Tags
+                |> List.map (fun tag ->
+                    "<a class=\"badge badge-ghost\" href=\"" + root + "blog/tags/" + encode (tag.Trim().ToLowerInvariant()) + ".html\">" + encode tag + "</a>")
+                |> String.concat ""
+            "<article class=\"livedocs-blog-card card card-compact bg-base-100 border border-base-300\"><div class=\"card-body\">"
+            + "<h2 class=\"card-title text-lg\"><a class=\"link link-hover\" href=\"" + root + encode post.OutputPath + "\">" + encode post.Metadata.Title + "</a></h2>"
+            + "<p class=\"text-sm opacity-70\">" + date + " · " + string (Blog.estimatedReadingMinutes post) + " min read</p>"
+            + "<p>" + encode (Blog.excerpt post) + "</p>"
+            + "<div class=\"flex flex-wrap gap-1\">" + tags + "</div></div></article>"
+        let listing root heading (posts: ContentPage list) navigation =
+            "<div class=\"livedocs-blog not-prose\"><h1 class=\"text-3xl font-bold mb-6\">" + encode heading + "</h1>"
+            + "<div class=\"grid gap-3\">" + (posts |> List.map (card root) |> String.concat "") + "</div>"
+            + navigation + "</div>"
+        let chunks =
+            match index.ByDateDesc |> List.chunkBySize 10 with
+            | [] -> [ [] ]
+            | values -> values
+        let pagePath number = if number = 1 then "blog/index.html" else $"blog/page/{number}/index.html"
+        let indexPages =
+            chunks
+            |> List.mapi (fun position chunk ->
+                let number = position + 1
+                let path = pagePath number
+                let root = rootFor path
+                let link number label = "<a class=\"btn btn-sm btn-ghost\" href=\"" + root + pagePath number + "\">" + label + "</a>"
+                let older = if number < chunks.Length then link (number + 1) "← Older posts" else "<span></span>"
+                let newer = if number > 1 then link (number - 1) "Newer posts →" else "<span></span>"
+                let navigation = "<nav class=\"livedocs-blog-pagination flex justify-between mt-6\">" + older + newer + "</nav>"
+                { Path = path; Title = "Blog"; Body = listing root "Blog" chunk navigation })
+        let archive folder label (posts: Map<string, ContentPage list>) =
+            posts
+            |> Map.toList
+            |> List.map (fun (key, entries) ->
+                let path = $"blog/{folder}/{key}.html"
+                { Path = path; Title = $"{label} {key}"; Body = listing (rootFor path) $"{label} {key}" entries "" })
+        let series =
+            (Blog.buildSeriesIndex true pages).BySeriesName
+            |> Map.toList
+            |> List.map (fun (name, entries) ->
+                let path = $"blog/series/{name}.html"
+                let root = rootFor path
+                let title = entries |> List.tryHead |> Option.bind _.Post.Metadata.Series |> Option.defaultValue name
+                let parts =
+                    entries
+                    |> List.map (fun entry ->
+                        $"<li><span class=\"opacity-70\">Part {entry.PartNumber} of {entry.PartCount}:</span> <a class=\"link\" href=\"{root}{encode entry.Post.OutputPath}\">{encode entry.Post.Metadata.Title}</a></li>")
+                    |> String.concat ""
+                { Path = path
+                  Title = $"Series: {title}"
+                  Body = $"<div class=\"livedocs-blog not-prose\"><h1 class=\"text-3xl font-bold mb-6\">Series: {encode title}</h1><ol class=\"livedocs-series-parts list-decimal pl-6 space-y-1\">{parts}</ol></div>" })
+        indexPages @ archive "tags" "Posts tagged" index.ByTag @ archive "category" "Posts in" index.ByCategory @ series
+
+    /// Builds the Atom feed. Links are relative to the feed's own location (`blog/feed.xml`), which
+    /// feed readers resolve against the URL they fetched the feed from.
+    let internal blogFeed (pages: ContentPage list) =
+        let index = Blog.buildPostIndex true pages
+        let encode = Net.WebUtility.HtmlEncode
+        let updated =
+            index.ByDateDesc
+            |> List.tryHead
+            |> Option.bind _.Metadata.Date
+            |> Option.map (fun date -> date.ToString("yyyy-MM-dd") + "T00:00:00Z")
+            |> Option.defaultValue "1970-01-01T00:00:00Z"
+        let entries =
+            index.ByDateDesc
+            |> List.map (fun post ->
+                let date = post.Metadata.Date.Value.ToString("yyyy-MM-dd") + "T00:00:00Z"
+                "<entry><title>" + encode post.Metadata.Title + "</title>"
+                + "<id>urn:fslivedocs:post:" + encode post.OutputPath + "</id>"
+                + "<link rel=\"alternate\" type=\"text/html\" href=\"../" + encode post.OutputPath + "\"/>"
+                + "<updated>" + date + "</updated><published>" + date + "</published>"
+                + "<summary>" + encode (Blog.excerpt post) + "</summary></entry>")
+            |> String.concat ""
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>Blog</title>"
+        + "<id>urn:fslivedocs:blog-feed</id><updated>" + updated + "</updated>"
+        + "<link rel=\"self\" type=\"application/atom+xml\" href=\"feed.xml\"/><link rel=\"alternate\" type=\"text/html\" href=\"index.html\"/>"
+        + entries + "</feed>"
+
+    /// Writes the generated blog pages through the caller's page renderer, so they share the site
+    /// layout, theme, navigation, and (for documentation sets) chrome of ordinary guide pages.
+    /// Sites without dated posts get no blog output at all.
+    let private renderBlogOutputs (render: ContentPage -> string) outputDir (pages: ContentPage list) =
+        if not (Blog.buildPostIndex true pages).ByDateDesc.IsEmpty then
+            let write (path: string) (text: string) =
+                let destination = Path.Combine(outputDir, path)
+                Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
+                File.WriteAllText(destination, text)
+            for listing in blogListingPages pages do
+                let page =
+                    { Metadata = ContentMetadata.empty listing.Title
+                      ContentHtml = listing.Body
+                      Markdown = ""
+                      FilePath = listing.Path
+                      OutputPath = listing.Path
+                      SectionOrder = Int32.MaxValue }
+                write listing.Path (render page)
+            write "blog/feed.xml" (blogFeed pages)
+
+    /// <summary>Shared inputs for building the generated site.</summary>
+    type SiteBuildContext = {
+        Pages: ContentPage list
+        Package: PackageModel
+        Config: SiteConfig
+        Versions: string list
+        Theme: string
+        RootPath: string
+        SiteRootPath: string
+        OutputDir: string
+    }
+
+    /// <summary>One resolved documentation set ready for renderer-only site assembly.</summary>
+    type DocsSetSite =
+        {
+            Set: ReleaseDocsSet
+            /// Global package model, optionally enriched by this set's API Markdown.
+            Package: PackageModel
+            Pages: ContentPage list
+        }
+
+    /// <summary>One captured version and its renderer-neutral set model.</summary>
+    type DocsSetVersionSite =
+        { Version: string
+          Package: PackageModel
+          Sets: DocsSetSite list
+          StaticRoot: string option
+          UsesDocumentationSets: bool }
 
     let private parallelRender (items: 'a array) (render: 'a -> unit) =
         let options = Threading.Tasks.ParallelOptions(MaxDegreeOfParallelism = min 4 Environment.ProcessorCount)
@@ -141,698 +296,9 @@ module SiteBuilder =
             if not (targetPath.StartsWith(apiRoot, StringComparison.Ordinal)) || not targetExists.[targetPath] then
                 invalidOp $"Broken generated API link in {Path.GetFileName(pagePath)}: {href}"
 
-    /// <summary>Shared inputs for rendering a documentation page.</summary>
-    type SiteRenderContext = {
-        AllPages: ContentPage list
-        Package: PackageModel
-        Config: SiteConfig
-        Versions: string list
-        Theme: string
-        RootPath: string
-        SiteRootPath: string
-    }
-
-    /// <summary>Shared inputs for building the generated site.</summary>
-    type SiteBuildContext = {
-        Pages: ContentPage list
-        Package: PackageModel
-        Config: SiteConfig
-        Versions: string list
-        Theme: string
-        RootPath: string
-        SiteRootPath: string
-        OutputDir: string
-    }
-
-    /// <summary>One resolved documentation set ready for renderer-only site assembly.</summary>
-    type DocsSetSite =
-        {
-            Set: ReleaseDocsSet
-            /// Global package model, optionally enriched by this set's API Markdown.
-            Package: PackageModel
-            Pages: ContentPage list
-        }
-
-    /// <summary>One captured version and its renderer-neutral set model.</summary>
-    type DocsSetVersionSite =
-        { Version: string
-          Package: PackageModel
-          Sets: DocsSetSite list
-          StaticRoot: string option
-          UsesDocumentationSets: bool }
-
-    /// <summary>Renders a single Markdown guide page.</summary>
-    /// <param name="page">The processed content page to render.</param>
-    /// <returns>The rendered HTML document as a string.</returns>
-    let private renderPageCore chrome (page: ContentPage) (context: SiteRenderContext) =
-        let blogShortcodes =
-            let posts = Blog.buildPostIndex true context.AllPages
-            let attribute name (args: string) =
-                let matched = Regex.Match(args, name + "=\"(?<value>[^\"]*)\"")
-                if matched.Success then Some matched.Groups.["value"].Value else None
-            // Markdig renders a shortcode written as its own paragraph as escaped text. Matching only that
-            // whole-paragraph form leaves shortcode syntax shown inside code spans and blocks untouched.
-            let listing = Regex.Replace(page.ContentHtml, @"<p>{{&lt;\s*posts\b(?<args>.*?)&gt;}}</p>", fun matched ->
-                let args = Net.WebUtility.HtmlDecode matched.Groups.["args"].Value
-                let options = page.Metadata.BlogList
-                let configured field = options |> Option.bind field
-                let tag = attribute "tag" args |> Option.orElseWith (fun () -> configured _.Tag) |> Option.map _.Trim().ToLowerInvariant()
-                let category = attribute "category" args |> Option.orElseWith (fun () -> configured _.Category) |> Option.map _.Trim().ToLowerInvariant()
-                let limit =
-                    attribute "limit" args
-                    |> Option.bind (fun value -> match Int32.TryParse value with | true, number when number >= 0 -> Some number | _ -> None)
-                    |> Option.orElseWith (fun () -> configured _.Limit)
-                let layout = attribute "layout" args |> Option.orElseWith (fun () -> configured _.Layout) |> Option.defaultValue "list" |> _.Trim().ToLowerInvariant()
-                let show =
-                    attribute "show" args
-                    |> Option.map (fun value -> value.Split(',') |> Array.map _.Trim().ToLowerInvariant() |> Set.ofArray)
-                    |> Option.orElseWith (fun () -> configured (fun value -> if List.isEmpty value.Show then None else Some(value.Show |> List.map (fun item -> item.Trim().ToLowerInvariant()) |> Set.ofList)))
-                    |> Option.defaultValue (match layout with | "preview" -> set [ "date"; "readingtime"; "summary"; "tags" ] | "compact" -> set [ "date" ] | _ -> Set.empty)
-                if not (set [ "list"; "compact"; "preview" ] |> Set.contains layout) then invalidOp $"Unsupported blogList layout '{layout}' on {page.FilePath}."
-                let selected =
-                    posts.ByDateDesc
-                    |> List.filter (fun post -> tag |> Option.forall (fun value -> post.Metadata.Tags |> List.exists (fun item -> item.Trim().ToLowerInvariant() = value)))
-                    |> List.filter (fun post -> category |> Option.forall (fun value -> post.Metadata.Category |> Option.exists (fun item -> item.Trim().ToLowerInvariant() = value)))
-                    |> fun values -> limit |> Option.map (fun number -> values |> List.truncate number) |> Option.defaultValue values
-                let item post =
-                    let link = "<a href=\"" + context.RootPath + Net.WebUtility.HtmlEncode post.OutputPath + "\">" + Net.WebUtility.HtmlEncode post.Metadata.Title + "</a>"
-                    let date = if show.Contains "date" then "<span class=\"livedocs-post-date\">" + post.Metadata.Date.Value.ToString("yyyy-MM-dd") + "</span>" else ""
-                    let reading = if show.Contains "readingtime" then "<span class=\"livedocs-post-reading-time\">" + string (Blog.estimatedReadingMinutes post) + " min read</span>" else ""
-                    let summary = if show.Contains "summary" then "<p>" + Net.WebUtility.HtmlEncode(Blog.excerpt post) + "</p>" else ""
-                    let tags = if show.Contains "tags" then "<span class=\"livedocs-post-tags\">" + (post.Metadata.Tags |> List.map Net.WebUtility.HtmlEncode |> String.concat ", ") + "</span>" else ""
-                    if layout = "list" then "<li>" + link + "</li>" else "<article class=\"livedocs-post-" + layout + "\"><h3>" + link + "</h3>" + date + reading + summary + tags + "</article>"
-                if layout = "list" then "<ul class=\"livedocs-post-list\">" + (selected |> List.map item |> String.concat "") + "</ul>"
-                else "<div class=\"livedocs-post-list livedocs-post-list-" + layout + "\">" + (selected |> List.map item |> String.concat "") + "</div>")
-            let series = Blog.buildSeriesIndex true context.AllPages
-            Regex.Replace(listing, @"<p>{{&lt;\s*series-nav\s*&gt;}}</p>", fun _ ->
-                match page.Metadata.Series |> Option.map _.Trim().ToLowerInvariant() |> Option.bind (fun name -> series.BySeriesName |> Map.tryFind name) with
-                | None -> ""
-                | Some entries -> "<ol class=\"livedocs-series-nav\">" + (entries |> List.map (fun entry -> "<li><a href=\"" + context.RootPath + Net.WebUtility.HtmlEncode entry.Post.OutputPath + "\">Part " + string entry.PartNumber + ": " + Net.WebUtility.HtmlEncode entry.Post.Metadata.Title + "</a></li>") |> String.concat "") + "</ol>")
-        let blogChrome =
-            if page.Metadata.Date.IsNone then ""
-            else
-                let posts = Blog.buildPostIndex true context.AllPages
-                let series = Blog.buildSeriesIndex true context.AllPages
-                let navigation = Blog.navigation page posts series
-                let link label target = target |> Option.map (fun item -> $"<a href=\"{context.RootPath}{Net.WebUtility.HtmlEncode item.OutputPath}\">{label}: {Net.WebUtility.HtmlEncode item.Metadata.Title}</a>") |> Option.defaultValue ""
-                let seriesPart = navigation.SeriesPart |> Option.map (fun (number, count) -> $"<p>Part {number} of {count}</p>") |> Option.defaultValue ""
-                let date = page.Metadata.Date.Value.ToString("yyyy-MM-dd")
-                let newer = link "Newer" navigation.Prev
-                let older = link "Older" navigation.Next
-                "<aside class=\"livedocs-blog-meta\"><p>" + date + " · " + string (Blog.estimatedReadingMinutes page) + " min read</p>" + seriesPart + "<nav>" + newer + " " + older + "</nav></aside>"
-        let comments =
-            if not page.Metadata.Comments then ""
-            else
-                let encode = Net.WebUtility.HtmlEncode
-                // One provider-agnostic toggle and one embed region. Only the region's contents differ by
-                // provider; the count is unknown at build time, so it stays a placeholder until provider
-                // script reports it in the browser.
-                let section (embed: string) =
-                    "<section id=\"comments\" class=\"livedocs-comments not-prose mt-10\">"
-                    + "<h2 class=\"text-xl font-semibold\"><a class=\"livedocs-comments-toggle link link-hover\" href=\"#comments\" aria-controls=\"livedocs-comments-embed\">Comments <span class=\"livedocs-comments-count\" data-state=\"loading\" aria-live=\"polite\">(…)</span></a></h2>"
-                    + "<div id=\"livedocs-comments-embed\" class=\"livedocs-comments-embed mt-4\">" + embed + "</div></section>"
-                match context.Config.CommentsProvider with
-                | Some (Giscus settings) ->
-                    let theme = settings.Theme |> Option.defaultValue context.Theme
-                    section (
-                        $"<script src=\"https://giscus.app/client.js\" data-repo=\"{encode settings.Repo}\" data-repo-id=\"{encode settings.RepoId}\" data-category=\"{encode settings.Category}\" data-category-id=\"{encode settings.CategoryId}\" data-mapping=\"pathname\" data-emit-metadata=\"1\" data-theme=\"{encode theme}\" crossorigin=\"anonymous\" async></script>"
-                        + "<script>(function(){var count=document.querySelector('#comments .livedocs-comments-count');window.addEventListener('message',function(event){if(event.origin!=='https://giscus.app'||!event.data||!event.data.giscus)return;var discussion=event.data.giscus.discussion;if(!count)return;var total=discussion?(discussion.totalCommentCount||0)+(discussion.totalReplyCount||0):0;count.textContent='('+total+')';count.setAttribute('data-state','ready');});})();</script>")
-                | Some (Custom html) -> section html
-                | _ -> ""
-        let content = [ div [] [ rawText (blogChrome + blogShortcodes + comments) ] ]
-
-        match chrome with
-        | Some value ->
-            View.layoutWithChrome
-                value
-                page.Metadata.Title
-                context.AllPages
-                context.Package
-                context.Config
-                context.Versions
-                context.Theme
-                context.RootPath
-                context.SiteRootPath
-                page.OutputPath
-                content
-        | None ->
-            View.layout
-                page.Metadata.Title
-                context.AllPages
-                context.Package
-                context.Config
-                context.Versions
-                context.Theme
-                context.RootPath
-                context.SiteRootPath
-                page.OutputPath
-                content
-        |> fun node -> RenderView.AsString.htmlNode node
-
-    let renderPage page context = renderPageCore None page context
-
-    /// <summary>One renderer-generated blog listing page before it is placed in the site layout.</summary>
-    type private BlogListingPage = { Path: string; Title: string; Body: string }
-
-    /// Builds the generated blog index, archive, and series pages from the non-draft dated posts.
-    /// Every link is relative to the generated page itself, so the output works under any hosting
-    /// sub-path and inside versioned history directories.
-    let private blogListingPages (pages: ContentPage list) =
-        let index = Blog.buildPostIndex true pages
-        let encode = Net.WebUtility.HtmlEncode
-        let rootFor (path: string) = String.replicate (path.Split('/').Length - 1) "../"
-        let card root (post: ContentPage) =
-            let date = post.Metadata.Date |> Option.map (fun value -> value.ToString("yyyy-MM-dd")) |> Option.defaultValue ""
-            let tags =
-                post.Metadata.Tags
-                |> List.map (fun tag ->
-                    "<a class=\"badge badge-ghost\" href=\"" + root + "blog/tags/" + encode (tag.Trim().ToLowerInvariant()) + ".html\">" + encode tag + "</a>")
-                |> String.concat ""
-            "<article class=\"livedocs-blog-card card card-compact bg-base-100 border border-base-300\"><div class=\"card-body\">"
-            + "<h2 class=\"card-title text-lg\"><a class=\"link link-hover\" href=\"" + root + encode post.OutputPath + "\">" + encode post.Metadata.Title + "</a></h2>"
-            + "<p class=\"text-sm opacity-70\">" + date + " · " + string (Blog.estimatedReadingMinutes post) + " min read</p>"
-            + "<p>" + encode (Blog.excerpt post) + "</p>"
-            + "<div class=\"flex flex-wrap gap-1\">" + tags + "</div></div></article>"
-        let listing root heading (posts: ContentPage list) navigation =
-            "<div class=\"livedocs-blog not-prose\"><h1 class=\"text-3xl font-bold mb-6\">" + encode heading + "</h1>"
-            + "<div class=\"grid gap-3\">" + (posts |> List.map (card root) |> String.concat "") + "</div>"
-            + navigation + "</div>"
-        let chunks =
-            match index.ByDateDesc |> List.chunkBySize 10 with
-            | [] -> [ [] ]
-            | values -> values
-        let pagePath number = if number = 1 then "blog/index.html" else $"blog/page/{number}/index.html"
-        let indexPages =
-            chunks
-            |> List.mapi (fun position chunk ->
-                let number = position + 1
-                let path = pagePath number
-                let root = rootFor path
-                let link number label = "<a class=\"btn btn-sm btn-ghost\" href=\"" + root + pagePath number + "\">" + label + "</a>"
-                let older = if number < chunks.Length then link (number + 1) "← Older posts" else "<span></span>"
-                let newer = if number > 1 then link (number - 1) "Newer posts →" else "<span></span>"
-                let navigation = "<nav class=\"livedocs-blog-pagination flex justify-between mt-6\">" + older + newer + "</nav>"
-                { Path = path; Title = "Blog"; Body = listing root "Blog" chunk navigation })
-        let archive folder label (posts: Map<string, ContentPage list>) =
-            posts
-            |> Map.toList
-            |> List.map (fun (key, entries) ->
-                let path = $"blog/{folder}/{key}.html"
-                { Path = path; Title = $"{label} {key}"; Body = listing (rootFor path) $"{label} {key}" entries "" })
-        let series =
-            (Blog.buildSeriesIndex true pages).BySeriesName
-            |> Map.toList
-            |> List.map (fun (name, entries) ->
-                let path = $"blog/series/{name}.html"
-                let root = rootFor path
-                let title = entries |> List.tryHead |> Option.bind _.Post.Metadata.Series |> Option.defaultValue name
-                let parts =
-                    entries
-                    |> List.map (fun entry ->
-                        $"<li><span class=\"opacity-70\">Part {entry.PartNumber} of {entry.PartCount}:</span> <a class=\"link\" href=\"{root}{encode entry.Post.OutputPath}\">{encode entry.Post.Metadata.Title}</a></li>")
-                    |> String.concat ""
-                { Path = path
-                  Title = $"Series: {title}"
-                  Body = $"<div class=\"livedocs-blog not-prose\"><h1 class=\"text-3xl font-bold mb-6\">Series: {encode title}</h1><ol class=\"livedocs-series-parts list-decimal pl-6 space-y-1\">{parts}</ol></div>" })
-        indexPages @ archive "tags" "Posts tagged" index.ByTag @ archive "category" "Posts in" index.ByCategory @ series
-
-    /// Builds the Atom feed. Links are relative to the feed's own location (`blog/feed.xml`), which
-    /// feed readers resolve against the URL they fetched the feed from.
-    let internal blogFeed (pages: ContentPage list) =
-        let index = Blog.buildPostIndex true pages
-        let encode = Net.WebUtility.HtmlEncode
-        let updated =
-            index.ByDateDesc
-            |> List.tryHead
-            |> Option.bind _.Metadata.Date
-            |> Option.map (fun date -> date.ToString("yyyy-MM-dd") + "T00:00:00Z")
-            |> Option.defaultValue "1970-01-01T00:00:00Z"
-        let entries =
-            index.ByDateDesc
-            |> List.map (fun post ->
-                let date = post.Metadata.Date.Value.ToString("yyyy-MM-dd") + "T00:00:00Z"
-                "<entry><title>" + encode post.Metadata.Title + "</title>"
-                + "<id>urn:fslivedocs:post:" + encode post.OutputPath + "</id>"
-                + "<link rel=\"alternate\" type=\"text/html\" href=\"../" + encode post.OutputPath + "\"/>"
-                + "<updated>" + date + "</updated><published>" + date + "</published>"
-                + "<summary>" + encode (Blog.excerpt post) + "</summary></entry>")
-            |> String.concat ""
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>Blog</title>"
-        + "<id>urn:fslivedocs:blog-feed</id><updated>" + updated + "</updated>"
-        + "<link rel=\"self\" type=\"application/atom+xml\" href=\"feed.xml\"/><link rel=\"alternate\" type=\"text/html\" href=\"index.html\"/>"
-        + entries + "</feed>"
-
-    /// Writes the generated blog pages through the caller's page renderer, so they share the site
-    /// layout, theme, navigation, and (for documentation sets) chrome of ordinary guide pages.
-    /// Sites without dated posts get no blog output at all.
-    let private renderBlogOutputs (render: ContentPage -> string) outputDir (pages: ContentPage list) =
-        if not (Blog.buildPostIndex true pages).ByDateDesc.IsEmpty then
-            let write (path: string) (text: string) =
-                let destination = Path.Combine(outputDir, path)
-                Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
-                File.WriteAllText(destination, text)
-            for listing in blogListingPages pages do
-                let page =
-                    { Metadata = ContentMetadata.empty listing.Title
-                      ContentHtml = listing.Body
-                      Markdown = ""
-                      FilePath = listing.Path
-                      OutputPath = listing.Path
-                      SectionOrder = Int32.MaxValue }
-                write listing.Path (render page)
-            write "blog/feed.xml" (blogFeed pages)
-
-    /// <summary>Renders a single API entity page (Module or Type).</summary>
-    /// <param name="e">The entity to render.</param>
-    /// <returns>The rendered HTML document as a string.</returns>
-    let private renderEntityPageCore chrome (e: EntityModel) (context: SiteRenderContext) =
-        let entityTargets =
-            match chrome with
-            | Some(value: View.SiteChrome) ->
-                value.ApiRoutes
-                |> Map.map (fun id route -> context.RootPath + value.VersionPath + route + "api/" + id + ".html")
-            | None -> Map.empty
-
-        let renderDocumentation nodes =
-            if entityTargets.IsEmpty then
-                Presentation.renderDocumentationHtml context.Package nodes
-            else
-                Presentation.renderDocumentationHtmlWithTargets context.Package entityTargets nodes
-        // Other projects' own root entities (e.g. "Axial.Layers") nest under a shared parent
-        // namespace ("Axial") in the merged tree. Each such project already gets its own sidebar
-        // group and API index card, so listing it again in the parent's Contents is noise.
-        let otherPackageRootIds =
-            (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
-            |> List.map (fun package -> package.Name)
-            |> Set.ofList
-
-        let renderPackageBadges (ent: EntityModel) =
-            let packageNames =
-                // Only a package that directly owns this entity (not merely an ancestor namespace
-                // shared by many packages) is worth surfacing here - otherwise every package that
-                // nests anything below a shared namespace root would show up on that root's page.
-                (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
-                |> List.filter (fun package -> package.EntityIds |> List.contains ent.Id)
-                |> List.map (fun package -> package.Name)
-                // A package name that matches the entity's own id is already implied by the page's
-                // breadcrumb, so surfacing it as a badge is noise.
-                |> List.filter (fun name -> name <> ent.Id)
-                |> List.distinct
-                |> List.sort
-            if packageNames.IsEmpty then emptyText
-            else
-                div [ _class "not-prose flex flex-wrap items-center gap-2 -mt-4 mb-8" ] [
-                    span [ _class "text-[10px] font-black uppercase tracking-widest opacity-40" ] [ str "Package" ]
-                    yield! packageNames |> List.map (fun name -> span [ _class "badge badge-outline font-mono" ] [ str name ])
-                ]
-
-        let renderSummaryBlock summary =
-            if Documentation.isEmpty summary then
-                emptyText
-            else
-                let rendered = renderDocumentation summary
-
-                div
-                    [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ]
-                    [ rawText rendered ]
-
-        let renderFieldTable (title: string) (items: MemberModel list) =
-            if items.IsEmpty then emptyText
-            else
-                div [ _class "mb-16 not-prose" ] [
-                    View.h2WithAnchor (e.Id + "-fields") title "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                    div [ _class "overflow-x-auto rounded-2xl border border-base-300 shadow-sm" ] [
-                        table [ _class "table table-zebra w-full" ] [
-                            thead [ _class "bg-base-200/50" ] [
-                                tr [] [
-                                    th [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Name" ]
-                                    th [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Type" ]
-                                    th [ attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Description" ]
-                                ]
-                            ]
-                            tbody [] (
-                                items
-                                |> List.map (fun m ->
-                                    tr [] [
-                                        td [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                            a [ _href ("#" + m.Id); _class "font-bold text-primary hover:underline" ] [ str m.Name ]
-                                        ]
-                                        td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                            span [ _class "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText m.Signature ]
-                                        ]
-                                        td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                            str (Presentation.synopsis m.Summary)
-                                        ]
-                                    ]
-                                )
-                            )
-                        ]
-                    ]
-                ]
-
-        let renderGenericEntity (ent: EntityModel) =
-            div
-                [ _class ""; _id ent.Id ]
-                [ h1
-                      [ _class
-                            "text-4xl font-black mb-8 pb-4 border-b-8 border-primary/10 tracking-tight group scroll-mt-24 flex items-center gap-3"
-                        attr "data-toc-title" ent.Name ]
-                      [ span [ _class "leading-tight" ] [ str ent.Name ]
-                        span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str (string ent.Kind) ]
-                        a
-                            [ _href ("#" + ent.Id)
-                              _class
-                                  "anchor-link opacity-0 group-hover:opacity-60 transition-opacity no-underline inline-flex items-center justify-center w-6 h-6 text-base-content/60 hover:text-primary"
-                              attr "aria-label" $"Copy link to {ent.Name}"
-                              attr "title" $"Copy link to {ent.Name}" ]
-                            [ i [ _class "bi bi-link-45deg text-base" ] [] ] ]
-
-                  renderPackageBadges ent
-
-                  renderSummaryBlock ent.Summary
-
-                  let ownContents =
-                      ent.Entities |> List.filter (fun ne -> not (otherPackageRootIds.Contains ne.Id))
-
-                  let contentsCard (ne: EntityModel) =
-                      a
-                          [ _href (ne.Id + ".html")
-                            _class
-                                "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ]
-                          [ span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str ne.Name ]
-                            span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string ne.Kind) ] ]
-
-                  if not ownContents.IsEmpty then
-                      // Two independent projects can both add members directly to the same shared
-                      // namespace (e.g. "Axial" and "Axial.Telemetry" both declare things in namespace
-                      // "Axial.Telemetry"). Split Contents by the owning project and give each group an
-                      // anchor, so a sidebar link scoped to one project can land on that project's own
-                      // members instead of the page just looking like it belongs to a different one.
-                      let packagesFor (childId: string) =
-                          (if isNull (box context.Package.Packages) then
-                               []
-                           else
-                               context.Package.Packages)
-                          |> List.filter (fun package -> package.EntityIds |> List.contains childId)
-                          |> List.map (fun package -> package.Name)
-
-                      let groupedByPackage =
-                          ownContents
-                          |> List.groupBy (fun ne -> packagesFor ne.Id |> List.tryHead |> Option.defaultValue "")
-                          |> List.sortBy fst
-
-                      div
-                          [ _class "mb-16" ]
-                          [ View.h2WithAnchor
-                                (ent.Id + "-contents")
-                                "Contents"
-                                "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                            if groupedByPackage.Length > 1 then
-                                div
-                                    [ _class "flex flex-col gap-8" ]
-                                    (groupedByPackage
-                                     |> List.map (fun (packageName, items) ->
-                                         div
-                                             [ _class "flex flex-col gap-4" ]
-                                             [ if packageName <> "" then
-                                                   h3
-                                                       [ _id ("package-" + packageName)
-                                                         _class
-                                                             "scroll-mt-24 text-[10px] font-black uppercase tracking-widest opacity-40" ]
-                                                       [ str packageName ]
-                                               div
-                                                   [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ]
-                                                   (items |> List.map contentsCard) ]))
-                            else
-                                div
-                                    [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ]
-                                    (ownContents |> List.map contentsCard) ]
-
-                  if ent.Kind <> EntityKind.Module && not ent.Members.IsEmpty then
-                      div
-                          [ _class "mb-16 not-prose" ]
-                          [ View.h2WithAnchor
-                                (ent.Id + "-spec")
-                                "Specification"
-                                "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                            div
-                                [ _class "rounded-3xl border border-base-300 bg-base-100 shadow-sm overflow-hidden" ]
-                                [ div
-                                      [ _class "grid grid-cols-1 md:grid-cols-3 gap-0 border-b border-base-300" ]
-                                      [ div
-                                            [ _class "p-5 md:p-6" ]
-                                            [ div
-                                                  [ _class
-                                                        "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ]
-                                                  [ str "Kind" ]
-                                              div [ _class "text-lg font-black" ] [ str (string ent.Kind) ] ]
-                                        div
-                                            [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ]
-                                            [ div
-                                                  [ _class
-                                                        "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ]
-                                                  [ str "Members" ]
-                                              div [ _class "text-lg font-black" ] [ str (string ent.Members.Length) ] ]
-                                        div
-                                            [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ]
-                                            [ div
-                                                  [ _class
-                                                        "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ]
-                                                  [ str "Examples" ]
-                                              div
-                                                  [ _class "text-lg font-black" ]
-                                                  [ str (string (Presentation.entityExamples ent).Length) ] ] ]
-                                  div
-                                      [ _class "p-5 md:p-6 space-y-3" ]
-                                      (ent.Members
-                                       |> List.take (min 5 ent.Members.Length)
-                                       |> List.map (fun m ->
-                                           div
-                                               [ _class
-                                                     "flex flex-col gap-2 rounded-2xl border border-base-300 bg-base-200/20 p-4" ]
-                                               [ div
-                                                     [ _class "flex items-center justify-between gap-4" ]
-                                                     [ span [ _class "font-bold text-primary" ] [ str m.Name ]
-                                                       span
-                                                           [ _class
-                                                                 "text-[10px] uppercase tracking-[0.3em] opacity-40 font-black" ]
-                                                           [ str "Signature" ] ]
-                                                 div
-                                                     [ _class "font-mono text-sm text-accent overflow-x-auto" ]
-                                                     [ rawText (Presentation.highlightSignatureHtml m.Signature) ] ])) ] ]
-
-                  if not ent.Members.IsEmpty then
-                      div
-                          [ _class "mb-16 not-prose" ]
-                          [ View.h2WithAnchor
-                                (ent.Id + "-summary")
-                                "Summary"
-                                "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                            div
-                                [ _class "overflow-x-auto rounded-2xl border border-base-300 shadow-sm" ]
-                                [ table
-                                      [ _class "table table-zebra w-full" ]
-                                      [ thead
-                                            [ _class "bg-base-200/50" ]
-                                            [ tr
-                                                  []
-                                                  [ th
-                                                        [ attr
-                                                              "style"
-                                                              "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ]
-                                                        [ str "Name" ]
-                                                    th
-                                                        [ attr
-                                                              "style"
-                                                              "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ]
-                                                        [ str "Signature" ]
-                                                    th
-                                                        [ attr
-                                                              "style"
-                                                              "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ]
-                                                        [ str "Synopsis" ] ] ]
-                                        tbody
-                                            []
-                                            (ent.Members
-                                             |> List.map (fun m ->
-                                                 tr
-                                                     []
-                                                     [ td
-                                                           [ attr
-                                                                 "style"
-                                                                 "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
-                                                           [ a
-                                                                 [ _href ("#" + m.Id)
-                                                                   _class "font-bold text-primary hover:underline" ]
-                                                                 [ str m.Name ] ]
-                                                       td
-                                                           [ attr
-                                                                 "style"
-                                                                 "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
-                                                           [ span
-                                                                 [ _class
-                                                                       "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ]
-                                                                 [ rawText m.Signature ] ]
-                                                       td
-                                                           [ _class "text-sm opacity-80 leading-relaxed"
-                                                             attr
-                                                                 "style"
-                                                                 "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
-                                                           [ str (Presentation.synopsis m.Summary) ] ])) ] ] ]
-
-                  div
-                      [ _class "space-y-12" ]
-                      (ent.Members
-                       |> List.map (fun memberModel ->
-                           if entityTargets.IsEmpty then
-                               View.apiCard context.Package context.Config.RepoUrl memberModel
-                           else
-                               View.apiCardWithTargets context.Package entityTargets context.Config.RepoUrl memberModel))
-
-                  let examples = Presentation.entityExamples ent
-
-                  if not examples.IsEmpty then
-                      div
-                          [ _class "mt-24 border-t border-base-300 pt-16" ]
-                          [ View.h2WithAnchor
-                                (ent.Id + "-examples")
-                                "Examples"
-                                "text-3xl font-black mb-10 tracking-tighter"
-                            div
-                                [ _class "space-y-12" ]
-                                (examples
-                                 |> List.map (fun ex ->
-                                     let exampleId =
-                                         let slug =
-                                             Regex.Replace(ex.Name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-')
-
-                                         if String.IsNullOrWhiteSpace slug then "example" else slug
-
-                                     div
-                                         [ _class "not-prose" ]
-                                         [ if ex.Name <> "Example" then
-                                               View.h3WithAnchor
-                                                   (ent.Id + "-example-" + exampleId)
-                                                   ex.Name
-                                                   "text-sm font-black mb-4 opacity-40 tracking-[0.3em]"
-                                           pre
-                                               [ _class
-                                                     "bg-neutral text-neutral-content p-6 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-md" ]
-                                               [ code [ _class "language-fsharp" ] [ str ex.Content ] ] ])) ] ]
-
-        let renderRecordEntity (ent: EntityModel) =
-            div [ _id ent.Id ] [
-                h1 [
-                    _class "text-4xl font-black mb-8 pb-4 border-b-8 border-primary/10 tracking-tight group scroll-mt-24 flex items-center gap-3"
-                    attr "data-toc-title" ent.Name
-                ] [
-                    span [ _class "leading-tight" ] [ str ent.Name ]
-                    span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str (string ent.Kind) ]
-                    a [
-                        _href ("#" + ent.Id)
-                        _class "anchor-link opacity-0 group-hover:opacity-60 transition-opacity no-underline inline-flex items-center justify-center w-6 h-6 text-base-content/60 hover:text-primary"
-                        attr "aria-label" $"Copy link to {ent.Name}"
-                        attr "title" $"Copy link to {ent.Name}"
-                    ] [ i [ _class "bi bi-link-45deg text-base" ] [] ]
-                ]
-
-                renderPackageBadges ent
-
-                renderSummaryBlock ent.Summary
-                renderFieldTable "Fields" ent.Members
-
-                let examples = Presentation.entityExamples ent
-                if not examples.IsEmpty then
-                    div [ _class "mt-24 border-t border-base-300 pt-16" ] [
-                        View.h2WithAnchor (ent.Id + "-examples") "Examples" "text-3xl font-black mb-10 tracking-tighter"
-                        div [ _class "space-y-12" ] (
-                            examples |> List.map (fun ex ->
-                                let exampleId =
-                                    let slug = Regex.Replace(ex.Name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-')
-                                    if String.IsNullOrWhiteSpace slug then "example" else slug
-                                div [ _class "not-prose" ] [
-                                    if ex.Name <> "Example" then
-                                        View.h3WithAnchor (ent.Id + "-example-" + exampleId) ex.Name "text-sm font-black mb-4 opacity-40 tracking-[0.3em]"
-                                    pre [ _class "bg-neutral text-neutral-content p-6 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-md" ] [
-                                        code [ _class "language-fsharp" ] [ str ex.Content ]
-                                    ]
-                                ])
-                        )
-                    ]
-            ]
-
-        let content =
-            [ match e.Kind with
-              | EntityKind.Record -> renderRecordEntity e
-              | _ -> renderGenericEntity e ]
-
-        match chrome with
-        | Some value ->
-            View.layoutWithChrome
-                value
-                e.Name
-                context.AllPages
-                context.Package
-                context.Config
-                context.Versions
-                context.Theme
-                context.RootPath
-                context.SiteRootPath
-                ("api/" + e.Id + ".html")
-                content
-        | None ->
-            View.layout
-                e.Name
-                context.AllPages
-                context.Package
-                context.Config
-                context.Versions
-                context.Theme
-                context.RootPath
-                context.SiteRootPath
-                ("api/" + e.Id + ".html")
-                content
-        |> fun node -> RenderView.AsString.htmlNode node
-
-    let renderEntityPage entity context =
-        renderEntityPageCore None entity context
-
-    /// <summary>Generates a text-based summary of the API for LLM consumption.</summary>
-    /// <param name="package">The package model to summarize.</param>
-    /// <returns>A plaintext `llms.txt` document.</returns>
-    /// <example name="GenerateLlmsTxtExample" data-livedocs="snapshot">
-    /// > open FsLiveDocs.Core;;
-    ///
-    /// > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
-    /// val package: PackageModel = { Version = "1.0"
-    ///   Entities = []
-    ///   Scenarios = []
-    ///   Packages = [] }
-    ///
-    /// > let summary = SiteBuilder.generateLlmsTxt package;;
-    /// val summary: string = "# API Reference for LLMs
-    /// "
-    ///
-    /// > summary.Split('\n').[0];;
-    /// val it: string = "# API Reference for LLMs"
-    /// </example>
-    let generateLlmsTxt (package: PackageModel) =
-        let sb = System.Text.StringBuilder()
-        sb.AppendLine("# API Reference for LLMs") |> ignore
-        let rec walkEntity (e: EntityModel) indent =
-            let pad = String.replicate indent "  "
-            sb.AppendLine($"{pad}- {e.Kind}: {e.Name} ({e.Id})") |> ignore
-            for m in e.Members do
-                sb.AppendLine($"{pad}  * {m.Name}: {m.Signature}") |> ignore
-            for ne in e.Entities do
-                walkEntity ne (indent + 1)
-        for e in package.Entities do
-            walkEntity e 0
-        sb.ToString()
-
     /// <summary>Builds the primary documentation site.</summary>
     let build (context: SiteBuildContext) =
-        let renderContext = {
+        let renderContext : SiteRenderContext = {
             AllPages = context.Pages
             Package = context.Package
             Config = context.Config
@@ -1207,7 +673,7 @@ module SiteBuilder =
                    VersionTargets = targets }
                 : View.SiteChrome)
 
-            let baseContext rootPath =
+            let baseContext rootPath : SiteRenderContext =
                 { AllPages = docsSet.Pages
                   Package = docsSet.Package
                   Config = config
@@ -1225,7 +691,7 @@ module SiteBuilder =
                         let context = baseContext (siteRootPath + String.replicate depth "../")
 
                         let html =
-                            renderPageCore
+                            PageRenderer.renderPageCore
                                 (Some(chrome (guideVersionTargets currentVersion allSites set page)))
                                 page
                                 context
@@ -1249,7 +715,7 @@ module SiteBuilder =
                         |> fun entities ->
                             parallelMap entities (fun entity ->
                                 let targets = apiVersionTargets currentVersion allSites set entity.Id
-                                let html = renderEntityPageCore (Some(chrome targets)) entity entityContext
+                                let html = PageRenderer.renderEntityPageCore (Some(chrome targets)) entity entityContext
                                 Path.Combine(apiDir, entity.Id + ".html"), html)
                         |> Array.toList
 
@@ -1395,7 +861,7 @@ module SiteBuilder =
             renderBlogOutputs
                 (fun page ->
                     let rootPath = siteRootPath + String.replicate (page.OutputPath.Split('/').Length - 1) "../"
-                    renderPageCore
+                    PageRenderer.renderPageCore
                         (Some chrome)
                         page
                         { AllPages = defaultSite.Pages
