@@ -4,14 +4,18 @@ open System
 open System.IO
 open Axial
 open Axial.FileSystem
+open Reified
 open FsLiveDocs.Core
 open FsLiveDocs.Runner
 open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
 
 /// Owns release extraction, verification, renderer-neutral assembly, and capsule persistence.
 module internal ReleaseCapture =
 
     let private run description flow = Run.orRaise FileSystemError.describe description flow
+
+    let private reportCodec = Json.compile ReleaseSchema.releaseCapsuleReport
 
     type Request =
         {
@@ -179,7 +183,7 @@ module internal ReleaseCapture =
             { Report = publicReport; ReportPath = None; PlannedOutputPath = plannedOutputPath; DryRun = true }
         else
             let reportPath = outputPath + ".report.json"
-            let reportJson = Newtonsoft.Json.JsonConvert.SerializeObject(publicReport, Newtonsoft.Json.Formatting.Indented, Serialization.jsonSettings)
+            let reportJson = Json.serialize reportCodec publicReport
             let sha256Path = outputPath + ".sha256"
             // A bare-checksum sidecar lets a CI publish step register the capsule with
             // `history add --sha256-file` instead of parsing tool output. Both writes are one

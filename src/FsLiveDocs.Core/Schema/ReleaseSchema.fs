@@ -29,9 +29,9 @@ module ReleaseSchema =
             fieldAs "Source" (fun (d: ReleaseDocsSet) -> d.Source) { withSchema Schema.text }
             fieldAs "Path" (fun (d: ReleaseDocsSet) -> d.Path) { withSchema Schema.text }
             fieldAs "Projects" (fun (d: ReleaseDocsSet) -> d.Projects) { withSchema (Schema.listWith Schema.text) }
-            fieldAs "IsDefault" (fun (d: ReleaseDocsSet) -> d.IsDefault) { withSchema Schema.``bool`` }
-            fieldAs "Sidebar" (fun (d: ReleaseDocsSet) -> d.Sidebar) { withSchema Schema.``bool`` }
-            fieldAs "Api" (fun (d: ReleaseDocsSet) -> d.Api) { withSchema Schema.``bool`` }
+            fieldAs "IsDefault" (fun (d: ReleaseDocsSet) -> d.IsDefault) { withSchema Schema.bool }
+            fieldAs "Sidebar" (fun (d: ReleaseDocsSet) -> d.Sidebar) { withSchema Schema.bool }
+            fieldAs "Api" (fun (d: ReleaseDocsSet) -> d.Api) { withSchema Schema.bool }
             fieldAs "ApiEntityIds" (fun (d: ReleaseDocsSet) -> d.ApiEntityIds) { withSchema (Schema.listWith Schema.text) }
             fieldAs "FSharpPrelude" (fun (d: ReleaseDocsSet) -> d.FSharpPrelude) { withSchema (Schema.option Schema.text) }
             construct (fun id title source path projects isDefault sidebar api apiEntityIds fsharpPrelude ->
@@ -52,14 +52,14 @@ module ReleaseSchema =
             fieldAs "Path" (fun (a: ReleaseAsset) -> a.Path) { withSchema Schema.text }
             fieldAs "MediaType" (fun (a: ReleaseAsset) -> a.MediaType) { withSchema Schema.text }
             fieldAs "Sha256" (fun (a: ReleaseAsset) -> a.Sha256) { withSchema Schema.text }
-            fieldAs "Size" (fun (a: ReleaseAsset) -> a.Size) { withSchema Schema.``int64`` }
+            fieldAs "Size" (fun (a: ReleaseAsset) -> a.Size) { withSchema Schema.int64 }
             construct (fun path mediaType sha256 size -> { Path = path; MediaType = mediaType; Sha256 = sha256; Size = size })
         }
 
     let releaseContentArtifact : Schema<ReleaseContentArtifact> =
         schema<ReleaseContentArtifact> {
-            fieldAs "SchemaVersion" (fun (a: ReleaseContentArtifact) -> a.SchemaVersion) { withSchema Schema.``int`` }
-            fieldAs "UsesDocumentationSets" (fun (a: ReleaseContentArtifact) -> a.UsesDocumentationSets) { withSchema Schema.``bool`` }
+            fieldAs "SchemaVersion" (fun (a: ReleaseContentArtifact) -> a.SchemaVersion) { withSchema Schema.int }
+            fieldAs "UsesDocumentationSets" (fun (a: ReleaseContentArtifact) -> a.UsesDocumentationSets) { withSchema Schema.bool }
             fieldAs "Pages" (fun (a: ReleaseContentArtifact) -> a.Pages) { withSchema (Schema.listWith releaseContentPage) }
             fieldAs "Assets" (fun (a: ReleaseContentArtifact) -> a.Assets) { withSchema (Schema.listWith releaseAsset) }
             fieldAs "Site" (fun (a: ReleaseContentArtifact) -> a.Site) { withSchema siteConfig }
@@ -75,16 +75,16 @@ module ReleaseSchema =
 
     let releaseComponent : Schema<ReleaseComponent> =
         schema<ReleaseComponent> {
-            fieldAs "SchemaVersion" (fun (c: ReleaseComponent) -> c.SchemaVersion) { withSchema Schema.``int`` }
+            fieldAs "SchemaVersion" (fun (c: ReleaseComponent) -> c.SchemaVersion) { withSchema Schema.int }
             fieldAs "Path" (fun (c: ReleaseComponent) -> c.Path) { withSchema Schema.text }
             fieldAs "Sha256" (fun (c: ReleaseComponent) -> c.Sha256) { withSchema Schema.text }
-            fieldAs "Size" (fun (c: ReleaseComponent) -> c.Size) { withSchema Schema.``int64`` }
+            fieldAs "Size" (fun (c: ReleaseComponent) -> c.Size) { withSchema Schema.int64 }
             construct (fun schemaVersion path sha256 size -> { SchemaVersion = schemaVersion; Path = path; Sha256 = sha256; Size = size })
         }
 
     let releaseCapsuleManifest : Schema<ReleaseCapsuleManifest> =
         schema<ReleaseCapsuleManifest> {
-            fieldAs "SchemaVersion" (fun (m: ReleaseCapsuleManifest) -> m.SchemaVersion) { withSchema Schema.``int`` }
+            fieldAs "SchemaVersion" (fun (m: ReleaseCapsuleManifest) -> m.SchemaVersion) { withSchema Schema.int }
             fieldAs "ProductVersion" (fun (m: ReleaseCapsuleManifest) -> m.ProductVersion) { withSchema Schema.text }
             fieldAs "SourceRevision" (fun (m: ReleaseCapsuleManifest) -> m.SourceRevision) { withSchema Schema.text }
             fieldAs "CaptureToolVersion" (fun (m: ReleaseCapsuleManifest) -> m.CaptureToolVersion) { withSchema Schema.text }
@@ -113,9 +113,51 @@ module ReleaseSchema =
 
     let releaseHistoryIndex : Schema<ReleaseHistoryIndex> =
         schema<ReleaseHistoryIndex> {
-            fieldAs "SchemaVersion" (fun (i: ReleaseHistoryIndex) -> i.SchemaVersion) { withSchema Schema.``int`` }
+            fieldAs "SchemaVersion" (fun (i: ReleaseHistoryIndex) -> i.SchemaVersion) { withSchema Schema.int }
             fieldAs "CurrentVersion" (fun (i: ReleaseHistoryIndex) -> i.CurrentVersion) { withSchema Schema.text }
             fieldAs "Entries" (fun (i: ReleaseHistoryIndex) -> i.Entries) { withSchema (Schema.listWith releaseHistoryEntry) }
             construct (fun schemaVersion currentVersion entries ->
                 { SchemaVersion = schemaVersion; CurrentVersion = currentVersion; Entries = entries })
+        }
+
+    /// Not part of the persisted capsule itself -- the report `capture`/`inspect` write alongside
+    /// it (`Cli/ReleaseCapture.fs`), so has no compatibility-boundary obligation of its own.
+    let releaseCaptureCounts : Schema<ReleaseCaptureCounts> =
+        schema<ReleaseCaptureCounts> {
+            fieldAs "Entities" (fun (c: ReleaseCaptureCounts) -> c.Entities) { withSchema Schema.int }
+            fieldAs "Members" (fun (c: ReleaseCaptureCounts) -> c.Members) { withSchema Schema.int }
+            fieldAs "Examples" (fun (c: ReleaseCaptureCounts) -> c.Examples) { withSchema Schema.int }
+            fieldAs "DocumentationNodes" (fun (c: ReleaseCaptureCounts) -> c.DocumentationNodes) { withSchema Schema.int }
+            fieldAs "Pages" (fun (c: ReleaseCaptureCounts) -> c.Pages) { withSchema Schema.int }
+            fieldAs "CodeBlocks" (fun (c: ReleaseCaptureCounts) -> c.CodeBlocks) { withSchema Schema.int }
+            fieldAs "Tooltips" (fun (c: ReleaseCaptureCounts) -> c.Tooltips) { withSchema Schema.int }
+            fieldAs "Diagnostics" (fun (c: ReleaseCaptureCounts) -> c.Diagnostics) { withSchema Schema.int }
+            fieldAs "Assets" (fun (c: ReleaseCaptureCounts) -> c.Assets) { withSchema Schema.int }
+            construct (fun entities members examples documentationNodes pages codeBlocks tooltips diagnostics assets ->
+                { Entities = entities
+                  Members = members
+                  Examples = examples
+                  DocumentationNodes = documentationNodes
+                  Pages = pages
+                  CodeBlocks = codeBlocks
+                  Tooltips = tooltips
+                  Diagnostics = diagnostics
+                  Assets = assets })
+        }
+
+    let releaseCapsuleReport : Schema<ReleaseCapsuleReport> =
+        schema<ReleaseCapsuleReport> {
+            fieldAs "Path" (fun (r: ReleaseCapsuleReport) -> r.Path) { withSchema Schema.text }
+            fieldAs "Sha256" (fun (r: ReleaseCapsuleReport) -> r.Sha256) { withSchema Schema.text }
+            fieldAs "CompressedSize" (fun (r: ReleaseCapsuleReport) -> r.CompressedSize) { withSchema Schema.int64 }
+            fieldAs "UncompressedSize" (fun (r: ReleaseCapsuleReport) -> r.UncompressedSize) { withSchema Schema.int64 }
+            fieldAs "Manifest" (fun (r: ReleaseCapsuleReport) -> r.Manifest) { withSchema releaseCapsuleManifest }
+            fieldAs "Counts" (fun (r: ReleaseCapsuleReport) -> r.Counts) { withSchema releaseCaptureCounts }
+            construct (fun path sha256 compressedSize uncompressedSize manifest counts ->
+                { Path = path
+                  Sha256 = sha256
+                  CompressedSize = compressedSize
+                  UncompressedSize = uncompressedSize
+                  Manifest = manifest
+                  Counts = counts })
         }

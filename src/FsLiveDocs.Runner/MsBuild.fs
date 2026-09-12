@@ -2,10 +2,10 @@ namespace FsLiveDocs.Runner
 
 open System
 open System.IO
+open System.Text.Json.Nodes
 open Axial
 open Axial.Process
 open FsLiveDocs.Core.Effects
-open Newtonsoft.Json.Linq
 
 /// Runs `dotnet msbuild` for one project and parses its JSON property output. Hides process
 /// execution (Axial.Process) behind one synchronous call that raises on failure, matching the
@@ -28,13 +28,13 @@ module MsBuild =
     /// since MSBuild reports errors on either stream depending on the failure kind. This is the
     /// one place in the module that needs the raw ProcessError shape (to combine both streams),
     /// so it matches on it directly rather than going through Run.orRaise's single-message form.
-    let evaluate (fullPath: string) (arguments: string list) : JObject =
+    let evaluate (fullPath: string) (arguments: string list) : JsonObject =
         let specification =
             Process.commandArgs "dotnet" ([ "msbuild"; fullPath ] @ arguments @ [ "-nologo" ])
             |> Process.workingDirectory (Path.GetDirectoryName(fullPath))
             |> Process.capture
         match specification |> Flow.run LiveEnvironment.instance with
-        | Exit.Success result -> JObject.Parse(result.StdOut)
+        | Exit.Success result -> JsonNode.Parse(result.StdOut).AsObject()
         | Exit.Failure(Cause.Fail(ProcessError.StageFailed stageFailure)) ->
             let detail = (stageFailure.Result.StdErr + Environment.NewLine + stageFailure.Result.StdOut).Trim()
             failure fullPath detail

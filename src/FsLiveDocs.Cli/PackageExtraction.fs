@@ -4,12 +4,17 @@ open System
 open System.IO
 open Axial
 open Axial.FileSystem
+open Reified
 open FsLiveDocs.Core
 open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
 open FsLiveDocs.Runner
 
 /// Extracts and caches the compiler-derived package model.
 module internal PackageExtraction =
+
+    let private packageCodec = Json.compile ApiSchema.packageModel
+    let private diagnosticsCodec = Json.compile ApiSchema.apiDiagnostics
 
     /// <summary>Names of every XML example some documentation page transcludes.</summary>
     /// <remarks>
@@ -268,20 +273,16 @@ module internal PackageExtraction =
         match Run.orRaise FileSystemError.describe $"Could not read cached package {cachePath}" cacheWork with
         | Some(packageText, diagnosticsText) ->
             reportProgress "Extracting API documentation" projectPaths.Length projectPaths.Length
-            let package = Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(packageText, FsLiveDocs.Core.Serialization.jsonSettings)
-            if isNull (box package) then invalidOp $"Invalid cached package model: {cachePath}"
+            let package = Json.deserialize packageCodec packageText
             let diagnostics =
                 match diagnosticsText with
-                | Some text ->
-                    Newtonsoft.Json.JsonConvert.DeserializeObject<ApiDiagnostic list>(text, FsLiveDocs.Core.Serialization.jsonSettings)
-                    |> Option.ofObj
-                    |> Option.defaultValue []
+                | Some text -> Json.deserialize diagnosticsCodec text
                 | None -> []
             package, diagnostics, inputHash
         | None ->
             let package, diagnostics = extractWithProgress reportProgress prelude projectPaths |> Async.RunSynchronously
-            writeCurrentCache cachePath "*.package.json" (Newtonsoft.Json.JsonConvert.SerializeObject(package, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
-            writeCurrentCache diagnosticsPath "*.diagnostics.json" (Newtonsoft.Json.JsonConvert.SerializeObject(diagnostics, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
+            writeCurrentCache cachePath "*.package.json" (Json.serialize packageCodec package)
+            writeCurrentCache diagnosticsPath "*.diagnostics.json" (Json.serialize diagnosticsCodec diagnostics)
             package, diagnostics, inputHash
 
     let extractCached prelude projectPaths =

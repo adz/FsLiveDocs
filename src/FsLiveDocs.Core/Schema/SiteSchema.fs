@@ -23,7 +23,7 @@ module SiteSchema =
             fieldAs "LogoText" (fun (s: SiteConfig) -> s.LogoText) { withSchema (Schema.option Schema.text) }
             fieldAs "LogoPath" (fun (s: SiteConfig) -> s.LogoPath) { withSchema (Schema.option Schema.text) }
             fieldAs "LogoDarkPath" (fun (s: SiteConfig) -> s.LogoDarkPath) { withSchema (Schema.option Schema.text) }
-            fieldAs "ShowSiteName" (fun (s: SiteConfig) -> s.ShowSiteName) { withSchema (Schema.option Schema.``bool``) }
+            fieldAs "ShowSiteName" (fun (s: SiteConfig) -> s.ShowSiteName) { withSchema (Schema.option Schema.bool) }
             fieldAs "Stylesheet" (fun (s: SiteConfig) -> s.Stylesheet) { withSchema (Schema.option Schema.text) }
             fieldAs "Themes" (fun (s: SiteConfig) -> s.Themes) { withSchema (Schema.option (Schema.listWith Schema.text)) }
             fieldAs "Navigation" (fun (s: SiteConfig) -> s.Navigation) { withSchema (Schema.option (Schema.listWith navigationItem)) }

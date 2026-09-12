@@ -6,8 +6,8 @@ open System.IO
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Text
+open System.Text.Json.Nodes
 open FsLiveDocs.Core
-open Newtonsoft.Json.Linq
 
 type EvaluatedProject = {
     ProjectPath: string
@@ -42,10 +42,20 @@ and CompilationSourceRange = { Block: DocumentationBlock; StartLine: int; EndLin
 /// Evaluates the real MSBuild project and checks canonical documentation compilation units with FCS.
 module DocumentationCompiler =
 
-    let private readString (item: JToken) name =
-        match item.[name] with
+    /// The property named `name` on `node`, or `None` if `node` is not an object or has no such
+    /// property -- the same permissive lookup `JObject.Item` gave Newtonsoft-based callers.
+    let private tryProperty (node: JsonNode) (name: string) : JsonNode option =
+        match node with
         | null -> None
-        | value -> value.Value<string>() |> Option.ofObj |> Option.filter (String.IsNullOrWhiteSpace >> not)
+        | :? JsonObject as obj ->
+            let mutable value = Unchecked.defaultof<JsonNode>
+            if obj.TryGetPropertyValue(name, &value) then Option.ofObj value else None
+        | _ -> None
+
+    let private readString (item: JsonNode) name =
+        tryProperty item name
+        |> Option.map (fun value -> value.GetValue<string>())
+        |> Option.filter (String.IsNullOrWhiteSpace >> not)
 
     /// Runs an inner-build ResolveReferences target so package, project, framework, and SDK references all come from MSBuild evaluation.
     /// For a cross-targeting project, the first framework declared in TargetFrameworks is the documentation context.
@@ -57,9 +67,9 @@ module DocumentationCompiler =
         // framework before asking MSBuild for compiler references.
         let dimensions =
             MsBuild.evaluate fullPath [ "-getProperty:TargetFramework,TargetFrameworks" ]
-        let dimensionProperties = dimensions.["Properties"]
+        let dimensionProperty name = tryProperty dimensions "Properties" |> Option.bind (fun properties -> readString properties name)
         let declaredFrameworks =
-            match readString dimensionProperties "TargetFramework", readString dimensionProperties "TargetFrameworks" with
+            match dimensionProperty "TargetFramework", dimensionProperty "TargetFrameworks" with
             | Some framework, _ -> [ framework ]
             | None, Some frameworks ->
                 frameworks.Split(';', StringSplitOptions.RemoveEmptyEntries ||| StringSplitOptions.TrimEntries) |> Array.toList
@@ -72,9 +82,9 @@ module DocumentationCompiler =
         | _ -> ()
         let frameworkArgument =
             selectedFramework |> Option.map (fun framework -> $"-property:TargetFramework={framework}") |> Option.toList
-        let targetExists (json: JToken) =
-            json.["Properties"]
-            |> fun properties -> readString properties "TargetPath"
+        let targetExists (json: JsonObject) =
+            tryProperty json "Properties"
+            |> Option.bind (fun properties -> readString properties "TargetPath")
             |> Option.exists File.Exists
         let defaultBuild =
             MsBuild.evaluate fullPath (frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
@@ -93,11 +103,10 @@ module DocumentationCompiler =
                  @ [ "-target:ResolveReferences"
                      "-getProperty:TargetFramework,TargetPath,LangVersion,DefineConstants,NoWarn,WarningsAsErrors"
                      "-getItem:ReferencePath" ])
-        let properties = json.["Properties"]
-        let property name = readString properties name
+        let property name = tryProperty json "Properties" |> Option.bind (fun properties -> readString properties name)
         let references =
-            match json.SelectToken("Items.ReferencePath") with
-            | :? JArray as items ->
+            match tryProperty json "Items" |> Option.bind (fun items -> tryProperty items "ReferencePath") with
+            | Some(:? JsonArray as items) ->
                 items
                 |> Seq.choose (fun item -> readString item "FullPath" |> Option.orElseWith (fun () -> readString item "Identity"))
                 |> Seq.filter File.Exists

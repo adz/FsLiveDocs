@@ -7,27 +7,45 @@ open Axial
 open Axial.FileSystem
 open Axial.HttpClient
 open Axial.PlatformService
+open Reified
+open Reified.SchemaDSL
 open FsLiveDocs.Core
 open FsLiveDocs.Core.Effects
-open Newtonsoft.Json
 
-[<CLIMutable>]
+/// The parts of a GitHub API release/asset this tool reads. Field names are pinned to GitHub's
+/// own snake_case JSON, not FsLiveDocs' PascalCase convention -- this is an external API
+/// contract, not a persisted FsLiveDocs model.
 type internal GitHubReleaseAsset =
-    { [<JsonProperty("name")>]
-      Name: string
-      [<JsonProperty("browser_download_url")>]
+    { Name: string
       BrowserDownloadUrl: string
-      [<JsonProperty("digest")>]
-      Digest: string }
+      /// Absent for assets uploaded before GitHub started computing digests; GitHub's response
+      /// simply omits the field rather than sending it null.
+      Digest: string option }
 
-[<CLIMutable>]
 type internal GitHubRelease =
-    { [<JsonProperty("tag_name")>]
-      TagName: string
-      [<JsonProperty("draft")>]
+    { TagName: string
       Draft: bool
-      [<JsonProperty("assets")>]
       Assets: GitHubReleaseAsset array }
+
+module internal GitHubReleaseSchema =
+    let private asset : Schema<GitHubReleaseAsset> =
+        schema<GitHubReleaseAsset> {
+            fieldAs "name" (fun (a: GitHubReleaseAsset) -> a.Name) { withSchema Schema.text }
+            fieldAs "browser_download_url" (fun (a: GitHubReleaseAsset) -> a.BrowserDownloadUrl) { withSchema Schema.text }
+            fieldAs "digest" (fun (a: GitHubReleaseAsset) -> a.Digest) { withSchema (Schema.option Schema.text) }
+            construct (fun name browserDownloadUrl digest ->
+                { Name = name; BrowserDownloadUrl = browserDownloadUrl; Digest = digest })
+        }
+
+    let releases : Schema<GitHubRelease list> =
+        Schema.listWith (
+            schema<GitHubRelease> {
+                fieldAs "tag_name" (fun (r: GitHubRelease) -> r.TagName) { withSchema Schema.text }
+                fieldAs "draft" (fun (r: GitHubRelease) -> r.Draft) { withSchema Schema.bool }
+                fieldAs "assets" (fun (r: GitHubRelease) -> r.Assets |> Array.toList) { withSchema (Schema.listWith asset) }
+                construct (fun tagName draft assets -> { TagName = tagName; Draft = draft; Assets = List.toArray assets })
+            }
+        )
 
 module ReleaseHistoryCommands =
 
@@ -81,7 +99,10 @@ module ReleaseHistoryCommands =
         )
         |> Array.toList
 
-    let private requiredSha (digest: string) =
+    let private githubReleasesCodec = Json.compile GitHubReleaseSchema.releases
+
+    let private requiredSha (digest: string option) =
+        let digest = digest |> Option.defaultValue ""
         if String.IsNullOrWhiteSpace digest || not (digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)) then
             invalidOp "A LiveDocs release asset is missing its GitHub SHA-256 digest."
         let value = digest.Substring("sha256:".Length).ToLowerInvariant()
@@ -111,13 +132,12 @@ module ReleaseHistoryCommands =
                             |> Request.accept "application/vnd.github+json"
                         let request = match token with Some value -> request |> Request.bearer value | None -> request
                         let! text = Http.text request
-                        let releases = JsonConvert.DeserializeObject<GitHubRelease array>(text)
-                        let releases = if isNull releases then [||] else releases
-                        let combined = Array.append accumulated releases
+                        let releases = Json.deserialize githubReleasesCodec text
+                        let combined = accumulated @ releases
                         if releases.Length = 100 then return! load (page + 1) combined else return combined
                     }
 
-                return! load 1 [||]
+                return! load 1 []
             }
 
         let releases =
@@ -127,15 +147,13 @@ module ReleaseHistoryCommands =
             | Exit.Failure cause -> invalidOp $"Could not list GitHub releases for {repository}: {cause}"
 
         releases
-        |> Array.filter (fun release -> not release.Draft && not (String.IsNullOrWhiteSpace release.TagName))
-        |> Array.choose (fun release ->
+        |> List.filter (fun release -> not release.Draft && not (String.IsNullOrWhiteSpace release.TagName))
+        |> List.choose (fun release ->
             let version = if release.TagName.StartsWith 'v' then release.TagName.Substring 1 else release.TagName
             try
                 ReleaseCapsule.compareVersions version version |> ignore
                 let expectedName = $"{repositoryName}-{version}-livedocs.zip"
                 release.Assets
-                |> Option.ofObj
-                |> Option.defaultValue [||]
                 |> Array.tryFind (fun asset -> asset.Name.Equals(expectedName, StringComparison.OrdinalIgnoreCase))
                 |> Option.map (fun asset ->
                     ({ Version = version
@@ -143,7 +161,6 @@ module ReleaseHistoryCommands =
                        CapsuleUrl = Some asset.BrowserDownloadUrl
                        CapsuleSha256 = requiredSha asset.Digest }: ReleaseHistoryEntry))
             with :? InvalidOperationException -> None)
-        |> Array.toList
 
     let private discoveredEntries source =
         match source with

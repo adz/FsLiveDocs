@@ -102,7 +102,22 @@ module ApiSchema =
 
     let apiModelArtifact : Schema<ApiModelArtifact> =
         schema<ApiModelArtifact> {
-            fieldAs "SchemaVersion" (fun (a: ApiModelArtifact) -> a.SchemaVersion) { withSchema Schema.``int`` }
+            fieldAs "SchemaVersion" (fun (a: ApiModelArtifact) -> a.SchemaVersion) { withSchema Schema.int }
             fieldAs "Package" (fun (a: ApiModelArtifact) -> a.Package) { withSchema packageModel }
             construct (fun schemaVersion package -> { SchemaVersion = schemaVersion; Package = package })
         }
+
+    /// Not part of any persisted release artifact -- used only for the extraction tool's own
+    /// local package/diagnostics cache (`Cli/PackageExtraction.fs`).
+    let apiDiagnostic : Schema<ApiDiagnostic> =
+        schema<ApiDiagnostic> {
+            fieldAs "Code" (fun (d: ApiDiagnostic) -> d.Code) { withSchema Schema.text }
+            fieldAs "Symbol" (fun (d: ApiDiagnostic) -> d.Symbol) { withSchema Schema.text }
+            fieldAs "Location" (fun (d: ApiDiagnostic) -> d.Location) { withSchema sourceLink }
+            fieldAs "Message" (fun (d: ApiDiagnostic) -> d.Message) { withSchema Schema.text }
+            fieldAs "Remedy" (fun (d: ApiDiagnostic) -> d.Remedy) { withSchema Schema.text }
+            construct (fun code symbol location message remedy ->
+                { Code = code; Symbol = symbol; Location = location; Message = message; Remedy = remedy })
+        }
+
+    let apiDiagnostics : Schema<ApiDiagnostic list> = Schema.listWith apiDiagnostic

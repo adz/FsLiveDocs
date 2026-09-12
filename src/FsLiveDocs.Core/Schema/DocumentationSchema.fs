@@ -47,7 +47,7 @@ module DocumentationSchema =
     let sourceLink : Schema<SourceLink> =
         schema<SourceLink> {
             fieldAs "File" (fun (s: SourceLink) -> s.File) { withSchema Schema.text }
-            fieldAs "Line" (fun (s: SourceLink) -> s.Line) { withSchema Schema.``int`` }
+            fieldAs "Line" (fun (s: SourceLink) -> s.Line) { withSchema Schema.int }
             construct (fun file line -> { File = file; Line = line })
         }
 
@@ -57,7 +57,7 @@ module DocumentationSchema =
             fieldAs "Content" (fun (e: ExampleModel) -> e.Content) { withSchema Schema.text }
             fieldAs "ExpectedOutput" (fun (e: ExampleModel) -> e.ExpectedOutput) { withSchema (Schema.option Schema.text) }
             fieldAs "Scenario" (fun (e: ExampleModel) -> e.Scenario) { withSchema (Schema.option Schema.text) }
-            fieldAs "IsSnapshotTest" (fun (e: ExampleModel) -> e.IsSnapshotTest) { withSchema Schema.``bool`` }
+            fieldAs "IsSnapshotTest" (fun (e: ExampleModel) -> e.IsSnapshotTest) { withSchema Schema.bool }
             fieldAs "NoCheckReason" (fun (e: ExampleModel) -> e.NoCheckReason) { withSchema (Schema.option Schema.text) }
             construct (fun name content expectedOutput scenario isSnapshotTest noCheckReason ->
                 { Name = name

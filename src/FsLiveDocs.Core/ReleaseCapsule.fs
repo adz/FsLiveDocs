@@ -6,8 +6,7 @@ open System.IO.Compression
 open System.Security.Cryptography
 open System.Text
 open System.Net.Http
-open Newtonsoft.Json
-open Newtonsoft.Json.Serialization
+open System.Text.Json
 open Reified
 open FsLiveDocs.Core.Schema
 
@@ -78,48 +77,44 @@ module ReleaseCapsule =
               Assets: ReleaseAsset list
               Site: SiteConfig }
 
+        let private contentMetadataCodec = Json.compile SiteSchema.contentMetadata
+        let private releaseAssetsCodec = Json.compile (Schema.listWith ReleaseSchema.releaseAsset)
+        let private siteConfigCodec = Json.compile SiteSchema.siteConfig
+
+        /// Case-insensitive lookup, matching the property-name tolerance the pre-Reified
+        /// Newtonsoft-based reader had for this legacy format.
+        let private required (objectValue: JsonElement) name =
+            objectValue.EnumerateObject()
+            |> Seq.tryFind (fun property -> property.NameEquals(name: string) || String.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            |> Option.map (fun property -> property.Value)
+            |> Option.defaultWith (fun () -> invalidOp $"Content schema 1 is missing required field {name}.")
+
         let deserialize (bytes: byte array) =
-            let root = Newtonsoft.Json.Linq.JObject.Parse(Encoding.UTF8.GetString bytes)
+            use document = JsonDocument.Parse(bytes)
+            let root = document.RootElement
 
-            let required (objectValue: Newtonsoft.Json.Linq.JObject) name =
-                match objectValue.GetValue(name, StringComparison.OrdinalIgnoreCase) with
-                | null -> invalidOp $"Content schema 1 is missing required field {name}."
-                | value -> value
-
-            let serializer = JsonSerializer.Create(Serialization.jsonSettings)
-            let schema = required root "SchemaVersion" |> fun token -> token.ToObject<int>()
+            let schema = (required root "SchemaVersion").GetInt32()
 
             if schema <> 1 then
                 invalidOp $"Content schema 1 payload declares schema {schema}."
 
             let pages =
-                match required root "Pages" with
-                | :? Newtonsoft.Json.Linq.JArray as values ->
-                    values
-                    |> Seq.map (fun token ->
-                        let page = token :?> Newtonsoft.Json.Linq.JObject
-
-                        { SourcePath = required page "SourcePath" |> fun value -> value.ToObject<string>()
-                          Metadata =
-                            required page "Metadata"
-                            |> fun value -> value.ToObject<ContentMetadata>(serializer)
-                          Markdown = required page "Markdown" |> fun value -> value.ToObject<string>() })
+                match (required root "Pages").ValueKind with
+                | JsonValueKind.Array ->
+                    (required root "Pages").EnumerateArray()
+                    |> Seq.map (fun page ->
+                        { SourcePath = (required page "SourcePath").GetString()
+                          Metadata = Json.deserialize contentMetadataCodec ((required page "Metadata").GetRawText())
+                          Markdown = (required page "Markdown").GetString() })
                     |> Seq.toList
                 | _ -> invalidOp "Content schema 1 Pages must be an array."
 
-            let assets =
-                required root "Assets"
-                |> fun value -> value.ToObject<ReleaseAsset list>(serializer)
-
-            let site =
-                required root "Site" |> fun value -> value.ToObject<SiteConfig>(serializer)
-
-            if isNull (box site) then
-                invalidOp "Content schema 1 contains an invalid Site object."
+            let assets = Json.deserialize releaseAssetsCodec ((required root "Assets").GetRawText())
+            let site = Json.deserialize siteConfigCodec ((required root "Site").GetRawText())
 
             { SchemaVersion = schema
-              Pages = if isNull (box pages) then [] else pages
-              Assets = if isNull (box assets) then [] else assets
+              Pages = pages
+              Assets = assets
               Site = site }
 
         /// Deterministically lifts a schema-1 content artifact to schema 2: one implicit default
@@ -652,13 +647,17 @@ module ReleaseCapsule =
             Counts = captureCounts api semantic content
         }
 
-    let private frontMatterSettings =
-        let settings = JsonSerializerSettings(
-            ContractResolver = CamelCasePropertyNamesContractResolver(),
-            NullValueHandling = NullValueHandling.Ignore)
-        for converter in Serialization.jsonSettings.Converters do
-            settings.Converters.Add(converter)
-        settings
+    /// Markdown frontmatter for materialized pages: camelCase, omitting absent fields -- a
+    /// human/tool-facing rendering, not part of the capsule wire format `ContentMetadata` itself
+    /// is schema-pinned to, so it is built directly rather than through a Reified codec.
+    let private frontMatterJson (metadata: ContentMetadata) =
+        let node = Nodes.JsonObject()
+        node["title"] <- Nodes.JsonValue.Create metadata.Title
+        metadata.Type |> Option.iter (fun value -> node["type"] <- Nodes.JsonValue.Create value)
+        metadata.Project |> Option.iter (fun value -> node["project"] <- Nodes.JsonValue.Create value)
+        metadata.TargetFramework |> Option.iter (fun value -> node["targetFramework"] <- Nodes.JsonValue.Create value)
+        metadata.Platform |> Option.iter (fun value -> node["platform"] <- Nodes.JsonValue.Create value)
+        node.ToJsonString(JsonSerializerOptions(WriteIndented = true))
 
     /// Materializes renderer-neutral content under a validated destination.
     /// Pages and assets are laid out under each set's route prefix, so a history render can scan
@@ -695,7 +694,7 @@ module ReleaseCapsule =
 
             let output = safeCombine (routePrefix + sourceRelative)
             Directory.CreateDirectory(Path.GetDirectoryName output) |> ignore
-            let frontMatter = JsonConvert.SerializeObject(page.Metadata, Formatting.Indented, frontMatterSettings)
+            let frontMatter = frontMatterJson page.Metadata
             File.WriteAllText(output, "---\n" + frontMatter + "\n---\n" + page.Markdown)
         for asset in content.Assets do
             let relative = normalizedEntryPath asset.Path

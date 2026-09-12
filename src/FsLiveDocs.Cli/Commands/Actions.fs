@@ -6,8 +6,10 @@ open Argu
 open Spectre.Console
 open Axial
 open Axial.FileSystem
+open Reified
 open FsLiveDocs.Core
 open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
 open FsLiveDocs.Runner
 open FsLiveDocs.Renderer
 open Microsoft.AspNetCore.Builder
@@ -20,6 +22,10 @@ open Microsoft.Extensions.Logging
 /// CLI command actions: the implementation behind each "livedocs" subcommand.
 /// Program.fs stays a thin entry point that parses arguments and dispatches here.
 module Actions =
+
+    let private packageCodec = Json.compile ApiSchema.packageModel
+    let private apiModelArtifactCodec = Json.compile ApiSchema.apiModelArtifact
+    let private semanticArtifactCodec = Json.compile SemanticSchema.semanticDocumentationArtifact
 
     let private configuredDocsSets projectPaths =
         Workspace.loadDocsSetConfigs ()
@@ -444,11 +450,7 @@ module Actions =
                 let historical =
                     historyFiles
                     |> List.map (fun (path, text) ->
-                        let historicalPackage =
-                            Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(
-                                text,
-                                Serialization.jsonSettings
-                            )
+                        let historicalPackage = Json.deserialize packageCodec text
 
                         let historicalPrepared =
                             DocumentationSets.prepareCurrent true sets historicalPackage semanticArtifact ""

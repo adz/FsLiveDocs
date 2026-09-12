@@ -28,7 +28,7 @@ module HistorySchema =
 
     let historyManifest : Schema<HistoryManifest> =
         schema<HistoryManifest> {
-            fieldAs "SchemaVersion" (fun (m: HistoryManifest) -> m.SchemaVersion) { withSchema Schema.``int`` }
+            fieldAs "SchemaVersion" (fun (m: HistoryManifest) -> m.SchemaVersion) { withSchema Schema.int }
             fieldAs "CurrentVersion" (fun (m: HistoryManifest) -> m.CurrentVersion) { withSchema Schema.text }
             fieldAs "Entries" (fun (m: HistoryManifest) -> m.Entries) { withSchema (Schema.listWith historyEntry) }
             construct (fun schemaVersion currentVersion entries ->

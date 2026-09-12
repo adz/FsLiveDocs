@@ -39,7 +39,7 @@ module SemanticSchema =
         schema<SemanticToken> {
             fieldAs "Text" (fun (t: SemanticToken) -> t.Text) { withSchema Schema.text }
             fieldAs "Kind" (fun (t: SemanticToken) -> t.Kind) { withSchema semanticTokenKind }
-            fieldAs "Tooltip" (fun (t: SemanticToken) -> t.Tooltip) { withSchema (Schema.option Schema.``int``) }
+            fieldAs "Tooltip" (fun (t: SemanticToken) -> t.Tooltip) { withSchema (Schema.option Schema.int) }
             construct (fun text kind tooltip -> { Text = text; Kind = kind; Tooltip = tooltip })
         }
 
@@ -70,10 +70,10 @@ module SemanticSchema =
         schema<SemanticDiagnostic> {
             fieldAs "Severity" (fun (d: SemanticDiagnostic) -> d.Severity) { withSchema semanticDiagnosticSeverity }
             fieldAs "Message" (fun (d: SemanticDiagnostic) -> d.Message) { withSchema Schema.text }
-            fieldAs "StartLine" (fun (d: SemanticDiagnostic) -> d.StartLine) { withSchema Schema.``int`` }
-            fieldAs "StartColumn" (fun (d: SemanticDiagnostic) -> d.StartColumn) { withSchema Schema.``int`` }
-            fieldAs "EndLine" (fun (d: SemanticDiagnostic) -> d.EndLine) { withSchema Schema.``int`` }
-            fieldAs "EndColumn" (fun (d: SemanticDiagnostic) -> d.EndColumn) { withSchema Schema.``int`` }
+            fieldAs "StartLine" (fun (d: SemanticDiagnostic) -> d.StartLine) { withSchema Schema.int }
+            fieldAs "StartColumn" (fun (d: SemanticDiagnostic) -> d.StartColumn) { withSchema Schema.int }
+            fieldAs "EndLine" (fun (d: SemanticDiagnostic) -> d.EndLine) { withSchema Schema.int }
+            fieldAs "EndColumn" (fun (d: SemanticDiagnostic) -> d.EndColumn) { withSchema Schema.int }
             construct (fun severity message startLine startColumn endLine endColumn ->
                 { Severity = severity
                   Message = message
@@ -109,7 +109,7 @@ module SemanticSchema =
 
     let semanticDocumentationArtifact : Schema<SemanticDocumentationArtifact> =
         schema<SemanticDocumentationArtifact> {
-            fieldAs "SchemaVersion" (fun (a: SemanticDocumentationArtifact) -> a.SchemaVersion) { withSchema Schema.``int`` }
+            fieldAs "SchemaVersion" (fun (a: SemanticDocumentationArtifact) -> a.SchemaVersion) { withSchema Schema.int }
             fieldAs "Prelude" (fun (a: SemanticDocumentationArtifact) -> a.Prelude) { withSchema Schema.text }
             fieldAs "Pages" (fun (a: SemanticDocumentationArtifact) -> a.Pages) { withSchema (Schema.listWith semanticPage) }
             construct (fun schemaVersion prelude pages -> { SchemaVersion = schemaVersion; Prelude = prelude; Pages = pages })

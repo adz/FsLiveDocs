@@ -6,14 +6,18 @@ open System.Text.RegularExpressions
 open Giraffe.ViewEngine
 open Axial
 open Axial.FileSystem
+open Reified
 open FsLiveDocs.Core
 open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
 open FsLiveDocs.Renderer.Rendering
 
 /// <summary>The high-level site assembly engine: decides which pages exist and where they go.
 /// Page-by-page HTML templating is a deep module of its own -- see
 /// <see cref="T:FsLiveDocs.Renderer.Rendering.PageRenderer"/>.</summary>
 module SiteBuilder =
+
+    let private packageCodec = Json.compile ApiSchema.packageModel
 
     /// <summary>Shared inputs for rendering a documentation page.</summary>
     type SiteRenderContext = PageRenderer.SiteRenderContext
@@ -1074,7 +1078,7 @@ module SiteBuilder =
 
         for vJson, json in historyFiles do
             let v = Path.GetFileNameWithoutExtension(vJson)
-            let package = Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(json, FsLiveDocs.Core.Serialization.jsonSettings)
+            let package = Json.deserialize packageCodec json
             let vDir = Path.Combine(outputDir, "history", v)
             build {
                 Pages = pages

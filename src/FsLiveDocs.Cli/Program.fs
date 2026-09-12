@@ -6,8 +6,10 @@ open Argu
 open Spectre.Console
 open Axial
 open Axial.FileSystem
+open Reified
 open FsLiveDocs.Core
 open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
 open FsLiveDocs.Runner
 open FsLiveDocs.Renderer
 open Microsoft.AspNetCore.Builder
@@ -18,6 +20,9 @@ open Microsoft.Extensions.Logging
 
 
 module Program =
+
+    let private apiModelArtifactCodec = Json.compile ApiSchema.apiModelArtifact
+    let private semanticArtifactCodec = Json.compile SemanticSchema.semanticDocumentationArtifact
 
     /// <summary>CLI entry point.</summary>
     [<EntryPoint>]
@@ -167,11 +172,11 @@ module Program =
                         let version = results.GetResult(Arguments.Version, defaultValue = packageRaw.Version)
                         let package = { packageRaw with Version = version }
                         let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
-                        let json = Newtonsoft.Json.JsonConvert.SerializeObject(artifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings)
+                        let json = Json.serialize apiModelArtifactCodec artifact
                         let fileName = results.GetResult(Output, defaultValue = $".livedocs/models/{version}.json")
                         let outputDirectory = Path.GetDirectoryName(fileName)
                         let semanticArtifact, _ = Actions.createSemanticArtifact projectPaths package
-                        let semanticJson = Newtonsoft.Json.JsonConvert.SerializeObject(semanticArtifact, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings)
+                        let semanticJson = Json.serialize semanticArtifactCodec semanticArtifact
                         let semanticDirectory = Path.GetDirectoryName(fileName) |> Option.ofObj |> Option.filter (String.IsNullOrWhiteSpace >> not) |> Option.defaultValue "."
                         let outputStem = Path.GetFileNameWithoutExtension(fileName)
                         let semanticStem = if outputStem.EndsWith(".api", StringComparison.OrdinalIgnoreCase) then outputStem.Substring(0, outputStem.Length - 4) else outputStem

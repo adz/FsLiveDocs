@@ -4,12 +4,17 @@ open System
 open System.IO
 open Axial
 open Axial.FileSystem
+open Reified
 open FsLiveDocs.Core
 open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
 open FsLiveDocs.Runner
 
 /// Discovers and compiler-checks canonical documentation pages.
 module internal DocAnalysis =
+
+    let private packageCodec = Json.compile ApiSchema.packageModel
+    let private semanticArtifactCodec = Json.compile SemanticSchema.semanticDocumentationArtifact
 
     let private sha256Text (value: string) =
         value
@@ -256,7 +261,7 @@ module internal DocAnalysis =
         =
         let resolvedProjects = projectPaths |> List.map Path.GetFullPath
         let blocks = pages |> List.collect _.Blocks
-        let packageFingerprint = Newtonsoft.Json.JsonConvert.SerializeObject(package, FsLiveDocs.Core.Serialization.jsonSettings)
+        let packageFingerprint = Json.serialize packageCodec package
         let contextFingerprint =
             [ yield $"semantic-schema:{History.SemanticSchemaVersion}"
               yield $"compiler-mvid:{typeof<EvaluatedProject>.Assembly.ManifestModule.ModuleVersionId}"
@@ -278,15 +283,8 @@ module internal DocAnalysis =
                     let! exists = FileSystem.fileExists cachePath
                     if exists then
                         let! text = FileSystem.readAllText cachePath
-                        let artifact =
-                            Newtonsoft.Json.JsonConvert.DeserializeObject<SemanticDocumentationArtifact>(
-                                text,
-                                FsLiveDocs.Core.Serialization.jsonSettings)
-                        return
-                            if isNull (box artifact) || artifact.SchemaVersion <> History.SemanticSchemaVersion then
-                                None
-                            else
-                                Some artifact
+                        let artifact = Json.deserialize semanticArtifactCodec text
+                        return if artifact.SchemaVersion <> History.SemanticSchemaVersion then None else Some artifact
                     else
                         return None
                 }
@@ -386,11 +384,7 @@ module internal DocAnalysis =
         | None ->
             let artifact = SemanticExtractor.artifact analysis.Results
             let directory = Path.GetDirectoryName analysis.CachePath
-            let serialized =
-                Newtonsoft.Json.JsonConvert.SerializeObject(
-                    artifact,
-                    Newtonsoft.Json.Formatting.Indented,
-                    Serialization.jsonSettings)
+            let serialized = Json.serialize semanticArtifactCodec artifact
 
             let work =
                 flow {
