@@ -2,10 +2,15 @@ namespace FsLiveDocs.Cli
 
 open System
 open System.IO
+open System.Text.Json
+open System.Text.Json.Nodes
 open Axial
 open Axial.FileSystem
+open Reified
+open Reified.SchemaDSL
 open FsLiveDocs.Core
 open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
 
 /// Repository-local release publication settings, read from the top-level `history`
 /// object in `.livedocs/config.json`. These configure how CI locates and names
@@ -21,6 +26,58 @@ type internal HistoryConfig = {
 module internal Workspace =
 
     let emptyHistoryConfig = { UrlPattern = None; Discover = None }
+
+    /// `.livedocs/config.json` is a free-form document: `projects`, `docsSets`, and `history` are
+    /// read here, but every other top-level field belongs to `SiteConfig` (read via
+    /// `loadSiteConfig`, which tolerates and ignores these three keys), and the file may carry
+    /// other keys again in the future. That is why config reading uses `System.Text.Json.Nodes`
+    /// -- a dynamic document -- rather than a Reified schema for the whole file, while individual
+    /// well-typed sections (`SiteConfig`, `DocsSetConfig`) still decode through their own schema.
+    let private tryProperty (node: JsonNode) (name: string) : JsonNode option =
+        match node with
+        | null -> None
+        | :? JsonObject as obj ->
+            let mutable value = Unchecked.defaultof<JsonNode>
+            if obj.TryGetPropertyValue(name, &value) then Option.ofObj value else None
+        | _ -> None
+
+    let private tryString (node: JsonNode) (name: string) : string option =
+        tryProperty node name
+        |> Option.bind (fun value -> try Some(value.GetValue<string>()) with _ -> None)
+        |> Option.filter (String.IsNullOrWhiteSpace >> not)
+
+    let private stringArray (node: JsonNode) (name: string) : string list =
+        match tryProperty node name with
+        | Some(:? JsonArray as items) ->
+            items |> Seq.choose (fun item -> try Some(item.GetValue<string>()) with _ -> None) |> Seq.toList
+        | _ -> []
+
+    let private docsSetConfigCodec =
+        Json.compile (
+            schema<DocsSetConfig> {
+                fieldAs "id" (fun (c: DocsSetConfig) -> c.Id) { withSchema Schema.text }
+                fieldAs "title" (fun (c: DocsSetConfig) -> c.Title) { withSchema (Schema.option Schema.text) }
+                fieldAs "source" (fun (c: DocsSetConfig) -> c.Source) { withSchema (Schema.option Schema.text) }
+                fieldAs "path" (fun (c: DocsSetConfig) -> c.Path) { withSchema (Schema.option Schema.text) }
+                fieldAs "projects" (fun (c: DocsSetConfig) -> c.Projects) { withSchema (Schema.listWith Schema.text |> Schema.withDefault []) }
+                fieldAs "default" (fun (c: DocsSetConfig) -> c.Default) { withSchema (Schema.option Schema.bool) }
+                fieldAs "sidebar" (fun (c: DocsSetConfig) -> c.Sidebar) { withSchema (Schema.option Schema.bool) }
+                fieldAs "api" (fun (c: DocsSetConfig) -> c.Api) { withSchema (Schema.option Schema.bool) }
+                fieldAs "fSharpPrelude" (fun (c: DocsSetConfig) -> c.FSharpPrelude) { withSchema (Schema.option Schema.text) }
+                construct (fun id title source path projects default_ sidebar api fsharpPrelude ->
+                    { Id = id
+                      Title = title
+                      Source = source
+                      Path = path
+                      Projects = projects
+                      Default = default_
+                      Sidebar = sidebar
+                      Api = api
+                      FSharpPrelude = fsharpPrelude })
+            }
+        )
+
+    let private siteConfigCodec = Json.compile SiteSchema.siteConfig
 
     let private defaultSiteConfig =
         { RepoUrl = None
@@ -75,24 +132,14 @@ module internal Workspace =
         match Run.orRaise FileSystemError.describe $"Could not read {configPath}" (readIfExists configPath) with
         | None -> []
         | Some text ->
-            let config = Newtonsoft.Json.Linq.JObject.Parse(text)
-
-            let topLevel =
-                match config.GetValue("projects", StringComparison.OrdinalIgnoreCase) with
-                | :? Newtonsoft.Json.Linq.JArray as projects -> projects.Values<string>()
-                | _ -> Seq.empty
+            let config = JsonNode.Parse text
 
             let setProjects =
-                match config.GetValue("docsSets", StringComparison.OrdinalIgnoreCase) with
-                | :? Newtonsoft.Json.Linq.JArray as sets ->
-                    sets.Children<Newtonsoft.Json.Linq.JObject>()
-                    |> Seq.collect (fun set ->
-                        match set.GetValue("projects", StringComparison.OrdinalIgnoreCase) with
-                        | :? Newtonsoft.Json.Linq.JArray as projects -> projects.Values<string>()
-                        | _ -> Seq.empty)
+                match tryProperty config "docsSets" with
+                | Some(:? JsonArray as sets) -> sets |> Seq.collect (fun set -> stringArray set "projects")
                 | _ -> Seq.empty
 
-            Seq.append topLevel setProjects
+            Seq.append (stringArray config "projects") setProjects
             |> Seq.filter (String.IsNullOrWhiteSpace >> not)
             |> Seq.distinct
             |> Seq.toList
@@ -122,11 +169,11 @@ module internal Workspace =
 
         let config =
             match existingText with
-            | Some text -> Newtonsoft.Json.Linq.JObject.Parse(text)
-            | None -> Newtonsoft.Json.Linq.JObject()
+            | Some text -> JsonNode.Parse(text).AsObject()
+            | None -> JsonObject()
 
-        config["projects"] <- Newtonsoft.Json.Linq.JArray(projects |> List.map Newtonsoft.Json.Linq.JValue)
-        let serialized = config.ToString(Newtonsoft.Json.Formatting.Indented) + Environment.NewLine
+        config["projects"] <- JsonArray(projects |> List.map (fun project -> JsonValue.Create project :> JsonNode) |> List.toArray)
+        let serialized = config.ToJsonString(JsonSerializerOptions(WriteIndented = true)) + Environment.NewLine
 
         Run.orRaise
             FileSystemError.describe
@@ -141,28 +188,16 @@ module internal Workspace =
         | None -> emptyHistoryConfig
         | Some text ->
             try
-                let config = Newtonsoft.Json.Linq.JObject.Parse(text)
-                match config.GetValue("history", StringComparison.OrdinalIgnoreCase) with
-                | :? Newtonsoft.Json.Linq.JObject as history ->
-                    let read name =
-                        match history.GetValue(name, StringComparison.OrdinalIgnoreCase) with
-                        | null -> None
-                        | token ->
-                            let value = token.ToString()
-                            if String.IsNullOrWhiteSpace value then None else Some value
-                    { UrlPattern = read "urlPattern"; Discover = read "discover" }
-                | _ -> emptyHistoryConfig
+                let config = JsonNode.Parse text
+                match tryProperty config "history" with
+                | Some history -> { UrlPattern = tryString history "urlPattern"; Discover = tryString history "discover" }
+                | None -> emptyHistoryConfig
             with _ -> emptyHistoryConfig
 
     let loadSiteConfig () =
         let configPath = Path.Combine(".livedocs", "config.json")
         match Run.orFallback (readIfExists configPath) None with
-        | Some text ->
-            try
-                let config =
-                    Newtonsoft.Json.JsonConvert.DeserializeObject<SiteConfig>(text, Serialization.jsonSettings)
-                if isNull (box config) then defaultSiteConfig else config
-            with _ -> defaultSiteConfig
+        | Some text -> (try Json.deserialize siteConfigCodec text with _ -> defaultSiteConfig)
         | None -> defaultSiteConfig
 
     /// Reads the raw documentation-set array while preserving the distinction between an absent
@@ -173,15 +208,13 @@ module internal Workspace =
         match Run.orRaise FileSystemError.describe $"Could not read {configPath}" (readIfExists configPath) with
         | None -> None
         | Some text ->
-            let config = Newtonsoft.Json.Linq.JObject.Parse(text)
+            let config = JsonNode.Parse text
 
-            match config.GetValue("docsSets", StringComparison.OrdinalIgnoreCase) with
-            | null -> None
-            | :? Newtonsoft.Json.Linq.JArray as sets ->
-                let serializer = Newtonsoft.Json.JsonSerializer.Create(Serialization.jsonSettings)
-                let values = sets.ToObject<DocsSetConfig list>(serializer)
-                Some(if isNull (box values) then [] else values)
-            | _ -> invalidOp "\"docsSets\" in .livedocs/config.json must be an array."
+            match tryProperty config "docsSets" with
+            | None -> None
+            | Some(:? JsonArray as sets) ->
+                sets |> Seq.map (fun set -> Json.deserialize docsSetConfigCodec (set.ToJsonString())) |> Seq.toList |> Some
+            | Some _ -> invalidOp "\"docsSets\" in .livedocs/config.json must be an array."
 
     let hasConfiguredDocsSets () = loadDocsSetConfigs().IsSome
 
