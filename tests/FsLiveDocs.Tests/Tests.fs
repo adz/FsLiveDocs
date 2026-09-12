@@ -408,7 +408,7 @@ module ReleaseCapsuleTests =
         let shaFile = capsule + ".sha256"
         File.WriteAllText(shaFile, hash.ToUpperInvariant() + "\n")
         let indexPath = Path.Combine(root, "history.json")
-        Program.historyAddAction indexPath "1.0.0" None (Some "https://example.com/pkg-1.0.0-livedocs.zip") None (Some shaFile) |> ignore
+        Actions.historyAddAction indexPath "1.0.0" None (Some "https://example.com/pkg-1.0.0-livedocs.zip") None (Some shaFile) |> ignore
         let index = ReleaseCapsule.loadHistoryIndex indexPath
         Assert.Equal(hash, index.Entries.Head.CapsuleSha256)
 
@@ -420,14 +420,14 @@ module ReleaseCapsuleTests =
             CurrentVersion = "1.0.0"
             Entries = [ { Version = "1.0.0"; CapsulePath = None; CapsuleUrl = Some "https://example.com/1.0.0.zip"; CapsuleSha256 = String.replicate 64 "0" } ]
         }
-        let error = Assert.Throws<InvalidOperationException>(fun () -> Program.historyCheckAction indexPath (Some "candidate.zip") None "light" 3 |> ignore)
+        let error = Assert.Throws<InvalidOperationException>(fun () -> Actions.historyCheckAction indexPath (Some "candidate.zip") None "light" 3 |> ignore)
         Assert.Contains("requires --version", error.Message)
 
     [<Fact>]
     let ``url pattern expansion fills version and tag`` () =
         Assert.Equal(
             "https://h/x/v1.4.0/pkg-1.4.0.zip",
-            Program.expandUrlPattern "https://h/x/{tag}/pkg-{version}.zip" "1.4.0")
+            Actions.expandUrlPattern "https://h/x/{tag}/pkg-{version}.zip" "1.4.0")
 
 module SymbolListerTests =
 

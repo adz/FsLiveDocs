@@ -30,6 +30,7 @@
     <Compile Include="Git.fs" />
     <Compile Include="ReleaseCapture.fs" />
     <Compile Include="ReleaseHistoryCommands.fs" />
+    <Compile Include="Commands/Actions.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
