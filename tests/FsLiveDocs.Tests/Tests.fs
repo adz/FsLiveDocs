@@ -2397,3 +2397,15 @@ module BlogTests =
         let json = JsonConvert.SerializeObject(provider, Serialization.jsonSettings)
         let loaded = JsonConvert.DeserializeObject<CommentsProvider>(json, Serialization.jsonSettings)
         Assert.Equal(provider, loaded)
+
+    [<Fact>]
+    let ``blog frontmatter parses all optional metadata`` () =
+        let source = "---\ntitle: Post\ndate: 2026-09-14\ntags: [fsharp, docs]\ncategory: news\ndraft: true\nsummary: A post\nslug: stable-post\nseries: Guide\nseriesOrder: 2\ncomments: true\n---\nBody"
+        let metadata, body = ContentProvider.parseFrontMatter source |> Option.get
+        Assert.Equal(Some(DateOnly(2026, 9, 14)), metadata.Date)
+        Assert.Equal([ "fsharp"; "docs" ], metadata.Tags)
+        Assert.True(metadata.Draft)
+        Assert.Equal(Some "stable-post", metadata.Slug)
+        Assert.Equal(Some 2, metadata.SeriesOrder)
+        Assert.True(metadata.Comments)
+        Assert.Equal("Body", body)
