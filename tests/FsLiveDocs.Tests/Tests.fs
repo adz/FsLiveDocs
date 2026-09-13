@@ -2384,3 +2384,16 @@ module BlogTests =
         Assert.Equal(2, index.ByTag.["fsharp"].Length)
         Assert.Equal(Some "Older", navigation.Prev |> Option.map _.Metadata.Title)
         Assert.Equal(Some(2, 2), navigation.SeriesPart)
+
+    [<Fact>]
+    let ``giscus configuration round trips through site serialization`` () =
+        let provider =
+            Giscus
+                { Repo = "owner/repo"
+                  RepoId = "repo-id"
+                  Category = "Announcements"
+                  CategoryId = "category-id"
+                  Theme = Some "dark" }
+        let json = JsonConvert.SerializeObject(provider, Serialization.jsonSettings)
+        let loaded = JsonConvert.DeserializeObject<CommentsProvider>(json, Serialization.jsonSettings)
+        Assert.Equal(provider, loaded)
