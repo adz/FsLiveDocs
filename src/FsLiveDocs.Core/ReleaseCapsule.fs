@@ -417,7 +417,9 @@ module ReleaseCapsule =
                       MediaType = mediaType path
                       Sha256 = sha256Bytes bytes
                       Size = int64 bytes.LongLength })
-              Site = site
+              // Comment embeds are live site configuration, not historical content meaning.
+              // A capsule must remain renderer-neutral and cannot archive third-party JS config.
+              Site = { site with CommentsProvider = None }
               // Configuration order drives the set switcher and is itself deterministic input.
               DocsSets = docsSets }
 
