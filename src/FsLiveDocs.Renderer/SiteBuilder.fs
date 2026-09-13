@@ -194,7 +194,10 @@ module SiteBuilder =
             let post = page : ContentPage
             let date = post.Metadata.Date |> Option.map string |> Option.defaultValue ""
             "<article><h2><a href=\"../" + encode post.OutputPath + "\">" + encode post.Metadata.Title + "</a></h2><p>" + date + " · " + string (Blog.estimatedReadingMinutes post) + " min read</p><p>" + encode (Blog.excerpt post) + "</p></article>"
-        let chunks = index.ByDateDesc |> List.chunkBySize 10
+        let chunks =
+            match index.ByDateDesc |> List.chunkBySize 10 with
+            | [] -> [ [] ]
+            | values -> values
         chunks |> List.iteri (fun position chunk ->
             let number = position + 1
             let path = if number = 1 then "blog/index.html" else "blog/page/" + string number + "/index.html"
@@ -1157,6 +1160,8 @@ module SiteBuilder =
                     |> RenderView.AsString.htmlNode
 
                 File.WriteAllText(indexPath, html)
+
+        renderBlogOutputs destination (site.Sets |> List.collect _.Pages)
 
     /// <summary>Builds one shared shell containing all configured documentation sets.</summary>
     let buildDocsSets currentVersion (sets: DocsSetSite list) config versions theme outputDir =

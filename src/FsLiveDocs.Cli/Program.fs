@@ -394,6 +394,12 @@ module Program =
             match configuredDocsSets projectPaths with
             | Some sets ->
                 let prepared = DocumentationSets.prepareCurrent true sets packageRaw semanticArtifact ""
+                let prepared =
+                    { prepared with
+                        Sites =
+                            prepared.Sites
+                            |> List.map (fun site ->
+                                { site with Pages = site.Pages |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft) }) }
 
                 let current: SiteBuilder.DocsSetVersionSite =
                     { Version = packageRaw.Version
@@ -414,6 +420,13 @@ module Program =
 
                         let historicalPrepared =
                             DocumentationSets.prepareCurrent true sets historicalPackage semanticArtifact ""
+
+                        let historicalPrepared =
+                            { historicalPrepared with
+                                Sites =
+                                    historicalPrepared.Sites
+                                    |> List.map (fun site ->
+                                        { site with Pages = site.Pages |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft) }) }
 
                         ({ Version = Path.GetFileNameWithoutExtension path
                            Package = historicalPackage
