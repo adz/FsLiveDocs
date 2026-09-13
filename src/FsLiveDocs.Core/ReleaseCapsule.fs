@@ -160,7 +160,17 @@ module ReleaseCapsule =
                 |> List.map (fun page ->
                     { SourcePath = page.SourcePath
                       SetId = DocsSet.DefaultId
-                      Metadata = page.Metadata
+                      Metadata =
+                        { page.Metadata with
+                            Date = None
+                            Tags = []
+                            Category = None
+                            Draft = false
+                            Summary = None
+                            Slug = None
+                            Series = None
+                            SeriesOrder = None
+                            Comments = false }
                       Markdown = page.Markdown })
               Assets = legacy.Assets
               Site = legacy.Site

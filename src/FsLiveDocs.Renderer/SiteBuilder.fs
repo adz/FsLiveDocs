@@ -108,7 +108,49 @@ module SiteBuilder =
     /// <param name="page">The processed content page to render.</param>
     /// <returns>The rendered HTML document as a string.</returns>
     let private renderPageCore chrome (page: ContentPage) (context: SiteRenderContext) =
-        let content = [ div [] [ rawText page.ContentHtml ] ]
+        let blogShortcodes =
+            let posts = Blog.buildPostIndex true context.AllPages
+            let attribute name (args: string) =
+                let matched = Regex.Match(args, name + "=\"(?<value>[^\"]*)\"")
+                if matched.Success then Some matched.Groups.["value"].Value else None
+            let listing = Regex.Replace(page.ContentHtml, @"{{<\s*posts(?<args>[^>]*)>}}", fun matched ->
+                let args = matched.Groups.["args"].Value
+                let tag = attribute "tag" args |> Option.map _.Trim().ToLowerInvariant()
+                let category = attribute "category" args |> Option.map _.Trim().ToLowerInvariant()
+                let limit = attribute "limit" args |> Option.bind (fun value -> match Int32.TryParse value with | true, number when number >= 0 -> Some number | _ -> None)
+                let selected =
+                    posts.ByDateDesc
+                    |> List.filter (fun post -> tag |> Option.forall (fun value -> post.Metadata.Tags |> List.exists (fun item -> item.Trim().ToLowerInvariant() = value)))
+                    |> List.filter (fun post -> category |> Option.forall (fun value -> post.Metadata.Category |> Option.exists (fun item -> item.Trim().ToLowerInvariant() = value)))
+                    |> fun values -> limit |> Option.map (fun number -> values |> List.truncate number) |> Option.defaultValue values
+                "<ul class=\"livedocs-post-list\">" + (selected |> List.map (fun post -> "<li><a href=\"" + context.RootPath + Net.WebUtility.HtmlEncode post.OutputPath + "\">" + Net.WebUtility.HtmlEncode post.Metadata.Title + "</a></li>") |> String.concat "") + "</ul>")
+            let series = Blog.buildSeriesIndex true context.AllPages
+            Regex.Replace(listing, @"{{<\s*series-nav\s*>}}", fun _ ->
+                match page.Metadata.Series |> Option.map _.Trim().ToLowerInvariant() |> Option.bind (fun name -> series.BySeriesName |> Map.tryFind name) with
+                | None -> ""
+                | Some entries -> "<ol class=\"livedocs-series-nav\">" + (entries |> List.map (fun entry -> "<li><a href=\"" + context.RootPath + Net.WebUtility.HtmlEncode entry.Post.OutputPath + "\">Part " + string entry.PartNumber + ": " + Net.WebUtility.HtmlEncode entry.Post.Metadata.Title + "</a></li>") |> String.concat "") + "</ol>")
+        let blogChrome =
+            if page.Metadata.Date.IsNone then ""
+            else
+                let posts = Blog.buildPostIndex true context.AllPages
+                let series = Blog.buildSeriesIndex true context.AllPages
+                let navigation = Blog.navigation page posts series
+                let link label target = target |> Option.map (fun item -> $"<a href=\"{context.RootPath}{Net.WebUtility.HtmlEncode item.OutputPath}\">{label}: {Net.WebUtility.HtmlEncode item.Metadata.Title}</a>") |> Option.defaultValue ""
+                let seriesPart = navigation.SeriesPart |> Option.map (fun (number, count) -> $"<p>Part {number} of {count}</p>") |> Option.defaultValue ""
+                let date = page.Metadata.Date.Value.ToString("yyyy-MM-dd")
+                let newer = link "Newer" navigation.Prev
+                let older = link "Older" navigation.Next
+                "<aside class=\"livedocs-blog-meta\"><p>" + date + " · " + string (Blog.estimatedReadingMinutes page) + " min read</p>" + seriesPart + "<nav>" + newer + " " + older + "</nav></aside>"
+        let comments =
+            if not page.Metadata.Comments then ""
+            else
+                match context.Config.CommentsProvider with
+                | Some (Giscus settings) ->
+                    let theme = settings.Theme |> Option.defaultValue context.Theme
+                    $"<section id=\"comments\"><h2>Comments</h2><script src=\"https://giscus.app/client.js\" data-repo=\"{Net.WebUtility.HtmlEncode settings.Repo}\" data-repo-id=\"{Net.WebUtility.HtmlEncode settings.RepoId}\" data-category=\"{Net.WebUtility.HtmlEncode settings.Category}\" data-category-id=\"{Net.WebUtility.HtmlEncode settings.CategoryId}\" data-mapping=\"pathname\" data-theme=\"{Net.WebUtility.HtmlEncode theme}\" crossorigin=\"anonymous\" async></script></section>"
+                | Some (Custom html) -> "<section id=\"comments\"><h2>Comments</h2>" + html + "</section>"
+                | _ -> ""
+        let content = [ div [] [ rawText (blogChrome + blogShortcodes + comments) ] ]
 
         match chrome with
         | Some value ->
@@ -160,6 +202,11 @@ module SiteBuilder =
             writeBlogOutput outputDir path "Blog" ("<h1>Blog</h1>" + (chunk |> List.map card |> String.concat "") + older))
         index.ByTag |> Map.iter (fun tag posts -> writeBlogOutput outputDir ("blog/tags/" + tag + ".html") ("Posts tagged " + tag) ("<h1>Posts tagged " + encode tag + "</h1>" + (posts |> List.map card |> String.concat "")))
         index.ByCategory |> Map.iter (fun category posts -> writeBlogOutput outputDir ("blog/category/" + category + ".html") ("Posts in " + category) ("<h1>Posts in " + encode category + "</h1>" + (posts |> List.map card |> String.concat "")))
+        Blog.buildSeriesIndex false pages
+        |> fun series -> series.BySeriesName
+        |> Map.iter (fun name entries ->
+            let parts = entries |> List.map (fun entry -> "<li>Part " + string entry.PartNumber + ": <a href=\"../" + encode entry.Post.OutputPath + "\">" + encode entry.Post.Metadata.Title + "</a></li>") |> String.concat ""
+            writeBlogOutput outputDir ("blog/series/" + name + ".html") ("Series " + name) ("<h1>Series " + encode name + "</h1><ol>" + parts + "</ol>"))
         let entries =
             index.ByDateDesc
             |> List.map (fun post -> "<entry><title>" + encode post.Metadata.Title + "</title><id>/" + encode post.OutputPath + "</id><link href=\"/" + encode post.OutputPath + "\"/><updated>" + post.Metadata.Date.Value.ToString("yyyy-MM-dd") + "T00:00:00Z</updated><summary>" + encode (Blog.excerpt post) + "</summary></entry>")

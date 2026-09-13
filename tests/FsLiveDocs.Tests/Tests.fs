@@ -2274,7 +2274,7 @@ module DocumentationSetTests =
         |> ignore
 
         let manifest, _, _, content, _ = ReleaseCapsule.load capsule
-        Assert.Equal(2, manifest.Content.SchemaVersion)
+        Assert.Equal(ReleaseCapsule.ContentSchemaVersion, manifest.Content.SchemaVersion)
         Assert.True(content.UsesDocumentationSets)
         Assert.Equal("handbook", content.DocsSets.Head.Source)
         Assert.Equal("handbook", content.Pages.Head.SetId)

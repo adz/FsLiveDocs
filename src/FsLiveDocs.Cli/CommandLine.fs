@@ -85,6 +85,8 @@ type Arguments =
     | [<Inherit>] Discover_Projects
     /// <summary>Validates capture and reports its expected result without writing a capsule.</summary>
     | [<Inherit>] Dry_Run
+    /// <summary>Includes pages marked draft when building or watching a site.</summary>
+    | [<Inherit>] Drafts
     interface IArgParserTemplate with
         member s.Usage =
             match s with
@@ -123,6 +125,7 @@ type Arguments =
             | Banner _ -> "Enable or disable the LiveDocs banner (default: true)."
             | Discover_Projects -> "With init, discover project files and save them in .livedocs/config.json."
             | Dry_Run -> "With capture, validate and report expected output without writing a capsule."
+            | Drafts -> "With build or watch, include pages whose frontmatter sets draft: true."
 
 type internal VerbosityLevel =
     | Warnings

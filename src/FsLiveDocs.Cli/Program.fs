@@ -365,7 +365,7 @@ module Program =
         DocAnalysis.semanticArtifact analysis, analysis.Prelude
 
     /// <summary>Orchestrates the build process for one or more projects.</summary>
-    let buildAction (warnAsError: bool) (projectPaths: string list) (theme: string) (version: string option) =
+    let buildAction (warnAsError: bool) (includeDrafts: bool) (projectPaths: string list) (theme: string) (version: string option) =
         let mutable deferredApiDiagnostics: ApiDiagnostic list = []
         let pipeline reportStage reportProgress reportNote =
             reportStage "Extracting API documentation"
@@ -432,6 +432,7 @@ module Program =
 
                 let pages =
                     ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
+                    |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft)
 
                 SiteBuilder.buildAll historyDir package pages config theme "output"
                 ContentProvider.copyStaticFiles "docs" "output"
@@ -931,7 +932,7 @@ module Program =
                 elif results.Contains Build then
                     printBanner()
                     let projectPaths = results.GetResult Build |> resolveProjects "build"
-                    buildAction (results.Contains Warn_As_Error) projectPaths theme (results.TryGetResult Arguments.Version)
+                    buildAction (results.Contains Warn_As_Error) (results.Contains Drafts) projectPaths theme (results.TryGetResult Arguments.Version)
                     0
 
                 elif results.Contains Build_History then
@@ -951,7 +952,7 @@ module Program =
                     let buildPreview () =
                         // buildAction owns documentation verification and diagnostic reporting. Running
                         // auditAction first duplicates both in watch output without adding coverage.
-                        buildAction (results.Contains Warn_As_Error) projectPaths theme version
+                        buildAction (results.Contains Warn_As_Error) (results.Contains Drafts) projectPaths theme version
                     buildPreview ()
                     
                     try
