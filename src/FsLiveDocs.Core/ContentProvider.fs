@@ -560,7 +560,11 @@ module ContentProvider =
             { Metadata = metadata; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
         | None ->
             let contentHtml = resolveMarkdown context filePath raw
-            { Metadata = { Title = defaultTitle filePath; Type = None; Project = None; TargetFramework = None; Platform = None }; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
+            { Metadata = ContentMetadata.empty (defaultTitle filePath)
+              ContentHtml = contentHtml
+              FilePath = filePath
+              OutputPath = outputPath
+              SectionOrder = System.Int32.MaxValue }
 
     /// <summary>Loads and processes a single Markdown page.</summary>
     /// <param name="filePath">The markdown file to read.</param>

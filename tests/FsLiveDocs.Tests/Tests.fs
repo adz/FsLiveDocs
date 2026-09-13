@@ -172,6 +172,7 @@ module ReleaseCapsuleTests =
             Themes = None
             Navigation = None
             FSharpPrelude = None
+            CommentsProvider = None
         }
 
     let private inputs () =
@@ -191,11 +192,7 @@ module ReleaseCapsuleTests =
               Pages = [] }
 
         let metadata: ContentMetadata =
-            { Title = "Home"
-              Type = None
-              Project = None
-              TargetFramework = None
-              Platform = None }
+            ContentMetadata.empty "Home"
 
         api,
         semantic,
@@ -1022,12 +1019,12 @@ module DocTestRunnerTests =
 
 module ViewTests =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None }
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None; CommentsProvider = None }
 
     [<Fact>]
     let ``tooltip surface is explicitly opaque`` () =
         let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
-        let page = { Metadata = { Title = "Guide"; Type = None; Project = None; TargetFramework = None; Platform = None }; ContentHtml = ""; FilePath = "guide.md"; OutputPath = "guide.html"; SectionOrder = 0 }
+        let page = { Metadata = ContentMetadata.empty "Guide"; ContentHtml = ""; FilePath = "guide.md"; OutputPath = "guide.html"; SectionOrder = 0 }
         let context : SiteBuilder.SiteRenderContext =
             { AllPages = [ page ]; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "dark"; RootPath = ""; SiteRootPath = "" }
 
@@ -1038,7 +1035,7 @@ module ViewTests =
 
     [<Fact>]
     let ``sidebar orders a folder by its earliest prefixed page`` () =
-        let metadata title = { Title = title; Type = None; Project = None; TargetFramework = None; Platform = None }
+        let metadata title = ContentMetadata.empty title
         let page source output title = { Metadata = metadata title; ContentHtml = ""; FilePath = source; OutputPath = output; SectionOrder = 0 }
         let pages =
             [ page "01-start.md" "start.html" "Get started"
@@ -1107,7 +1104,7 @@ module ViewTests =
 
 module SiteBuilderTests =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None }
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None; CommentsProvider = None }
 
     [<Fact>]
     let ``history renders persisted semantic hovers without a historical project`` () =
@@ -1262,7 +1259,7 @@ module SiteBuilderTests =
     [<Fact>]
     let ``build preserves an authored homepage and nested page paths`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
-        let metadata title = { Title = title; Type = None; Project = None; TargetFramework = None; Platform = None }
+        let metadata title = ContentMetadata.empty title
         let pages =
             [
                 { Metadata = metadata "Home"; ContentHtml = "<h1>Consumer home</h1>"; FilePath = "docs/index.md"; OutputPath = "index.html"; SectionOrder = Int32.MaxValue }
@@ -1325,6 +1322,7 @@ module SiteBuilderTests =
             Themes = Some [ "light"; "dark" ]
             Navigation = Some [ { Label = "Guides"; Href = "index.html" }; { Label = "Source"; Href = "https://github.com/example/library" } ]
             FSharpPrelude = None
+            CommentsProvider = None
         }
 
         SiteBuilder.build {
@@ -1880,7 +1878,8 @@ module DocumentationSetTests =
               Some
                   [ { Label = "Docs"; Href = "/" }
                     { Label = "Handbook"; Href = "/handbook/" } ]
-          FSharpPrelude = None }
+          FSharpPrelude = None
+          CommentsProvider = None }
 
     let private configured id title source path projects isDefault sidebar api prelude : DocsSetConfig =
         { Id = id
@@ -2039,12 +2038,7 @@ module DocumentationSetTests =
                   { Name = "Internal"
                     EntityIds = [ internalEntity.Id ] } ] }
 
-        let metadata title =
-            { Title = title
-              Type = None
-              Project = None
-              TargetFramework = None
-              Platform = None }
+        let metadata title = ContentMetadata.empty title
 
         let page path title =
             { Metadata = metadata title
@@ -2112,12 +2106,7 @@ module DocumentationSetTests =
               Scenarios = []
               Packages = [] }
 
-        let metadata title =
-            { Title = title
-              Type = None
-              Project = None
-              TargetFramework = None
-              Platform = None }
+        let metadata title = ContentMetadata.empty title
 
         let set: ReleaseDocsSet =
             { Id = "handbook"
@@ -2188,12 +2177,7 @@ module DocumentationSetTests =
             Path.Combine(Path.GetTempPath(), "fslivedocs-legacy-fallback-" + Guid.NewGuid().ToString("N"))
 
         let output = Path.Combine(root, "output")
-        let metadata title =
-            { Title = title
-              Type = None
-              Project = None
-              TargetFramework = None
-              Platform = None }
+        let metadata title = ContentMetadata.empty title
         let page path title =
             { Metadata = metadata title
               ContentHtml = "<h1>" + title + "</h1>"
@@ -2266,12 +2250,7 @@ module DocumentationSetTests =
               Prelude = ""
               Pages = [] }
 
-        let metadata =
-            { Title = "Home"
-              Type = None
-              Project = None
-              TargetFramework = None
-              Platform = None }
+        let metadata = ContentMetadata.empty "Home"
 
         let set: ReleaseDocsSet =
             { Id = "handbook"

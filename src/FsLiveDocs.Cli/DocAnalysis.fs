@@ -113,11 +113,7 @@ module internal DocAnalysis =
                           frontMatter
                           |> Option.map fst
                           |> Option.defaultValue
-                              { Title = ContentProvider.defaultTitle path
-                                Type = None
-                                Project = None
-                                TargetFramework = None
-                                Platform = None }
+                              (ContentMetadata.empty (ContentProvider.defaultTitle path))
 
                       let selectedProject =
                           match frontMatter |> Option.bind (fun (metadata, _) -> metadata.Project) with
