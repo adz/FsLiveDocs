@@ -140,6 +140,34 @@ module SiteBuilder =
 
     let renderPage page context = renderPageCore None page context
 
+    let private writeBlogOutput outputDir path title body =
+        let destination = Path.Combine(outputDir, path)
+        Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
+        File.WriteAllText(destination, "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + Net.WebUtility.HtmlEncode title + "</title></head><body><main>" + body + "</main></body></html>")
+
+    let private renderBlogOutputs outputDir (pages: ContentPage list) =
+        let index = Blog.buildPostIndex false pages
+        let encode = Net.WebUtility.HtmlEncode
+        let card page =
+            let post = page : ContentPage
+            let date = post.Metadata.Date |> Option.map string |> Option.defaultValue ""
+            "<article><h2><a href=\"../" + encode post.OutputPath + "\">" + encode post.Metadata.Title + "</a></h2><p>" + date + " · " + string (Blog.estimatedReadingMinutes post) + " min read</p><p>" + encode (Blog.excerpt post) + "</p></article>"
+        let chunks = index.ByDateDesc |> List.chunkBySize 10
+        chunks |> List.iteri (fun position chunk ->
+            let number = position + 1
+            let path = if number = 1 then "blog/index.html" else "blog/page/" + string number + "/index.html"
+            let older = if number < chunks.Length then "<a href=\"page/" + string (number + 1) + "/index.html\">Older posts</a>" else ""
+            writeBlogOutput outputDir path "Blog" ("<h1>Blog</h1>" + (chunk |> List.map card |> String.concat "") + older))
+        index.ByTag |> Map.iter (fun tag posts -> writeBlogOutput outputDir ("blog/tags/" + tag + ".html") ("Posts tagged " + tag) ("<h1>Posts tagged " + encode tag + "</h1>" + (posts |> List.map card |> String.concat "")))
+        index.ByCategory |> Map.iter (fun category posts -> writeBlogOutput outputDir ("blog/category/" + category + ".html") ("Posts in " + category) ("<h1>Posts in " + encode category + "</h1>" + (posts |> List.map card |> String.concat "")))
+        let entries =
+            index.ByDateDesc
+            |> List.map (fun post -> "<entry><title>" + encode post.Metadata.Title + "</title><id>/" + encode post.OutputPath + "</id><link href=\"/" + encode post.OutputPath + "\"/><updated>" + post.Metadata.Date.Value.ToString("yyyy-MM-dd") + "T00:00:00Z</updated><summary>" + encode (Blog.excerpt post) + "</summary></entry>")
+            |> String.concat ""
+        let feedPath = Path.Combine(outputDir, "blog", "feed.xml")
+        Directory.CreateDirectory(Path.GetDirectoryName feedPath) |> ignore
+        File.WriteAllText(feedPath, "<?xml version=\"1.0\" encoding=\"utf-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>Blog</title>" + entries + "</feed>")
+
     /// <summary>Renders a single API entity page (Module or Type).</summary>
     /// <param name="e">The entity to render.</param>
     /// <returns>The rendered HTML document as a string.</returns>
@@ -601,6 +629,8 @@ module SiteBuilder =
             let outputDirectory = Path.GetDirectoryName(outputPath)
             Directory.CreateDirectory(outputDirectory) |> ignore
             File.WriteAllText(outputPath, html))
+
+        renderBlogOutputs context.OutputDir context.Pages
 
         // Render API docs - Multi-page approach
         let apiDir = Path.Combine(context.OutputDir, "api")
