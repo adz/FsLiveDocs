@@ -187,13 +187,13 @@ module SiteBuilder =
         Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
         File.WriteAllText(destination, "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + Net.WebUtility.HtmlEncode title + "</title></head><body><main>" + body + "</main></body></html>")
 
-    let private renderBlogOutputs outputDir (pages: ContentPage list) =
+    let private renderBlogOutputs outputDir siteRootPath (pages: ContentPage list) =
         let index = Blog.buildPostIndex false pages
         let encode = Net.WebUtility.HtmlEncode
         let card page =
             let post = page : ContentPage
             let date = post.Metadata.Date |> Option.map string |> Option.defaultValue ""
-            "<article><h2><a href=\"../" + encode post.OutputPath + "\">" + encode post.Metadata.Title + "</a></h2><p>" + date + " · " + string (Blog.estimatedReadingMinutes post) + " min read</p><p>" + encode (Blog.excerpt post) + "</p></article>"
+            "<article><h2><a href=\"" + siteRootPath + encode post.OutputPath + "\">" + encode post.Metadata.Title + "</a></h2><p>" + date + " · " + string (Blog.estimatedReadingMinutes post) + " min read</p><p>" + encode (Blog.excerpt post) + "</p></article>"
         let chunks =
             match index.ByDateDesc |> List.chunkBySize 10 with
             | [] -> [ [] ]
@@ -201,8 +201,15 @@ module SiteBuilder =
         chunks |> List.iteri (fun position chunk ->
             let number = position + 1
             let path = if number = 1 then "blog/index.html" else "blog/page/" + string number + "/index.html"
-            let older = if number < chunks.Length then "<a href=\"page/" + string (number + 1) + "/index.html\">Older posts</a>" else ""
-            writeBlogOutput outputDir path "Blog" ("<h1>Blog</h1>" + (chunk |> List.map card |> String.concat "") + older))
+            let newer =
+                if number = 1 then ""
+                elif number = 2 then "<a href=\"../../index.html\">Newer posts</a>"
+                else "<a href=\"../" + string (number - 1) + "/index.html\">Newer posts</a>"
+            let older =
+                if number >= chunks.Length then ""
+                elif number = 1 then "<a href=\"page/2/index.html\">Older posts</a>"
+                else "<a href=\"../" + string (number + 1) + "/index.html\">Older posts</a>"
+            writeBlogOutput outputDir path "Blog" ("<h1>Blog</h1>" + (chunk |> List.map card |> String.concat "") + "<nav>" + newer + " " + older + "</nav>"))
         index.ByTag |> Map.iter (fun tag posts -> writeBlogOutput outputDir ("blog/tags/" + tag + ".html") ("Posts tagged " + tag) ("<h1>Posts tagged " + encode tag + "</h1>" + (posts |> List.map card |> String.concat "")))
         index.ByCategory |> Map.iter (fun category posts -> writeBlogOutput outputDir ("blog/category/" + category + ".html") ("Posts in " + category) ("<h1>Posts in " + encode category + "</h1>" + (posts |> List.map card |> String.concat "")))
         Blog.buildSeriesIndex false pages
@@ -680,7 +687,7 @@ module SiteBuilder =
             Directory.CreateDirectory(outputDirectory) |> ignore
             File.WriteAllText(outputPath, html))
 
-        renderBlogOutputs context.OutputDir context.Pages
+        renderBlogOutputs context.OutputDir context.SiteRootPath context.Pages
 
         // Render API docs - Multi-page approach
         let apiDir = Path.Combine(context.OutputDir, "api")
@@ -1161,7 +1168,7 @@ module SiteBuilder =
 
                 File.WriteAllText(indexPath, html)
 
-        renderBlogOutputs destination (site.Sets |> List.collect _.Pages)
+        renderBlogOutputs destination siteRootPath (site.Sets |> List.collect _.Pages)
 
     /// <summary>Builds one shared shell containing all configured documentation sets.</summary>
     let buildDocsSets currentVersion (sets: DocsSetSite list) config versions theme outputDir =
