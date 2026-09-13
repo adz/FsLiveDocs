@@ -2353,3 +2353,34 @@ module DocumentationSetTests =
         Assert.Equal("docs", content.DocsSets.Head.Source)
         Assert.Equal(DocsSet.DefaultId, content.Pages.Head.SetId)
         Assert.Equal(Some "open System", content.DocsSets.Head.FSharpPrelude)
+
+module BlogTests =
+
+    let private post title date draft series order =
+        let metadata =
+            { ContentMetadata.empty title with
+                Date = Some(DateOnly.Parse date)
+                Draft = draft
+                Tags = [ "fsharp" ]
+                Category = Some "news"
+                Series = series
+                SeriesOrder = order }
+        { Metadata = metadata
+          ContentHtml = "<p>One two three.</p>"
+          FilePath = title + ".md"
+          OutputPath = "blog/" + title.ToLowerInvariant() + "/index.html"
+          SectionOrder = 0 }
+
+    [<Fact>]
+    let ``blog indices exclude drafts and series navigation overrides chronology`` () =
+        let older = post "Older" "2026-01-01" false (Some "Guide") (Some 1)
+        let newer = post "Newer" "2026-01-03" false (Some "Guide") (Some 2)
+        let draft = post "Draft" "2026-01-04" true None None
+        let index = Blog.buildPostIndex false [ older; newer; draft ]
+        let series = Blog.buildSeriesIndex false [ older; newer; draft ]
+        let navigation = Blog.navigation newer index series
+
+        Assert.True([ "Newer"; "Older" ] = (index.ByDateDesc |> List.map _.Metadata.Title))
+        Assert.Equal(2, index.ByTag.["fsharp"].Length)
+        Assert.Equal(Some "Older", navigation.Prev |> Option.map _.Metadata.Title)
+        Assert.Equal(Some(2, 2), navigation.SeriesPart)
