@@ -65,6 +65,7 @@ module ContentProvider =
                 slug stem + ".html"
         String.concat "/" (directories @ [ fileName ])
 
+
     /// <summary>Copies consumer-owned non-Markdown files from the docs tree into the generated site.</summary>
     let copyStaticFiles (docsDir: string) (outputDir: string) =
         if Directory.Exists(docsDir) then
@@ -140,6 +141,22 @@ module ContentProvider =
             | None -> None
         else
             None
+
+    /// <summary>Maps a page with blog metadata to its render-time permalink. Dated pages use a
+    /// flat, stable slug beneath <c>blog/</c>; ordinary documentation keeps its legacy route.</summary>
+    let outputPathForMetadata (docsDir: string) (filePath: string) (metadata: ContentMetadata option) =
+        match metadata |> Option.bind _.Date with
+        | None -> outputPathFor docsDir filePath
+        | Some _ ->
+            let configuredSlug = metadata |> Option.bind _.Slug
+            let sourceSlug = Path.GetFileNameWithoutExtension(filePath) |> stripOrderingPrefix
+            let value: string = configuredSlug |> Option.defaultValue sourceSlug |> slug
+            if System.String.IsNullOrWhiteSpace value then invalidOp $"Dated post {filePath} needs a non-empty slug."
+            "blog/" + value + "/index.html"
+
+    let private outputPathForFile docsDir filePath =
+        let metadata = File.ReadAllText(filePath) |> parseFrontMatter |> Option.map fst
+        outputPathForMetadata docsDir filePath metadata
 
     /// <summary>Searches for a member by ID or Name within a PackageModel.</summary>
     let findMember (id: string) (package: PackageModel) =
@@ -287,7 +304,7 @@ module ContentProvider =
             []
 
     let private collectGuideOutputs (docsDir: string) =
-        markdownFilesIn docsDir |> List.map (outputPathFor docsDir)
+        markdownFilesIn docsDir |> List.map (outputPathForFile docsDir)
 
     let private collectAllowedOutputs (docsDir: string) (package: PackageModel) =
         let guideOutputs = collectGuideOutputs docsDir
@@ -628,7 +645,7 @@ module ContentProvider =
         files
         |> List.toArray
         |> Array.map (fun f ->
-            let outputPath = routePrefix + outputPathFor docsDir f
+            let outputPath = routePrefix + outputPathForFile docsDir f
             let depth = outputPath.Split('/').Length - 1
             let pageRootPath = siteRootPath + String.replicate depth "../"
 
