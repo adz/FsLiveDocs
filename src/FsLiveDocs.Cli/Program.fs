@@ -364,6 +364,14 @@ module Program =
         reportNote $"Audit complete: {analysis.Blocks.Length} blocks — {verified} verified, {excluded} excluded, 0 failed."
         DocAnalysis.semanticArtifact analysis, analysis.Prelude
 
+    /// <summary>Reports blog authoring warnings, failing the build when warnings are errors.</summary>
+    let private reportBlogDiagnostics warnAsError reportNote (pages: ContentPage list) =
+        match Blog.diagnostics pages with
+        | [] -> ()
+        | warnings when warnAsError ->
+            invalidOp ("Blog warnings were treated as errors because --warn-as-error was passed:" + Environment.NewLine + String.concat Environment.NewLine warnings)
+        | warnings -> for warning in warnings do reportNote $"Warning: {warning}"
+
     /// <summary>Orchestrates the build process for one or more projects.</summary>
     let buildAction (warnAsError: bool) (includeDrafts: bool) (projectPaths: string list) (theme: string) (version: string option) =
         let mutable deferredApiDiagnostics: ApiDiagnostic list = []
@@ -400,6 +408,8 @@ module Program =
                             prepared.Sites
                             |> List.map (fun site ->
                                 { site with Pages = site.Pages |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft) }) }
+
+                prepared.Sites |> List.collect _.Pages |> reportBlogDiagnostics warnAsError reportNote
 
                 let current: SiteBuilder.DocsSetVersionSite =
                     { Version = packageRaw.Version
@@ -446,6 +456,8 @@ module Program =
                 let pages =
                     ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
                     |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft)
+
+                reportBlogDiagnostics warnAsError reportNote pages
 
                 SiteBuilder.buildAll historyDir package pages config theme "output"
                 ContentProvider.copyStaticFiles "docs" "output"

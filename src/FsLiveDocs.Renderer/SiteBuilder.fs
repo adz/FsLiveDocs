@@ -113,8 +113,10 @@ module SiteBuilder =
             let attribute name (args: string) =
                 let matched = Regex.Match(args, name + "=\"(?<value>[^\"]*)\"")
                 if matched.Success then Some matched.Groups.["value"].Value else None
-            let listing = Regex.Replace(page.ContentHtml, @"{{<\s*posts(?<args>[^>]*)>}}", fun matched ->
-                let args = matched.Groups.["args"].Value
+            // Markdig renders a shortcode written as its own paragraph as escaped text. Matching only that
+            // whole-paragraph form leaves shortcode syntax shown inside code spans and blocks untouched.
+            let listing = Regex.Replace(page.ContentHtml, @"<p>{{&lt;\s*posts\b(?<args>.*?)&gt;}}</p>", fun matched ->
+                let args = Net.WebUtility.HtmlDecode matched.Groups.["args"].Value
                 let options = page.Metadata.BlogList
                 let configured field = options |> Option.bind field
                 let tag = attribute "tag" args |> Option.orElseWith (fun () -> configured _.Tag) |> Option.map _.Trim().ToLowerInvariant()
@@ -127,7 +129,7 @@ module SiteBuilder =
                 let show =
                     attribute "show" args
                     |> Option.map (fun value -> value.Split(',') |> Array.map _.Trim().ToLowerInvariant() |> Set.ofArray)
-                    |> Option.orElseWith (fun () -> configured (fun value -> if isNull (box value.Show) then None else Some(value.Show |> List.map (fun item -> item.Trim().ToLowerInvariant()) |> Set.ofList)))
+                    |> Option.orElseWith (fun () -> configured (fun value -> if List.isEmpty value.Show then None else Some(value.Show |> List.map (fun item -> item.Trim().ToLowerInvariant()) |> Set.ofList)))
                     |> Option.defaultValue (match layout with | "preview" -> set [ "date"; "readingtime"; "summary"; "tags" ] | "compact" -> set [ "date" ] | _ -> Set.empty)
                 if not (set [ "list"; "compact"; "preview" ] |> Set.contains layout) then invalidOp $"Unsupported blogList layout '{layout}' on {page.FilePath}."
                 let selected =
@@ -145,7 +147,7 @@ module SiteBuilder =
                 if layout = "list" then "<ul class=\"livedocs-post-list\">" + (selected |> List.map item |> String.concat "") + "</ul>"
                 else "<div class=\"livedocs-post-list livedocs-post-list-" + layout + "\">" + (selected |> List.map item |> String.concat "") + "</div>")
             let series = Blog.buildSeriesIndex true context.AllPages
-            Regex.Replace(listing, @"{{<\s*series-nav\s*>}}", fun _ ->
+            Regex.Replace(listing, @"<p>{{&lt;\s*series-nav\s*&gt;}}</p>", fun _ ->
                 match page.Metadata.Series |> Option.map _.Trim().ToLowerInvariant() |> Option.bind (fun name -> series.BySeriesName |> Map.tryFind name) with
                 | None -> ""
                 | Some entries -> "<ol class=\"livedocs-series-nav\">" + (entries |> List.map (fun entry -> "<li><a href=\"" + context.RootPath + Net.WebUtility.HtmlEncode entry.Post.OutputPath + "\">Part " + string entry.PartNumber + ": " + Net.WebUtility.HtmlEncode entry.Post.Metadata.Title + "</a></li>") |> String.concat "") + "</ol>")
@@ -164,11 +166,21 @@ module SiteBuilder =
         let comments =
             if not page.Metadata.Comments then ""
             else
+                let encode = Net.WebUtility.HtmlEncode
+                // One provider-agnostic toggle and one embed region. Only the region's contents differ by
+                // provider; the count is unknown at build time, so it stays a placeholder until provider
+                // script reports it in the browser.
+                let section (embed: string) =
+                    "<section id=\"comments\" class=\"livedocs-comments not-prose mt-10\">"
+                    + "<h2 class=\"text-xl font-semibold\"><a class=\"livedocs-comments-toggle link link-hover\" href=\"#comments\" aria-controls=\"livedocs-comments-embed\">Comments <span class=\"livedocs-comments-count\" data-state=\"loading\" aria-live=\"polite\">(…)</span></a></h2>"
+                    + "<div id=\"livedocs-comments-embed\" class=\"livedocs-comments-embed mt-4\">" + embed + "</div></section>"
                 match context.Config.CommentsProvider with
                 | Some (Giscus settings) ->
                     let theme = settings.Theme |> Option.defaultValue context.Theme
-                    $"<section id=\"comments\"><h2>Comments</h2><script src=\"https://giscus.app/client.js\" data-repo=\"{Net.WebUtility.HtmlEncode settings.Repo}\" data-repo-id=\"{Net.WebUtility.HtmlEncode settings.RepoId}\" data-category=\"{Net.WebUtility.HtmlEncode settings.Category}\" data-category-id=\"{Net.WebUtility.HtmlEncode settings.CategoryId}\" data-mapping=\"pathname\" data-theme=\"{Net.WebUtility.HtmlEncode theme}\" crossorigin=\"anonymous\" async></script></section>"
-                | Some (Custom html) -> "<section id=\"comments\"><h2>Comments</h2>" + html + "</section>"
+                    section (
+                        $"<script src=\"https://giscus.app/client.js\" data-repo=\"{encode settings.Repo}\" data-repo-id=\"{encode settings.RepoId}\" data-category=\"{encode settings.Category}\" data-category-id=\"{encode settings.CategoryId}\" data-mapping=\"pathname\" data-emit-metadata=\"1\" data-theme=\"{encode theme}\" crossorigin=\"anonymous\" async></script>"
+                        + "<script>(function(){var count=document.querySelector('#comments .livedocs-comments-count');window.addEventListener('message',function(event){if(event.origin!=='https://giscus.app'||!event.data||!event.data.giscus)return;var discussion=event.data.giscus.discussion;if(!count)return;var total=discussion?(discussion.totalCommentCount||0)+(discussion.totalReplyCount||0):0;count.textContent='('+total+')';count.setAttribute('data-state','ready');});})();</script>")
+                | Some (Custom html) -> section html
                 | _ -> ""
         let content = [ div [] [ rawText (blogChrome + blogShortcodes + comments) ] ]
 
@@ -202,61 +214,116 @@ module SiteBuilder =
 
     let renderPage page context = renderPageCore None page context
 
-    let private writeBlogOutput outputDir path title body =
-        let destination = Path.Combine(outputDir, path)
-        Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
-        let styles = """
-<style>
-body{font-family:system-ui,sans-serif;line-height:1.5;color:#1f2937;margin:0;background:#f8fafc}
-main{max-width:48rem;margin:0 auto;padding:2rem 1rem}
-.blog-list{display:grid;gap:.75rem}.blog-preview{background:#fff;border:1px solid #e2e8f0;border-radius:.75rem;padding:1rem 1.1rem}
-.blog-preview h2{font-size:1.1rem;margin:0}.blog-preview h2 a{color:#0f172a;text-decoration:none}.blog-preview h2 a:hover{text-decoration:underline}
-.blog-meta{font-size:.8rem;color:#64748b;margin:.25rem 0}.blog-summary{font-size:.92rem;margin:.45rem 0}.blog-tags{display:flex;gap:.35rem;flex-wrap:wrap}.blog-tags a{font-size:.75rem;color:#475569;text-decoration:none;background:#f1f5f9;border-radius:999px;padding:.12rem .45rem}
-nav{display:flex;justify-content:space-between;margin-top:1rem}nav a{color:#2563eb}
-</style>"""
-        File.WriteAllText(destination, "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + Net.WebUtility.HtmlEncode title + "</title>" + styles + "</head><body><main>" + body + "</main></body></html>")
+    /// <summary>One renderer-generated blog listing page before it is placed in the site layout.</summary>
+    type private BlogListingPage = { Path: string; Title: string; Body: string }
 
-    let private renderBlogOutputs outputDir siteRootPath (pages: ContentPage list) =
-        let index = Blog.buildPostIndex false pages
+    /// Builds the generated blog index, archive, and series pages from the non-draft dated posts.
+    /// Every link is relative to the generated page itself, so the output works under any hosting
+    /// sub-path and inside versioned history directories.
+    let private blogListingPages (pages: ContentPage list) =
+        let index = Blog.buildPostIndex true pages
         let encode = Net.WebUtility.HtmlEncode
-        let card page =
-            let post = page : ContentPage
-            let date = post.Metadata.Date |> Option.map string |> Option.defaultValue ""
+        let rootFor (path: string) = String.replicate (path.Split('/').Length - 1) "../"
+        let card root (post: ContentPage) =
+            let date = post.Metadata.Date |> Option.map (fun value -> value.ToString("yyyy-MM-dd")) |> Option.defaultValue ""
             let tags =
                 post.Metadata.Tags
-                |> List.map (fun tag -> "<a href=\"" + siteRootPath + "blog/tags/" + encode tag + ".html\">" + encode tag + "</a>")
+                |> List.map (fun tag ->
+                    "<a class=\"badge badge-ghost\" href=\"" + root + "blog/tags/" + encode (tag.Trim().ToLowerInvariant()) + ".html\">" + encode tag + "</a>")
                 |> String.concat ""
-            "<article class=\"blog-preview\"><h2><a href=\"" + siteRootPath + encode post.OutputPath + "\">" + encode post.Metadata.Title + "</a></h2><p class=\"blog-meta\">" + date + " · " + string (Blog.estimatedReadingMinutes post) + " min read</p><p class=\"blog-summary\">" + encode (Blog.excerpt post) + "</p><div class=\"blog-tags\">" + tags + "</div></article>"
+            "<article class=\"livedocs-blog-card card card-compact bg-base-100 border border-base-300\"><div class=\"card-body\">"
+            + "<h2 class=\"card-title text-lg\"><a class=\"link link-hover\" href=\"" + root + encode post.OutputPath + "\">" + encode post.Metadata.Title + "</a></h2>"
+            + "<p class=\"text-sm opacity-70\">" + date + " · " + string (Blog.estimatedReadingMinutes post) + " min read</p>"
+            + "<p>" + encode (Blog.excerpt post) + "</p>"
+            + "<div class=\"flex flex-wrap gap-1\">" + tags + "</div></div></article>"
+        let listing root heading (posts: ContentPage list) navigation =
+            "<div class=\"livedocs-blog not-prose\"><h1 class=\"text-3xl font-bold mb-6\">" + encode heading + "</h1>"
+            + "<div class=\"grid gap-3\">" + (posts |> List.map (card root) |> String.concat "") + "</div>"
+            + navigation + "</div>"
         let chunks =
             match index.ByDateDesc |> List.chunkBySize 10 with
             | [] -> [ [] ]
             | values -> values
-        chunks |> List.iteri (fun position chunk ->
-            let number = position + 1
-            let path = if number = 1 then "blog/index.html" else "blog/page/" + string number + "/index.html"
-            let newer =
-                if number = 1 then ""
-                elif number = 2 then "<a href=\"../../index.html\">Newer posts</a>"
-                else "<a href=\"../" + string (number - 1) + "/index.html\">Newer posts</a>"
-            let older =
-                if number >= chunks.Length then ""
-                elif number = 1 then "<a href=\"page/2/index.html\">Older posts</a>"
-                else "<a href=\"../" + string (number + 1) + "/index.html\">Older posts</a>"
-            writeBlogOutput outputDir path "Blog" ("<h1>Blog</h1><div class=\"blog-list\">" + (chunk |> List.map card |> String.concat "") + "</div><nav>" + newer + " " + older + "</nav>"))
-        index.ByTag |> Map.iter (fun tag posts -> writeBlogOutput outputDir ("blog/tags/" + tag + ".html") ("Posts tagged " + tag) ("<h1>Posts tagged " + encode tag + "</h1><div class=\"blog-list\">" + (posts |> List.map card |> String.concat "") + "</div>"))
-        index.ByCategory |> Map.iter (fun category posts -> writeBlogOutput outputDir ("blog/category/" + category + ".html") ("Posts in " + category) ("<h1>Posts in " + encode category + "</h1><div class=\"blog-list\">" + (posts |> List.map card |> String.concat "") + "</div>"))
-        Blog.buildSeriesIndex false pages
-        |> fun series -> series.BySeriesName
-        |> Map.iter (fun name entries ->
-            let parts = entries |> List.map (fun entry -> "<li>Part " + string entry.PartNumber + ": <a href=\"../" + encode entry.Post.OutputPath + "\">" + encode entry.Post.Metadata.Title + "</a></li>") |> String.concat ""
-            writeBlogOutput outputDir ("blog/series/" + name + ".html") ("Series " + name) ("<h1>Series " + encode name + "</h1><ol>" + parts + "</ol>"))
+        let pagePath number = if number = 1 then "blog/index.html" else $"blog/page/{number}/index.html"
+        let indexPages =
+            chunks
+            |> List.mapi (fun position chunk ->
+                let number = position + 1
+                let path = pagePath number
+                let root = rootFor path
+                let link number label = "<a class=\"btn btn-sm btn-ghost\" href=\"" + root + pagePath number + "\">" + label + "</a>"
+                let older = if number < chunks.Length then link (number + 1) "← Older posts" else "<span></span>"
+                let newer = if number > 1 then link (number - 1) "Newer posts →" else "<span></span>"
+                let navigation = "<nav class=\"livedocs-blog-pagination flex justify-between mt-6\">" + older + newer + "</nav>"
+                { Path = path; Title = "Blog"; Body = listing root "Blog" chunk navigation })
+        let archive folder label (posts: Map<string, ContentPage list>) =
+            posts
+            |> Map.toList
+            |> List.map (fun (key, entries) ->
+                let path = $"blog/{folder}/{key}.html"
+                { Path = path; Title = $"{label} {key}"; Body = listing (rootFor path) $"{label} {key}" entries "" })
+        let series =
+            (Blog.buildSeriesIndex true pages).BySeriesName
+            |> Map.toList
+            |> List.map (fun (name, entries) ->
+                let path = $"blog/series/{name}.html"
+                let root = rootFor path
+                let title = entries |> List.tryHead |> Option.bind _.Post.Metadata.Series |> Option.defaultValue name
+                let parts =
+                    entries
+                    |> List.map (fun entry ->
+                        $"<li><span class=\"opacity-70\">Part {entry.PartNumber} of {entry.PartCount}:</span> <a class=\"link\" href=\"{root}{encode entry.Post.OutputPath}\">{encode entry.Post.Metadata.Title}</a></li>")
+                    |> String.concat ""
+                { Path = path
+                  Title = $"Series: {title}"
+                  Body = $"<div class=\"livedocs-blog not-prose\"><h1 class=\"text-3xl font-bold mb-6\">Series: {encode title}</h1><ol class=\"livedocs-series-parts list-decimal pl-6 space-y-1\">{parts}</ol></div>" })
+        indexPages @ archive "tags" "Posts tagged" index.ByTag @ archive "category" "Posts in" index.ByCategory @ series
+
+    /// Builds the Atom feed. Links are relative to the feed's own location (`blog/feed.xml`), which
+    /// feed readers resolve against the URL they fetched the feed from.
+    let internal blogFeed (pages: ContentPage list) =
+        let index = Blog.buildPostIndex true pages
+        let encode = Net.WebUtility.HtmlEncode
+        let updated =
+            index.ByDateDesc
+            |> List.tryHead
+            |> Option.bind _.Metadata.Date
+            |> Option.map (fun date -> date.ToString("yyyy-MM-dd") + "T00:00:00Z")
+            |> Option.defaultValue "1970-01-01T00:00:00Z"
         let entries =
             index.ByDateDesc
-            |> List.map (fun post -> "<entry><title>" + encode post.Metadata.Title + "</title><id>/" + encode post.OutputPath + "</id><link href=\"/" + encode post.OutputPath + "\"/><updated>" + post.Metadata.Date.Value.ToString("yyyy-MM-dd") + "T00:00:00Z</updated><summary>" + encode (Blog.excerpt post) + "</summary></entry>")
+            |> List.map (fun post ->
+                let date = post.Metadata.Date.Value.ToString("yyyy-MM-dd") + "T00:00:00Z"
+                "<entry><title>" + encode post.Metadata.Title + "</title>"
+                + "<id>urn:fslivedocs:post:" + encode post.OutputPath + "</id>"
+                + "<link rel=\"alternate\" type=\"text/html\" href=\"../" + encode post.OutputPath + "\"/>"
+                + "<updated>" + date + "</updated><published>" + date + "</published>"
+                + "<summary>" + encode (Blog.excerpt post) + "</summary></entry>")
             |> String.concat ""
-        let feedPath = Path.Combine(outputDir, "blog", "feed.xml")
-        Directory.CreateDirectory(Path.GetDirectoryName feedPath) |> ignore
-        File.WriteAllText(feedPath, "<?xml version=\"1.0\" encoding=\"utf-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>Blog</title>" + entries + "</feed>")
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>Blog</title>"
+        + "<id>urn:fslivedocs:blog-feed</id><updated>" + updated + "</updated>"
+        + "<link rel=\"self\" type=\"application/atom+xml\" href=\"feed.xml\"/><link rel=\"alternate\" type=\"text/html\" href=\"index.html\"/>"
+        + entries + "</feed>"
+
+    /// Writes the generated blog pages through the caller's page renderer, so they share the site
+    /// layout, theme, navigation, and (for documentation sets) chrome of ordinary guide pages.
+    /// Sites without dated posts get no blog output at all.
+    let private renderBlogOutputs (render: ContentPage -> string) outputDir (pages: ContentPage list) =
+        if not (Blog.buildPostIndex true pages).ByDateDesc.IsEmpty then
+            let write (path: string) (text: string) =
+                let destination = Path.Combine(outputDir, path)
+                Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
+                File.WriteAllText(destination, text)
+            for listing in blogListingPages pages do
+                let page =
+                    { Metadata = ContentMetadata.empty listing.Title
+                      ContentHtml = listing.Body
+                      Markdown = ""
+                      FilePath = listing.Path
+                      OutputPath = listing.Path
+                      SectionOrder = Int32.MaxValue }
+                write listing.Path (render page)
+            write "blog/feed.xml" (blogFeed pages)
 
     /// <summary>Renders a single API entity page (Module or Type).</summary>
     /// <param name="e">The entity to render.</param>
@@ -720,7 +787,16 @@ nav{display:flex;justify-content:space-between;margin-top:1rem}nav a{color:#2563
             Directory.CreateDirectory(outputDirectory) |> ignore
             File.WriteAllText(outputPath, html))
 
-        renderBlogOutputs context.OutputDir context.SiteRootPath context.Pages
+        renderBlogOutputs
+            (fun page ->
+                let depth = page.OutputPath.Split('/').Length - 1
+                renderPage
+                    page
+                    { renderContext with
+                        RootPath = context.RootPath + String.replicate depth "../"
+                        SiteRootPath = context.SiteRootPath + String.replicate depth "../" })
+            context.OutputDir
+            context.Pages
 
         // Render API docs - Multi-page approach
         let apiDir = Path.Combine(context.OutputDir, "api")
@@ -1201,7 +1277,39 @@ nav{display:flex;justify-content:space-between;margin-top:1rem}nav a{color:#2563
 
                 File.WriteAllText(indexPath, html)
 
-        renderBlogOutputs destination siteRootPath (site.Sets |> List.collect _.Pages)
+        // Posts may live in any set; the generated blog pages sit at the site root and use the
+        // default set's chrome.
+        match site.Sets |> List.tryFind _.Set.IsDefault |> Option.orElse (List.tryHead site.Sets) with
+        | None -> ()
+        | Some defaultSite ->
+            let set = defaultSite.Set
+            let chrome =
+                ({ SetId = set.Id
+                   SetTitle = set.Title
+                   SetPath = set.Path
+                   VersionPath = versionOutputRoot currentVersion site.Version
+                   Sets = links
+                   Sidebar = set.Sidebar
+                   Api = set.Api
+                   NavigationPackage = packageForEntityIds defaultSite.Package set.ApiEntityIds
+                   ApiRoutes = set.ApiEntityIds |> List.map (fun id -> id, routePrefix set) |> Map.ofList
+                   VersionTargets = rootVersionTargets currentVersion allSites set false }
+                : View.SiteChrome)
+            renderBlogOutputs
+                (fun page ->
+                    let rootPath = siteRootPath + String.replicate (page.OutputPath.Split('/').Length - 1) "../"
+                    renderPageCore
+                        (Some chrome)
+                        page
+                        { AllPages = defaultSite.Pages
+                          Package = defaultSite.Package
+                          Config = config
+                          Versions = versions
+                          Theme = theme
+                          RootPath = rootPath
+                          SiteRootPath = rootPath })
+                destination
+                (site.Sets |> List.collect _.Pages)
 
     /// <summary>Builds one shared shell containing all configured documentation sets.</summary>
     let buildDocsSets currentVersion (sets: DocsSetSite list) config versions theme outputDir =

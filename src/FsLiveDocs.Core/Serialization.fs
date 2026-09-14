@@ -83,55 +83,6 @@ type FSharpUnionConverter() =
         else
             failwithf "Expected string when reading union, got %O" reader.TokenType
 
-/// Persist the configured comment provider as explicit, portable configuration rather than
-/// relying on the generic union converter (which intentionally only supports fieldless cases).
-type CommentsProviderConverter() =
-    inherit JsonConverter()
-    override _.CanConvert(objectType) = objectType = typeof<CommentsProvider>
-    override _.WriteJson(writer, value, serializer) =
-        match value :?> CommentsProvider with
-        | NoComments -> writer.WriteNull()
-        | Custom html ->
-            writer.WriteStartObject()
-            writer.WritePropertyName("kind")
-            writer.WriteValue("custom")
-            writer.WritePropertyName("html")
-            writer.WriteValue(html)
-            writer.WriteEndObject()
-        | Giscus settings ->
-            writer.WriteStartObject()
-            writer.WritePropertyName("kind")
-            writer.WriteValue("giscus")
-            writer.WritePropertyName("repo")
-            writer.WriteValue(settings.Repo)
-            writer.WritePropertyName("repoId")
-            writer.WriteValue(settings.RepoId)
-            writer.WritePropertyName("category")
-            writer.WriteValue(settings.Category)
-            writer.WritePropertyName("categoryId")
-            writer.WriteValue(settings.CategoryId)
-            writer.WritePropertyName("theme")
-            serializer.Serialize(writer, settings.Theme)
-            writer.WriteEndObject()
-    override _.ReadJson(reader, _, _, serializer) =
-        if reader.TokenType = JsonToken.Null then NoComments
-        else
-            let value = JObject.Load(reader)
-            let stringValue name =
-                match value.GetValue(name, StringComparison.OrdinalIgnoreCase) with
-                | null -> invalidOp $"commentsProvider.{name} is required."
-                | token when String.IsNullOrWhiteSpace(token.ToString()) -> invalidOp $"commentsProvider.{name} must not be empty."
-                | token -> token.ToObject<string>()
-            match stringValue "kind" with
-            | kind when kind.Equals("custom", StringComparison.OrdinalIgnoreCase) -> Custom(stringValue "html")
-            | kind when kind.Equals("giscus", StringComparison.OrdinalIgnoreCase) ->
-                let theme =
-                    match value.GetValue("theme", StringComparison.OrdinalIgnoreCase) with
-                    | null -> None
-                    | token -> token.ToObject<string>() |> Option.ofObj
-                Giscus { Repo = stringValue "repo"; RepoId = stringValue "repoId"; Category = stringValue "category"; CategoryId = stringValue "categoryId"; Theme = theme }
-            | kind -> invalidOp $"Unsupported commentsProvider kind '{kind}'."
-
 module Serialization =
     let jsonSettings =
         let settings = JsonSerializerSettings()

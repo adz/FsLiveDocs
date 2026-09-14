@@ -137,6 +137,13 @@ module ContentProvider =
                 let yaml = String.concat "\n" lines.[1..i-1]
                 let body = String.concat "\n" lines.[i+1..]
                 let metadata = deserializer.Deserialize<ContentMetadata>(yaml)
+                // YamlDotNet leaves omitted list fields null; the model promises empty lists.
+                let metadata =
+                    { metadata with
+                        Tags = if isNull (box metadata.Tags) then [] else metadata.Tags
+                        BlogList =
+                            metadata.BlogList
+                            |> Option.map (fun options -> if isNull (box options.Show) then { options with Show = [] } else options) }
                 Some (metadata, body)
             | None -> None
         else
@@ -574,11 +581,12 @@ module ContentProvider =
                 else
                     let labelText = String.concat " · " labels
                     $"<aside class=\"livedocs-checking-context not-prose\" aria-label=\"Example checking context\">{labelText}</aside>" + contentHtml
-            { Metadata = metadata; ContentHtml = contentHtml; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
+            { Metadata = metadata; ContentHtml = contentHtml; Markdown = body; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
         | None ->
             let contentHtml = resolveMarkdown context filePath raw
             { Metadata = ContentMetadata.empty (defaultTitle filePath)
               ContentHtml = contentHtml
+              Markdown = raw
               FilePath = filePath
               OutputPath = outputPath
               SectionOrder = System.Int32.MaxValue }

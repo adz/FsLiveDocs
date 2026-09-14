@@ -129,6 +129,8 @@ type ContentPage = {
     Metadata: ContentMetadata
     /// <summary>Rendered HTML content.</summary>
     ContentHtml: string
+    /// <summary>Canonical Markdown body (frontmatter removed) the HTML was rendered from.</summary>
+    Markdown: string
     /// <summary>Relative file path from the docs root.</summary>
     FilePath: string
     /// <summary>Relative HTML output path, with documentation ordering prefixes removed.</summary>
