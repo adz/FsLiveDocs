@@ -115,15 +115,35 @@ module SiteBuilder =
                 if matched.Success then Some matched.Groups.["value"].Value else None
             let listing = Regex.Replace(page.ContentHtml, @"{{<\s*posts(?<args>[^>]*)>}}", fun matched ->
                 let args = matched.Groups.["args"].Value
-                let tag = attribute "tag" args |> Option.map _.Trim().ToLowerInvariant()
-                let category = attribute "category" args |> Option.map _.Trim().ToLowerInvariant()
-                let limit = attribute "limit" args |> Option.bind (fun value -> match Int32.TryParse value with | true, number when number >= 0 -> Some number | _ -> None)
+                let options = page.Metadata.BlogList
+                let configured field = options |> Option.bind field
+                let tag = attribute "tag" args |> Option.orElseWith (fun () -> configured _.Tag) |> Option.map _.Trim().ToLowerInvariant()
+                let category = attribute "category" args |> Option.orElseWith (fun () -> configured _.Category) |> Option.map _.Trim().ToLowerInvariant()
+                let limit =
+                    attribute "limit" args
+                    |> Option.bind (fun value -> match Int32.TryParse value with | true, number when number >= 0 -> Some number | _ -> None)
+                    |> Option.orElseWith (fun () -> configured _.Limit)
+                let layout = attribute "layout" args |> Option.orElseWith (fun () -> configured _.Layout) |> Option.defaultValue "list" |> _.Trim().ToLowerInvariant()
+                let show =
+                    attribute "show" args
+                    |> Option.map (fun value -> value.Split(',') |> Array.map _.Trim().ToLowerInvariant() |> Set.ofArray)
+                    |> Option.orElseWith (fun () -> configured (fun value -> if isNull (box value.Show) then None else Some(value.Show |> List.map (fun item -> item.Trim().ToLowerInvariant()) |> Set.ofList)))
+                    |> Option.defaultValue (match layout with | "preview" -> set [ "date"; "readingtime"; "summary"; "tags" ] | "compact" -> set [ "date" ] | _ -> Set.empty)
+                if not (set [ "list"; "compact"; "preview" ] |> Set.contains layout) then invalidOp $"Unsupported blogList layout '{layout}' on {page.FilePath}."
                 let selected =
                     posts.ByDateDesc
                     |> List.filter (fun post -> tag |> Option.forall (fun value -> post.Metadata.Tags |> List.exists (fun item -> item.Trim().ToLowerInvariant() = value)))
                     |> List.filter (fun post -> category |> Option.forall (fun value -> post.Metadata.Category |> Option.exists (fun item -> item.Trim().ToLowerInvariant() = value)))
                     |> fun values -> limit |> Option.map (fun number -> values |> List.truncate number) |> Option.defaultValue values
-                "<ul class=\"livedocs-post-list\">" + (selected |> List.map (fun post -> "<li><a href=\"" + context.RootPath + Net.WebUtility.HtmlEncode post.OutputPath + "\">" + Net.WebUtility.HtmlEncode post.Metadata.Title + "</a></li>") |> String.concat "") + "</ul>")
+                let item post =
+                    let link = "<a href=\"" + context.RootPath + Net.WebUtility.HtmlEncode post.OutputPath + "\">" + Net.WebUtility.HtmlEncode post.Metadata.Title + "</a>"
+                    let date = if show.Contains "date" then "<span class=\"livedocs-post-date\">" + post.Metadata.Date.Value.ToString("yyyy-MM-dd") + "</span>" else ""
+                    let reading = if show.Contains "readingtime" then "<span class=\"livedocs-post-reading-time\">" + string (Blog.estimatedReadingMinutes post) + " min read</span>" else ""
+                    let summary = if show.Contains "summary" then "<p>" + Net.WebUtility.HtmlEncode(Blog.excerpt post) + "</p>" else ""
+                    let tags = if show.Contains "tags" then "<span class=\"livedocs-post-tags\">" + (post.Metadata.Tags |> List.map Net.WebUtility.HtmlEncode |> String.concat ", ") + "</span>" else ""
+                    if layout = "list" then "<li>" + link + "</li>" else "<article class=\"livedocs-post-" + layout + "\"><h3>" + link + "</h3>" + date + reading + summary + tags + "</article>"
+                if layout = "list" then "<ul class=\"livedocs-post-list\">" + (selected |> List.map item |> String.concat "") + "</ul>"
+                else "<div class=\"livedocs-post-list livedocs-post-list-" + layout + "\">" + (selected |> List.map item |> String.concat "") + "</div>")
             let series = Blog.buildSeriesIndex true context.AllPages
             Regex.Replace(listing, @"{{<\s*series-nav\s*>}}", fun _ ->
                 match page.Metadata.Series |> Option.map _.Trim().ToLowerInvariant() |> Option.bind (fun name -> series.BySeriesName |> Map.tryFind name) with

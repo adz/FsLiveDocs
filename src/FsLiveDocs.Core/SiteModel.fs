@@ -49,6 +49,16 @@ and CommentsProvider =
     | Giscus of GiscusSettings
     | Custom of rawHtml: string
 
+/// <summary>Selection and presentation defaults for a page that renders a post listing.</summary>
+[<CLIMutable>]
+type BlogListingOptions = {
+    Layout: string option
+    Show: string list
+    Limit: int option
+    Tag: string option
+    Category: string option
+}
+
 /// <summary>Resolved project paths and namespace information used by the doc-test runner.</summary>
 type ResolvedProject = {
     /// <summary>The path to the source project file.</summary>
@@ -90,6 +100,8 @@ type ContentMetadata = {
     SeriesOrder: int option
     /// <summary>Whether the configured comments provider is rendered for this page.</summary>
     Comments: bool
+    /// <summary>Optional defaults consumed by a <c>{{&lt; posts &gt;}}</c> shortcode on this page.</summary>
+    BlogList: BlogListingOptions option
 }
 
 /// Defaults for pages without frontmatter and explicit schema migrations.
@@ -108,7 +120,8 @@ module ContentMetadata =
           Slug = None
           Series = None
           SeriesOrder = None
-          Comments = false }
+          Comments = false
+          BlogList = None }
 
 /// <summary>A processed documentation page.</summary>
 type ContentPage = {

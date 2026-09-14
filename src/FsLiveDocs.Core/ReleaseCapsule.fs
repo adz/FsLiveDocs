@@ -44,7 +44,8 @@ module ReleaseCapsule =
                   "Slug", Newtonsoft.Json.Linq.JValue.CreateNull()
                   "Series", Newtonsoft.Json.Linq.JValue.CreateNull()
                   "SeriesOrder", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Comments", Newtonsoft.Json.Linq.JValue(false) ]
+                  "Comments", Newtonsoft.Json.Linq.JValue(false)
+                  "BlogList", Newtonsoft.Json.Linq.JValue.CreateNull() ]
 
             match root["Pages"] with
             | :? Newtonsoft.Json.Linq.JArray as pages ->
@@ -170,7 +171,8 @@ module ReleaseCapsule =
                             Slug = None
                             Series = None
                             SeriesOrder = None
-                            Comments = false }
+                            Comments = false
+                            BlogList = None }
                       Markdown = page.Markdown })
               Assets = legacy.Assets
               Site = legacy.Site
