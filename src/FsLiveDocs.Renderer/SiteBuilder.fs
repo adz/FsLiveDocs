@@ -185,7 +185,16 @@ module SiteBuilder =
     let private writeBlogOutput outputDir path title body =
         let destination = Path.Combine(outputDir, path)
         Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
-        File.WriteAllText(destination, "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + Net.WebUtility.HtmlEncode title + "</title></head><body><main>" + body + "</main></body></html>")
+        let styles = """
+<style>
+body{font-family:system-ui,sans-serif;line-height:1.5;color:#1f2937;margin:0;background:#f8fafc}
+main{max-width:48rem;margin:0 auto;padding:2rem 1rem}
+.blog-list{display:grid;gap:.75rem}.blog-preview{background:#fff;border:1px solid #e2e8f0;border-radius:.75rem;padding:1rem 1.1rem}
+.blog-preview h2{font-size:1.1rem;margin:0}.blog-preview h2 a{color:#0f172a;text-decoration:none}.blog-preview h2 a:hover{text-decoration:underline}
+.blog-meta{font-size:.8rem;color:#64748b;margin:.25rem 0}.blog-summary{font-size:.92rem;margin:.45rem 0}.blog-tags{display:flex;gap:.35rem;flex-wrap:wrap}.blog-tags a{font-size:.75rem;color:#475569;text-decoration:none;background:#f1f5f9;border-radius:999px;padding:.12rem .45rem}
+nav{display:flex;justify-content:space-between;margin-top:1rem}nav a{color:#2563eb}
+</style>"""
+        File.WriteAllText(destination, "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + Net.WebUtility.HtmlEncode title + "</title>" + styles + "</head><body><main>" + body + "</main></body></html>")
 
     let private renderBlogOutputs outputDir siteRootPath (pages: ContentPage list) =
         let index = Blog.buildPostIndex false pages
@@ -193,7 +202,11 @@ module SiteBuilder =
         let card page =
             let post = page : ContentPage
             let date = post.Metadata.Date |> Option.map string |> Option.defaultValue ""
-            "<article><h2><a href=\"" + siteRootPath + encode post.OutputPath + "\">" + encode post.Metadata.Title + "</a></h2><p>" + date + " · " + string (Blog.estimatedReadingMinutes post) + " min read</p><p>" + encode (Blog.excerpt post) + "</p></article>"
+            let tags =
+                post.Metadata.Tags
+                |> List.map (fun tag -> "<a href=\"" + siteRootPath + "blog/tags/" + encode tag + ".html\">" + encode tag + "</a>")
+                |> String.concat ""
+            "<article class=\"blog-preview\"><h2><a href=\"" + siteRootPath + encode post.OutputPath + "\">" + encode post.Metadata.Title + "</a></h2><p class=\"blog-meta\">" + date + " · " + string (Blog.estimatedReadingMinutes post) + " min read</p><p class=\"blog-summary\">" + encode (Blog.excerpt post) + "</p><div class=\"blog-tags\">" + tags + "</div></article>"
         let chunks =
             match index.ByDateDesc |> List.chunkBySize 10 with
             | [] -> [ [] ]
@@ -209,9 +222,9 @@ module SiteBuilder =
                 if number >= chunks.Length then ""
                 elif number = 1 then "<a href=\"page/2/index.html\">Older posts</a>"
                 else "<a href=\"../" + string (number + 1) + "/index.html\">Older posts</a>"
-            writeBlogOutput outputDir path "Blog" ("<h1>Blog</h1>" + (chunk |> List.map card |> String.concat "") + "<nav>" + newer + " " + older + "</nav>"))
-        index.ByTag |> Map.iter (fun tag posts -> writeBlogOutput outputDir ("blog/tags/" + tag + ".html") ("Posts tagged " + tag) ("<h1>Posts tagged " + encode tag + "</h1>" + (posts |> List.map card |> String.concat "")))
-        index.ByCategory |> Map.iter (fun category posts -> writeBlogOutput outputDir ("blog/category/" + category + ".html") ("Posts in " + category) ("<h1>Posts in " + encode category + "</h1>" + (posts |> List.map card |> String.concat "")))
+            writeBlogOutput outputDir path "Blog" ("<h1>Blog</h1><div class=\"blog-list\">" + (chunk |> List.map card |> String.concat "") + "</div><nav>" + newer + " " + older + "</nav>"))
+        index.ByTag |> Map.iter (fun tag posts -> writeBlogOutput outputDir ("blog/tags/" + tag + ".html") ("Posts tagged " + tag) ("<h1>Posts tagged " + encode tag + "</h1><div class=\"blog-list\">" + (posts |> List.map card |> String.concat "") + "</div>"))
+        index.ByCategory |> Map.iter (fun category posts -> writeBlogOutput outputDir ("blog/category/" + category + ".html") ("Posts in " + category) ("<h1>Posts in " + encode category + "</h1><div class=\"blog-list\">" + (posts |> List.map card |> String.concat "") + "</div>"))
         Blog.buildSeriesIndex false pages
         |> fun series -> series.BySeriesName
         |> Map.iter (fun name entries ->
