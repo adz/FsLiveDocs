@@ -55,7 +55,8 @@ per-command **Assumes** column lists what each one needs beyond that.
 | `--from "<command>"` | `history-sync` discovery command for non-GitHub hosts. |
 | `--provider <name>` | `generate-ci` target host (default `github`). |
 | `--theme <name>` | Select the initial site theme. |
-| `--warn-as-error` | Fail on API documentation quality warnings. |
+| `--warn-as-error` | Fail on API documentation quality and blog authoring warnings. |
+| `--drafts` | With `build` or `watch`, include blog posts marked `draft: true`. |
 | `--verbosity <level>` | Set output detail: `warnings` (default), `info`, or `debug`. |
 | `--interactive <bool>` | Enable or disable animated, stage-aware progress (default: `true`). |
 | `--banner <bool>` | Show or hide the LiveDocs banner (default: `true`). |
@@ -82,6 +83,8 @@ At the default `warnings` level, LiveDocs groups API issues by source file and i
 | --- | --- |
 | `{{< snippet id="Name" >}}` | Transclude a marked F# source region. |
 | `{{< example id="Name" >}}` | Transclude an XML documentation example. |
+| `{{< posts tag="..." category="..." limit="..." layout="..." show="..." >}}` | List blog posts; see [Publish a blog](guides/blog.md). |
+| `{{< series-nav >}}` | List the parts of the current post's series. |
 | `xref:T:Namespace.Type` | Link to a documented entity. |
 | `xref:M:Namespace.Module.member` | Link to a documented member. |
 

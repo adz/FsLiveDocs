@@ -15,19 +15,53 @@ module ReleaseCapsule =
     [<Literal>]
     let ManifestSchemaVersion = 1
 
-    /// Schema 2 adds per-page documentation-set identity and the resolved <see cref="ReleaseDocsSet"/> list.
-    /// Schema 1 capsules are migrated deterministically to a single implicit default set.
+    /// Schema 3 adds optional blog metadata. Schema 2 adds documentation-set identity.
     [<Literal>]
-    let ContentSchemaVersion = 2
+    let ContentSchemaVersion = 3
 
     /// Content schema versions this renderer reads. Older versions are migrated; unknown versions are rejected.
-    let supportedContentSchemaVersions = set [ 1; 2 ]
+    let supportedContentSchemaVersions = set [ 1; 2; 3 ]
 
     [<Literal>]
     let HistoryIndexSchemaVersion = 1
 
     /// The renderer-neutral content artifact exactly as schema 1 persisted it, kept for migration only.
     module private LegacyContent =
+
+        /// Schema 2 had documentation sets but predated blog metadata.  Do not depend on
+        /// Json.NET's treatment of absent record fields: write every blog default explicitly.
+        let migrateV2 (bytes: byte array) : ReleaseContentArtifact =
+            let root = Newtonsoft.Json.Linq.JObject.Parse(Encoding.UTF8.GetString bytes)
+            let schema = root["SchemaVersion"] |> fun value -> if isNull value then 0 else value.ToObject<int>()
+            if schema <> 2 then invalidOp $"Content schema 2 payload declares schema {schema}."
+
+            let defaults: (string * Newtonsoft.Json.Linq.JToken) list =
+                [ "Date", Newtonsoft.Json.Linq.JValue.CreateNull()
+                  "Tags", Newtonsoft.Json.Linq.JArray()
+                  "Category", Newtonsoft.Json.Linq.JValue.CreateNull()
+                  "Draft", Newtonsoft.Json.Linq.JValue(false)
+                  "Summary", Newtonsoft.Json.Linq.JValue.CreateNull()
+                  "Slug", Newtonsoft.Json.Linq.JValue.CreateNull()
+                  "Series", Newtonsoft.Json.Linq.JValue.CreateNull()
+                  "SeriesOrder", Newtonsoft.Json.Linq.JValue.CreateNull()
+                  "Comments", Newtonsoft.Json.Linq.JValue(false)
+                  "BlogList", Newtonsoft.Json.Linq.JValue.CreateNull() ]
+
+            match root["Pages"] with
+            | :? Newtonsoft.Json.Linq.JArray as pages ->
+                for page in pages do
+                    match page["Metadata"] with
+                    | :? Newtonsoft.Json.Linq.JObject as metadata ->
+                        for name, value in defaults do metadata[name] <- value.DeepClone()
+                    | _ -> invalidOp "Content schema 2 page is missing Metadata."
+            | _ -> invalidOp "Content schema 2 Pages must be an array."
+
+            match root["Site"] with
+            | :? Newtonsoft.Json.Linq.JObject as site -> site["CommentsProvider"] <- Newtonsoft.Json.Linq.JValue.CreateNull()
+            | _ -> invalidOp "Content schema 2 is missing Site."
+
+            root["SchemaVersion"] <- Newtonsoft.Json.Linq.JValue(ContentSchemaVersion)
+            root.ToObject<ReleaseContentArtifact>(JsonSerializer.Create(Serialization.jsonSettings))
 
         [<CLIMutable>]
         type ContentPageV1 =
@@ -127,7 +161,18 @@ module ReleaseCapsule =
                 |> List.map (fun page ->
                     { SourcePath = page.SourcePath
                       SetId = DocsSet.DefaultId
-                      Metadata = page.Metadata
+                      Metadata =
+                        { page.Metadata with
+                            Date = None
+                            Tags = []
+                            Category = None
+                            Draft = false
+                            Summary = None
+                            Slug = None
+                            Series = None
+                            SeriesOrder = None
+                            Comments = false
+                            BlogList = None }
                       Markdown = page.Markdown })
               Assets = legacy.Assets
               Site = legacy.Site
@@ -198,11 +243,11 @@ module ReleaseCapsule =
         let entities, members, examples = countEntities api.Package.Entities
         let rec countNodes nodes = nodes |> List.sumBy (fun node -> 1 + countNodes node.Children)
         let documentationNodes =
-            let rec inEntities entities =
+            let rec inEntities (entities: EntityModel list) =
                 entities
-                |> List.sumBy (fun entity ->
+                |> List.sumBy (fun (entity: EntityModel) ->
                     countNodes entity.Summary
-                    + (entity.Members |> List.sumBy (fun member' -> countNodes member'.Summary + countNodes member'.Remarks))
+                    + (entity.Members |> List.sumBy (fun (member': MemberModel) -> countNodes member'.Summary + countNodes member'.Remarks))
                     + inEntities entity.Entities)
             inEntities api.Package.Entities
         let blocks = semantic.Pages |> List.collect _.Blocks
@@ -374,7 +419,9 @@ module ReleaseCapsule =
                       MediaType = mediaType path
                       Sha256 = sha256Bytes bytes
                       Size = int64 bytes.LongLength })
-              Site = site
+              // Comment embeds are live site configuration, not historical content meaning.
+              // A capsule must remain renderer-neutral and cannot archive third-party JS config.
+              Site = { site with CommentsProvider = None }
               // Configuration order drives the set switcher and is itself deterministic input.
               DocsSets = docsSets }
 
@@ -526,7 +573,8 @@ module ReleaseCapsule =
         // version's shape, then migrate supported older versions with a small deterministic step.
         let content =
             match manifest.Content.SchemaVersion with
-            | 2 -> deserialize<ReleaseContentArtifact> contentBytes
+            | 3 -> deserialize<ReleaseContentArtifact> contentBytes
+            | 2 -> LegacyContent.migrateV2 contentBytes
             | 1 -> LegacyContent.migrate semantic.Prelude api (LegacyContent.deserialize contentBytes)
             | other ->
                 let supported =

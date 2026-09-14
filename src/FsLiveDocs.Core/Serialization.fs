@@ -2,6 +2,7 @@ namespace FsLiveDocs.Core
 
 open System
 open Newtonsoft.Json
+open Newtonsoft.Json.Linq
 
 type FSharpListConverter() =
     inherit JsonConverter()
@@ -46,10 +47,31 @@ type FSharpUnionConverter() =
         Microsoft.FSharp.Reflection.FSharpType.IsUnion(objectType) &&
         not (objectType.IsGenericType && (objectType.GetGenericTypeDefinition() = typedefof<option<_>> || objectType.GetGenericTypeDefinition() = typedefof<list<_>>))
     override _.WriteJson(writer, value, serializer) =
-        let case, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(value, value.GetType())
-        writer.WriteValue(case.Name)
+        match value with
+        | :? CommentsProvider as provider ->
+            match provider with
+            | NoComments -> writer.WriteNull()
+            | Custom html -> serializer.Serialize(writer, {| kind = "custom"; html = html |})
+            | Giscus settings -> serializer.Serialize(writer, {| kind = "giscus"; repo = settings.Repo; repoId = settings.RepoId; category = settings.Category; categoryId = settings.CategoryId; theme = settings.Theme |})
+        | _ ->
+            let case, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(value, value.GetType())
+            writer.WriteValue(case.Name)
     override _.ReadJson(reader, objectType, existingValue, serializer) =
-        if reader.TokenType = JsonToken.String then
+        if objectType = typeof<CommentsProvider> then
+            if reader.TokenType = JsonToken.Null then NoComments :> obj
+            else
+                let value = JObject.Load(reader)
+                let required name =
+                    match value.GetValue(name, StringComparison.OrdinalIgnoreCase) with
+                    | null -> invalidOp $"commentsProvider.{name} is required."
+                    | token -> token.ToObject<string>()
+                match required "kind" with
+                | kind when kind.Equals("custom", StringComparison.OrdinalIgnoreCase) -> Custom(required "html") :> obj
+                | kind when kind.Equals("giscus", StringComparison.OrdinalIgnoreCase) ->
+                    let theme = match value.GetValue("theme", StringComparison.OrdinalIgnoreCase) with | null -> None | token -> token.ToObject<string>() |> Option.ofObj
+                    Giscus { Repo = required "repo"; RepoId = required "repoId"; Category = required "category"; CategoryId = required "categoryId"; Theme = theme } :> obj
+                | kind -> invalidOp $"Unsupported commentsProvider kind '{kind}'."
+        elif reader.TokenType = JsonToken.String then
             let name = reader.Value :?> string
             let cases = Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(objectType)
             match cases |> Array.tryFind (fun c -> c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) with

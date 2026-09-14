@@ -1,0 +1,45 @@
+{
+  "SchemaVersion": 2,
+  "UsesDocumentationSets": true,
+  "Pages": [
+    {
+      "SourcePath": "handbook/index.md",
+      "SetId": "handbook",
+      "Metadata": {
+        "Title": "Handbook",
+        "Type": null,
+        "Project": null,
+        "TargetFramework": null,
+        "Platform": null
+      },
+      "Markdown": "# Handbook\n\nCaptured before blog metadata existed."
+    }
+  ],
+  "Assets": [],
+  "Site": {
+    "RepoUrl": null,
+    "SiteName": "Schema two",
+    "LogoText": null,
+    "LogoPath": null,
+    "LogoDarkPath": null,
+    "ShowSiteName": null,
+    "Stylesheet": null,
+    "Themes": null,
+    "Navigation": null,
+    "FSharpPrelude": null
+  },
+  "DocsSets": [
+    {
+      "Id": "handbook",
+      "Title": "Handbook",
+      "Source": "handbook",
+      "Path": "",
+      "Projects": [],
+      "IsDefault": true,
+      "Sidebar": true,
+      "Api": false,
+      "ApiEntityIds": [],
+      "FSharpPrelude": null
+    }
+  ]
+}

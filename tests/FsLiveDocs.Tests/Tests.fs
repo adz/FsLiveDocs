@@ -172,6 +172,7 @@ module ReleaseCapsuleTests =
             Themes = None
             Navigation = None
             FSharpPrelude = None
+            CommentsProvider = None
         }
 
     let private inputs () =
@@ -191,11 +192,7 @@ module ReleaseCapsuleTests =
               Pages = [] }
 
         let metadata: ContentMetadata =
-            { Title = "Home"
-              Type = None
-              Project = None
-              TargetFramework = None
-              Platform = None }
+            ContentMetadata.empty "Home"
 
         api,
         semantic,
@@ -1022,12 +1019,12 @@ module DocTestRunnerTests =
 
 module ViewTests =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None }
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None; CommentsProvider = None }
 
     [<Fact>]
     let ``tooltip surface is explicitly opaque`` () =
         let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
-        let page = { Metadata = { Title = "Guide"; Type = None; Project = None; TargetFramework = None; Platform = None }; ContentHtml = ""; FilePath = "guide.md"; OutputPath = "guide.html"; SectionOrder = 0 }
+        let page = { Metadata = ContentMetadata.empty "Guide"; ContentHtml = ""; Markdown = ""; FilePath = "guide.md"; OutputPath = "guide.html"; SectionOrder = 0 }
         let context : SiteBuilder.SiteRenderContext =
             { AllPages = [ page ]; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "dark"; RootPath = ""; SiteRootPath = "" }
 
@@ -1038,8 +1035,8 @@ module ViewTests =
 
     [<Fact>]
     let ``sidebar orders a folder by its earliest prefixed page`` () =
-        let metadata title = { Title = title; Type = None; Project = None; TargetFramework = None; Platform = None }
-        let page source output title = { Metadata = metadata title; ContentHtml = ""; FilePath = source; OutputPath = output; SectionOrder = 0 }
+        let metadata title = ContentMetadata.empty title
+        let page source output title = { Metadata = metadata title; ContentHtml = ""; Markdown = ""; FilePath = source; OutputPath = output; SectionOrder = 0 }
         let pages =
             [ page "01-start.md" "start.html" "Get started"
               page "02-guides/01-examples.md" "guides/examples.html" "Examples"
@@ -1107,7 +1104,7 @@ module ViewTests =
 
 module SiteBuilderTests =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None }
+    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None; CommentsProvider = None }
 
     [<Fact>]
     let ``history renders persisted semantic hovers without a historical project`` () =
@@ -1262,13 +1259,13 @@ module SiteBuilderTests =
     [<Fact>]
     let ``build preserves an authored homepage and nested page paths`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
-        let metadata title = { Title = title; Type = None; Project = None; TargetFramework = None; Platform = None }
+        let metadata title = ContentMetadata.empty title
         let pages =
             [
-                { Metadata = metadata "Home"; ContentHtml = "<h1>Consumer home</h1>"; FilePath = "docs/index.md"; OutputPath = "index.html"; SectionOrder = Int32.MaxValue }
-                { Metadata = metadata "Client"; ContentHtml = "<h1>Client</h1>"; FilePath = "docs/01-http/02-client.md"; OutputPath = "http/client.html"; SectionOrder = 1 }
-                { Metadata = metadata "Advanced"; ContentHtml = "<h1>Advanced</h1>"; FilePath = "docs/01-http/01-advanced/_index.md"; OutputPath = "http/advanced/index.html"; SectionOrder = 1 }
-                { Metadata = metadata "Retries"; ContentHtml = "<h1>Retries</h1>"; FilePath = "docs/01-http/01-advanced/01-retries.md"; OutputPath = "http/advanced/retries.html"; SectionOrder = 1 }
+                { Metadata = metadata "Home"; ContentHtml = "<h1>Consumer home</h1>"; Markdown = ""; FilePath = "docs/index.md"; OutputPath = "index.html"; SectionOrder = Int32.MaxValue }
+                { Metadata = metadata "Client"; ContentHtml = "<h1>Client</h1>"; Markdown = ""; FilePath = "docs/01-http/02-client.md"; OutputPath = "http/client.html"; SectionOrder = 1 }
+                { Metadata = metadata "Advanced"; ContentHtml = "<h1>Advanced</h1>"; Markdown = ""; FilePath = "docs/01-http/01-advanced/_index.md"; OutputPath = "http/advanced/index.html"; SectionOrder = 1 }
+                { Metadata = metadata "Retries"; ContentHtml = "<h1>Retries</h1>"; Markdown = ""; FilePath = "docs/01-http/01-advanced/01-retries.md"; OutputPath = "http/advanced/retries.html"; SectionOrder = 1 }
             ]
         let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
 
@@ -1286,6 +1283,7 @@ module SiteBuilderTests =
         let homepage = File.ReadAllText(Path.Combine(outputDir, "index.html"))
         let nestedPage = File.ReadAllText(Path.Combine(outputDir, "http", "client.html"))
         Assert.Contains("Consumer home", homepage)
+        Assert.False(Directory.Exists(Path.Combine(outputDir, "blog")), "A site without dated posts should not get blog output.")
         Assert.DoesNotContain("Verified documentation for the F# ecosystem", homepage)
         Assert.Contains("href=\"../index.html\"", nestedPage)
         Assert.DoesNotContain("class=\"group\" open=", nestedPage)
@@ -1325,6 +1323,7 @@ module SiteBuilderTests =
             Themes = Some [ "light"; "dark" ]
             Navigation = Some [ { Label = "Guides"; Href = "index.html" }; { Label = "Source"; Href = "https://github.com/example/library" } ]
             FSharpPrelude = None
+            CommentsProvider = None
         }
 
         SiteBuilder.build {
@@ -1880,7 +1879,8 @@ module DocumentationSetTests =
               Some
                   [ { Label = "Docs"; Href = "/" }
                     { Label = "Handbook"; Href = "/handbook/" } ]
-          FSharpPrelude = None }
+          FSharpPrelude = None
+          CommentsProvider = None }
 
     let private configured id title source path projects isDefault sidebar api prelude : DocsSetConfig =
         { Id = id
@@ -2039,16 +2039,12 @@ module DocumentationSetTests =
                   { Name = "Internal"
                     EntityIds = [ internalEntity.Id ] } ] }
 
-        let metadata title =
-            { Title = title
-              Type = None
-              Project = None
-              TargetFramework = None
-              Platform = None }
+        let metadata title = ContentMetadata.empty title
 
         let page path title =
             { Metadata = metadata title
               ContentHtml = "<h1>" + title + "</h1>"
+              Markdown = "# " + title
               FilePath = path + ".md"
               OutputPath = path + ".html"
               SectionOrder = 0 }
@@ -2112,12 +2108,7 @@ module DocumentationSetTests =
               Scenarios = []
               Packages = [] }
 
-        let metadata title =
-            { Title = title
-              Type = None
-              Project = None
-              TargetFramework = None
-              Platform = None }
+        let metadata title = ContentMetadata.empty title
 
         let set: ReleaseDocsSet =
             { Id = "handbook"
@@ -2142,6 +2133,7 @@ module DocumentationSetTests =
         let page path title =
             { Metadata = metadata title
               ContentHtml = "<h1>" + title + "</h1>"
+              Markdown = "# " + title
               FilePath = path + ".md"
               OutputPath = path + ".html"
               SectionOrder = 0 }
@@ -2188,15 +2180,11 @@ module DocumentationSetTests =
             Path.Combine(Path.GetTempPath(), "fslivedocs-legacy-fallback-" + Guid.NewGuid().ToString("N"))
 
         let output = Path.Combine(root, "output")
-        let metadata title =
-            { Title = title
-              Type = None
-              Project = None
-              TargetFramework = None
-              Platform = None }
+        let metadata title = ContentMetadata.empty title
         let page path title =
             { Metadata = metadata title
               ContentHtml = "<h1>" + title + "</h1>"
+              Markdown = "# " + title
               FilePath = path + ".md"
               OutputPath = path + ".html"
               SectionOrder = 0 }
@@ -2266,12 +2254,7 @@ module DocumentationSetTests =
               Prelude = ""
               Pages = [] }
 
-        let metadata =
-            { Title = "Home"
-              Type = None
-              Project = None
-              TargetFramework = None
-              Platform = None }
+        let metadata = ContentMetadata.empty "Home"
 
         let set: ReleaseDocsSet =
             { Id = "handbook"
@@ -2295,14 +2278,14 @@ module DocumentationSetTests =
         |> ignore
 
         let manifest, _, _, content, _ = ReleaseCapsule.load capsule
-        Assert.Equal(2, manifest.Content.SchemaVersion)
+        Assert.Equal(ReleaseCapsule.ContentSchemaVersion, manifest.Content.SchemaVersion)
         Assert.True(content.UsesDocumentationSets)
         Assert.Equal("handbook", content.DocsSets.Head.Source)
         Assert.Equal("handbook", content.Pages.Head.SetId)
         Assert.Equal(Some "open System", content.DocsSets.Head.FSharpPrelude)
 
-    [<Fact>]
-    let ``content schema one migrates deterministically to the implicit default set`` () =
+    /// Writes a capsule whose content component is the given legacy payload, byte for byte.
+    let private writeLegacyContentCapsule (contentSchema: int) (contentBytes: byte array) =
         let root =
             Path.Combine(Path.GetTempPath(), "fslivedocs-v1-" + Guid.NewGuid().ToString("N"))
 
@@ -2332,11 +2315,6 @@ module DocumentationSetTests =
         let apiBytes = bytes api
         let semanticBytes = bytes semantic
 
-        let contentBytes =
-            Text.Encoding.UTF8.GetBytes(
-                """{"SchemaVersion":1,"Pages":[{"SourcePath":"index.md","Metadata":{"Title":"Home","Type":null,"Project":null,"TargetFramework":null,"Platform":null},"Markdown":"# Home"}],"Assets":[],"Site":{"RepoUrl":null,"SiteName":"Legacy","LogoText":null,"LogoPath":null,"LogoDarkPath":null,"ShowSiteName":null,"Stylesheet":null,"Themes":null,"Navigation":null,"FSharpPrelude":null}}"""
-            )
-
         let releaseComponent schema path (value: byte array) : ReleaseComponent =
             { SchemaVersion = schema
               Path = path
@@ -2350,7 +2328,7 @@ module DocumentationSetTests =
               CaptureToolVersion = "0.4.1"
               Api = releaseComponent api.SchemaVersion "api.json" apiBytes
               Semantic = releaseComponent semantic.SchemaVersion "semantic.json" semanticBytes
-              Content = releaseComponent 1 "content.json" contentBytes }
+              Content = releaseComponent contentSchema "content.json" contentBytes }
 
         let manifestBytes = bytes manifest
 
@@ -2367,6 +2345,16 @@ module DocumentationSetTests =
             stream.Write(value, 0, value.Length)
 
         archive.Dispose()
+        capsule
+
+    [<Fact>]
+    let ``content schema one migrates deterministically to the implicit default set`` () =
+        let contentBytes =
+            Text.Encoding.UTF8.GetBytes(
+                """{"SchemaVersion":1,"Pages":[{"SourcePath":"index.md","Metadata":{"Title":"Home","Type":null,"Project":null,"TargetFramework":null,"Platform":null},"Markdown":"# Home"}],"Assets":[],"Site":{"RepoUrl":null,"SiteName":"Legacy","LogoText":null,"LogoPath":null,"LogoDarkPath":null,"ShowSiteName":null,"Stylesheet":null,"Themes":null,"Navigation":null,"FSharpPrelude":null}}"""
+            )
+
+        let capsule = writeLegacyContentCapsule 1 contentBytes
 
         let _, _, _, content, _ = ReleaseCapsule.load capsule
         Assert.False(content.UsesDocumentationSets)
@@ -2374,3 +2362,235 @@ module DocumentationSetTests =
         Assert.Equal("docs", content.DocsSets.Head.Source)
         Assert.Equal(DocsSet.DefaultId, content.Pages.Head.SetId)
         Assert.Equal(Some "open System", content.DocsSets.Head.FSharpPrelude)
+        let metadata = content.Pages.Head.Metadata
+        Assert.Equal(None, metadata.Date)
+        Assert.Empty(metadata.Tags)
+        Assert.False(metadata.Draft)
+        Assert.False(metadata.Comments)
+        Assert.Equal(None, metadata.BlogList)
+        Assert.Equal(None, content.Site.CommentsProvider)
+
+    [<Fact>]
+    let ``content schema two fixture migrates with explicit blog defaults`` () =
+        let fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "content-schema-2.json")
+        let capsule = writeLegacyContentCapsule 2 (File.ReadAllBytes fixture)
+
+        let _, _, _, content, _ = ReleaseCapsule.load capsule
+
+        Assert.Equal(ReleaseCapsule.ContentSchemaVersion, content.SchemaVersion)
+        Assert.True(content.UsesDocumentationSets)
+        Assert.Equal("handbook", content.Pages.Head.SetId)
+        Assert.Equal(Some "Schema two", content.Site.SiteName)
+        let metadata = content.Pages.Head.Metadata
+        Assert.Equal("Handbook", metadata.Title)
+        Assert.Equal(None, metadata.Date)
+        Assert.Empty(metadata.Tags)
+        Assert.Equal(None, metadata.Category)
+        Assert.False(metadata.Draft)
+        Assert.Equal(None, metadata.Summary)
+        Assert.Equal(None, metadata.Slug)
+        Assert.Equal(None, metadata.Series)
+        Assert.Equal(None, metadata.SeriesOrder)
+        Assert.False(metadata.Comments)
+        Assert.Equal(None, metadata.BlogList)
+        Assert.Equal(None, content.Site.CommentsProvider)
+
+module BlogTests =
+
+    let private blogSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None; CommentsProvider = None }
+
+    let private post title date draft series order =
+        let metadata =
+            { ContentMetadata.empty title with
+                Date = Some(DateOnly.Parse date)
+                Draft = draft
+                Tags = [ "fsharp" ]
+                Category = Some "news"
+                Series = series
+                SeriesOrder = order }
+        { Metadata = metadata
+          ContentHtml = "<p>One two three.</p>"
+          Markdown = "One two three."
+          FilePath = title + ".md"
+          OutputPath = "blog/" + title.ToLowerInvariant() + "/index.html"
+          SectionOrder = 0 }
+
+    [<Fact>]
+    let ``blog indices exclude drafts and series navigation overrides chronology`` () =
+        let older = post "Older" "2026-01-01" false (Some "Guide") (Some 1)
+        let newer = post "Newer" "2026-01-03" false (Some "Guide") (Some 2)
+        let draft = post "Draft" "2026-01-04" true None None
+        let index = Blog.buildPostIndex false [ older; newer; draft ]
+        let series = Blog.buildSeriesIndex false [ older; newer; draft ]
+        let navigation = Blog.navigation newer index series
+
+        Assert.True([ "Newer"; "Older" ] = (index.ByDateDesc |> List.map _.Metadata.Title))
+        Assert.Equal(2, index.ByTag.["fsharp"].Length)
+        Assert.Equal(Some "Older", navigation.Prev |> Option.map _.Metadata.Title)
+        Assert.Equal(Some(2, 2), navigation.SeriesPart)
+
+    [<Fact>]
+    let ``giscus comments provider is read from site configuration json`` () =
+        let json = """{ "siteName": "Blog", "commentsProvider": { "kind": "giscus", "repo": "owner/repo", "repoId": "repo-id", "category": "Announcements", "categoryId": "category-id", "theme": "dark" } }"""
+        let config = JsonConvert.DeserializeObject<SiteConfig>(json, Serialization.jsonSettings)
+        let expected =
+            Giscus
+                { Repo = "owner/repo"
+                  RepoId = "repo-id"
+                  Category = "Announcements"
+                  CategoryId = "category-id"
+                  Theme = Some "dark" }
+        Assert.Equal(Some expected, config.CommentsProvider)
+        let custom = JsonConvert.DeserializeObject<SiteConfig>("""{ "commentsProvider": { "kind": "custom", "html": "<div id=\"x\"></div>" } }""", Serialization.jsonSettings)
+        Assert.Equal(Some(Custom "<div id=\"x\"></div>"), custom.CommentsProvider)
+        Assert.Throws<InvalidOperationException>(fun () ->
+            JsonConvert.DeserializeObject<SiteConfig>("""{ "commentsProvider": { "kind": "giscus" } }""", Serialization.jsonSettings) |> ignore)
+        |> ignore
+
+    let private renderContext pages config : SiteBuilder.SiteRenderContext =
+        { AllPages = pages
+          Package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+          Config = config
+          Versions = []
+          Theme = "light"
+          RootPath = "../"
+          SiteRootPath = "../" }
+
+    [<Fact>]
+    let ``comments render a provider-agnostic toggle with a runtime count placeholder`` () =
+        let page = { post "Commented" "2026-01-01" false None None with Metadata = { (post "Commented" "2026-01-01" false None None).Metadata with Comments = true } }
+        let giscus =
+            { blogSiteConfig with
+                CommentsProvider = Some(Giscus { Repo = "o/r"; RepoId = "rid"; Category = "c"; CategoryId = "cid"; Theme = None }) }
+        let html = SiteBuilder.renderPage page (renderContext [ page ] giscus)
+        Assert.Contains("class=\"livedocs-comments-toggle", html)
+        Assert.Contains("class=\"livedocs-comments-count\" data-state=\"loading\"", html)
+        Assert.Contains("id=\"livedocs-comments-embed\"", html)
+        Assert.Contains("data-emit-metadata=\"1\"", html)
+        Assert.Contains("event.origin!=='https://giscus.app'", html)
+
+        let custom = { blogSiteConfig with CommentsProvider = Some(Custom "<div class=\"my-embed\"></div>") }
+        let customHtml = SiteBuilder.renderPage page (renderContext [ page ] custom)
+        Assert.Contains("class=\"livedocs-comments-toggle", customHtml)
+        Assert.Contains("<div id=\"livedocs-comments-embed\" class=\"livedocs-comments-embed mt-4\"><div class=\"my-embed\"></div></div>", customHtml)
+
+        let uncommented = SiteBuilder.renderPage (post "Quiet" "2026-01-01" false None None) (renderContext [ page ] giscus)
+        Assert.DoesNotContain("livedocs-comments-toggle", uncommented)
+
+    [<Fact>]
+    let ``posts and series-nav shortcodes expand from real markdown but not inside code`` () =
+        let html (markdown: string) = Markdig.Markdown.ToHtml(markdown, ContentProvider.pipeline, null)
+        let first = { post "First" "2026-01-01" false (Some "Guide") (Some 1) with OutputPath = "blog/first/index.html"; Markdown = "Opening words." }
+        let second = { post "Second" "2026-01-02" false (Some "Guide") (Some 2) with OutputPath = "blog/second/index.html"; Markdown = "Later words." }
+        let markdown = "{{< series-nav >}}\n\n{{< posts tag=\"fsharp\" limit=\"1\" >}}\n\nWrite `{{< posts >}}` to list posts."
+        let page = { second with ContentHtml = html markdown; Markdown = markdown }
+        let rendered = SiteBuilder.renderPage page (renderContext [ first; second ] blogSiteConfig)
+        Assert.Contains("<ol class=\"livedocs-series-nav\">", rendered)
+        Assert.Contains("Part 1: First</a>", rendered)
+        Assert.Contains("<ul class=\"livedocs-post-list\"><li><a href=\"../blog/second/index.html\">Second</a></li></ul>", rendered)
+        Assert.Contains("<code>{{&lt; posts &gt;}}</code>", rendered)
+
+        let news =
+            { ContentMetadata.empty "News" with
+                BlogList = Some { Layout = Some "preview"; Show = []; Limit = Some 2; Tag = None; Category = None } }
+        let newsPage =
+            { Metadata = news
+              ContentHtml = html "{{< posts >}}"
+              Markdown = "{{< posts >}}"
+              FilePath = "news.md"
+              OutputPath = "news.html"
+              SectionOrder = 0 }
+        let newsHtml = SiteBuilder.renderPage newsPage (renderContext [ first; second ] blogSiteConfig)
+        Assert.Contains("livedocs-post-list-preview", newsHtml)
+        Assert.Contains("<p>Later words.</p>", newsHtml)
+        Assert.Contains("min read</span>", newsHtml)
+
+    [<Fact>]
+    let ``series-nav on a page without a series is reported`` () =
+        let orphan = { post "Orphan" "2026-01-01" false None None with Markdown = "Intro\n\n{{< series-nav >}}"; FilePath = "docs/orphan.md" }
+        let member' = { post "Member" "2026-01-02" false (Some "Guide") (Some 1) with Markdown = "{{< series-nav >}}" }
+        let documented = { post "Docs" "2026-01-03" false None None with Markdown = "Use `{{< series-nav >}}` in a post.\n\n```markdown\n{{< series-nav >}}\n```" }
+        let warnings = Blog.diagnostics [ orphan; member'; documented ]
+        let warning = Assert.Single(warnings)
+        Assert.StartsWith("docs/orphan.md:", warning)
+        Assert.Contains("series-nav", warning)
+
+    [<Fact>]
+    let ``excerpt and reading time come from the canonical markdown`` () =
+        let prose = String.replicate 250 "word "
+        let markdown = "# Title\n\n{{< posts limit=\"3\" >}}\n\nFirst **bold** paragraph with `code`.\n\nSecond paragraph " + prose + "\n\n```fsharp\n" + String.replicate 500 "let x = 1\n" + "```\n"
+        let page = { post "Post" "2026-01-01" false None None with Markdown = markdown; ContentHtml = "<p>ignored html text</p>" }
+        Assert.Equal("First bold paragraph with code.", Blog.excerpt page)
+        Assert.Equal(2, Blog.estimatedReadingMinutes page)
+        Assert.Equal("Authored", Blog.excerpt { page with Metadata = { page.Metadata with Summary = Some "Authored" } })
+
+        let long = { page with Markdown = String.replicate 60 "lengthy " }
+        let text = Blog.excerpt long
+        Assert.EndsWith("lengthy...", text)
+        Assert.True(text.Length <= 240)
+
+    [<Fact>]
+    let ``generated blog pages use the site layout relative links and a relative feed`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let posts =
+            [ for day in 1 .. 12 ->
+                let page = post $"Post{day}" $"2026-01-{day:D2}" false (if day <= 2 then Some "Guide" else None) (if day <= 2 then Some day else None)
+                { page with OutputPath = $"blog/post{day}.html"; Markdown = $"Body of post {day}." } ]
+
+        SiteBuilder.build {
+            Pages = posts
+            Package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+            Config = { blogSiteConfig with SiteName = Some "Layout Marker Site" }
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            SiteRootPath = ""
+            OutputDir = outputDir
+        }
+
+        let read (path: string) = File.ReadAllText(Path.Combine(outputDir, path))
+        let index = read "blog/index.html"
+        let second = read "blog/page/2/index.html"
+        let tag = read "blog/tags/fsharp.html"
+        let series = read "blog/series/guide.html"
+        let feed = read "blog/feed.xml"
+
+        for html in [ index; second; tag; series ] do
+            Assert.Contains("Layout Marker Site", html)
+            Assert.Contains("daisyui", html)
+            Assert.DoesNotContain("href=\"/blog", html)
+        Assert.Contains("href=\"../blog/post12.html\"", index)
+        Assert.Contains("href=\"../blog/page/2/index.html\">← Older posts", index)
+        Assert.DoesNotContain("Newer posts", index)
+        Assert.Contains("href=\"../../../blog/index.html\">Newer posts →", second)
+        Assert.Contains("href=\"../../../blog/post1.html\"", second)
+        Assert.Contains("href=\"../../blog/post1.html\"", series)
+        Assert.Contains("Part 2 of 2", series)
+        Assert.Contains("<link rel=\"alternate\" type=\"text/html\" href=\"../blog/post12.html\"/>", feed)
+        Assert.Contains("<link rel=\"self\" type=\"application/atom+xml\" href=\"feed.xml\"/>", feed)
+        Assert.Contains("<updated>2026-01-12T00:00:00Z</updated>", feed)
+        Assert.DoesNotContain("href=\"/", feed)
+        Xml.Linq.XDocument.Parse(feed) |> ignore
+
+    [<Fact>]
+    let ``blog frontmatter parses all optional metadata`` () =
+        let source = "---\ntitle: Post\ndate: 2026-09-14\ntags: [fsharp, docs]\ncategory: news\ndraft: true\nsummary: A post\nslug: stable-post\nseries: Guide\nseriesOrder: 2\ncomments: true\nblogList:\n  layout: preview\n  limit: 6\n  show: [date, summary, tags]\n---\nBody"
+        let metadata, body = ContentProvider.parseFrontMatter source |> Option.get
+        Assert.Equal(Some(DateOnly(2026, 9, 14)), metadata.Date)
+        Assert.True([ "fsharp"; "docs" ] = metadata.Tags)
+        Assert.True(metadata.Draft)
+        Assert.Equal(Some "stable-post", metadata.Slug)
+        Assert.Equal(Some 2, metadata.SeriesOrder)
+        Assert.True(metadata.Comments)
+        Assert.Equal(Some "preview", metadata.BlogList |> Option.bind _.Layout)
+        Assert.Equal(Some 6, metadata.BlogList |> Option.bind _.Limit)
+        Assert.Equal("Body", body)
+
+    [<Fact>]
+    let ``blog frontmatter without lists yields empty lists`` () =
+        let metadata, _ = ContentProvider.parseFrontMatter "---\ntitle: Post\ndate: 2026-09-14\nblogList:\n  layout: preview\n---\nBody" |> Option.get
+        Assert.Empty(metadata.Tags)
+        Assert.Equal(Some [], metadata.BlogList |> Option.map _.Show)
+        let index = Blog.buildPostIndex false [ { Metadata = metadata; ContentHtml = ""; Markdown = "Body"; FilePath = "post.md"; OutputPath = "blog/post/index.html"; SectionOrder = 0 } ]
+        Assert.Single(index.ByDateDesc) |> ignore
+        Assert.Empty(index.ByTag)

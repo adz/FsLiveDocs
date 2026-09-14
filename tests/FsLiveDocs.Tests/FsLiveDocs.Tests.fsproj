@@ -9,6 +9,9 @@
     <Compile Include="Tests.fs" />
     <Compile Include="IntegrationTests.fs" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />

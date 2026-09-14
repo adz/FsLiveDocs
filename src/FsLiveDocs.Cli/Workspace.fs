@@ -29,7 +29,8 @@ module internal Workspace =
           Stylesheet = None
           Themes = None
           Navigation = None
-          FSharpPrelude = None }
+          FSharpPrelude = None
+          CommentsProvider = None }
 
     /// Finds documentable projects when callers omit the project list.
     let discoverProjects () =
