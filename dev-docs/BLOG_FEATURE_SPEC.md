@@ -65,6 +65,15 @@ type ContentMetadata = {
     Series: string option
     SeriesOrder: int option     // ordering within Series; falls back to Date order
     Comments: bool              // defaults to false; toggles the Giscus embed
+    BlogList: BlogListingOptions option  // defaults for a {{< posts >}} listing on this page
+}
+
+type BlogListingOptions = {
+    Layout: string option       // "list" (default), "compact", or "preview"
+    Show: string list           // card fields: date, readingtime, summary, tags
+    Limit: int option
+    Tag: string option
+    Category: string option
 }
 ```
 
@@ -81,7 +90,8 @@ Notes per field:
   invoked with a `--drafts` flag (new CLI flag on the build/serve commands; out of
   scope for the persisted-artifact rules since it only affects what gets built).
 - `Summary`: authored short description. When absent, an excerpt is derived from the
-  first paragraph of the parsed Markdown body at render/index time — this derivation
+  first paragraph of the parsed Markdown body (plain text, truncated at a word boundary
+  to at most 240 characters) at render/index time — this derivation
   is not persisted as a separate field; it's recomputed from the canonical Markdown
   each time it's needed, consistent with "store canonical renderer-neutral Markdown"
   in the release rules.
@@ -98,6 +108,9 @@ Notes per field:
 - `Series` / `SeriesOrder`: see Navigation and Derived Indices below.
 - `Comments`: pure rendering flag; see Comments (Pluggable, Giscus first-class)
   section.
+- `BlogList`: default attributes for a `{{< posts >}}` shortcode on the same page (see
+  Shortcodes). Plain data like every other field; an attribute on the shortcode itself
+  overrides the matching `BlogList` value.
 
 **Category, Tags, and Series are independent axes with no implied relationship
 between them:**
@@ -133,7 +146,7 @@ rules require to be renderer-neutral, FsLiveDocs-owned meaning
   - Add an explicit, deterministic migration from the prior schema version that
     populates `Date = None`, `Tags = []`, `Category = None`, `Draft = false`,
     `Summary = None`, `Slug = None`, `Series = None`, `SeriesOrder = None`,
-    `Comments = false` for capsules captured before this change.
+    `Comments = false`, `BlogList = None` for capsules captured before this change.
   - Add capsule-only fixture(s)/tests that load an old-schema capsule through the
     migration and assert the defaulted values, per the "update schemas, fixtures,
     migrations, release guidance, and capsule-only tests together" instruction in
@@ -202,19 +215,28 @@ derived indices, generated pages, or RSS by accident.
 
 ## Shortcodes
 
+Both blog shortcodes must stand alone as their own Markdown paragraph; the renderer
+expands them from the rendered page after the post and series indices exist, and leaves
+the same syntax inside code spans and code blocks untouched.
+
 Reuses the existing `{{< ... >}}` transclusion mechanism
 (`ContentProvider.fs:28-36,275-421`); these are new shortcode kinds recognized by the
 same expansion pass, expanded deterministically before content is persisted into the
 Content artifact (consistent with `RELEASE_ARTIFACT_RULES.md:63` — stored Markdown is
 post-expansion).
 
-- `{{< posts tag="..." category="..." limit="..." >}}` — embeds a listing of matching
-  posts (title, date, summary) on any page. `tag` and `category` are optional filters
-  (AND'd if both given); `limit` truncates the list. Backed by `PostIndex`.
+- `{{< posts tag="..." category="..." limit="..." layout="..." show="..." >}}` — embeds a
+  listing of matching posts on any page. `tag` and `category` are optional filters
+  (AND'd if both given); `limit` truncates the list. `layout` is `list` (titles only,
+  default), `compact` (cards with the date), or `preview` (cards with date, reading
+  time, summary, and tags); `show` overrides which card fields appear. Any attribute
+  omitted from the shortcode falls back to the page's `BlogList` frontmatter; an unknown
+  layout fails the build. Backed by `PostIndex`.
 - `{{< series-nav >}}` — embeds the series part-navigation (or, on a series' own index
   page, the full ordered list of parts) for the current post. Backed by `SeriesIndex`
-  and the current page's `Series` metadata; a no-op / build warning when used on a page
-  without `Series` set.
+  and the current page's `Series` metadata. On a page without `Series` it renders nothing
+  and the build reports a warning (an error under `--warn-as-error`); occurrences inside
+  code spans or code blocks are documentation of the syntax and are ignored.
 
 Because expansion happens deterministically at discovery time and the expanded result
 is what gets stored, a later change to shortcode rendering does not change historical
@@ -235,7 +257,9 @@ generation:
 | `/blog/series/<name>.html` | Posts in that series, in series order, with part labels, unpaginated |
 
 These are index-style generated pages, analogous to the existing API index generation
-in `SiteBuilder.fs`, not persisted content — they're regenerated from `PostIndex` /
+in `SiteBuilder.fs`, rendered through the same site layout (theme, navigation, and
+documentation-set chrome) as guide pages, with every link relative to the generated
+page so the site works under any hosting sub-path. They are not persisted content — they're regenerated from `PostIndex` /
 `SeriesIndex` on every render, including historical re-renders of an old capsule.
 
 Per-post `OutputPath` (the individual post's own permalink) uses the flat-slug
@@ -271,7 +295,10 @@ An XML feed generator (`/blog/feed.xml`, Atom preferred with RSS 2.0 as a second
 target if both are wanted) derived purely from `PostIndex.ByDateDesc`: title, link,
 publish date, and `Summary` (authored or derived excerpt) per entry. Generated at
 render time from the same data as the HTML index pages — no separate persisted feed
-state. **Settled: drafts are excluded from RSS.** This use case treats the RSS
+state. Links in the feed are relative to the feed's own location (`blog/feed.xml`),
+which readers resolve against the URL they fetched it from, because the site has no
+configured absolute base URL; entry IDs are `urn:fslivedocs:post:<output path>`.
+**Settled: drafts are excluded from RSS.** This use case treats the RSS
 feed as not public, so no separate draft-preview mechanism is needed — drafts are
 excluded from the feed by the same `Draft` flag (and `--drafts` gating) that
 excludes them from the rest of the build, with no independent RSS-specific
@@ -279,8 +306,9 @@ draft policy.
 
 ## Reading time
 
-Computed as a word-count-based estimate (words / average reading speed) from the
-parsed Markdown AST of the post body — the same parse already produced for HTML
+Computed as a word-count-based estimate (words / 200 per minute, minimum one) from the
+parsed Markdown AST of the post body, counting prose in paragraphs, headings, lists, and
+quotes but not code blocks or shortcodes — the same parse already produced for HTML
 rendering, not a separate persisted field. Displayed on post pages and in listings.
 Recomputed at render time; not persisted, so a future change to the estimation
 constant changes display for historical capsules without needing a migration.
