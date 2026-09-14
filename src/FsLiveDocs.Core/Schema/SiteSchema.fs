@@ -27,16 +27,15 @@ module SiteSchema =
 
     /// Portable, explicitly tagged comment-provider configuration (`kind` plus that provider's fields).
     let commentsProvider : Schema<CommentsProvider> =
-        let optionalText = Schema.option Schema.text |> Schema.mayOmit
         let wire =
             schema<CommentsProviderWire> {
-                fieldAs "kind" (fun (w: CommentsProviderWire) -> w.Kind) { withSchema Schema.text }
-                fieldAs "html" (fun (w: CommentsProviderWire) -> w.Html) { withSchema optionalText }
-                fieldAs "repo" (fun (w: CommentsProviderWire) -> w.Repo) { withSchema optionalText }
-                fieldAs "repoId" (fun (w: CommentsProviderWire) -> w.RepoId) { withSchema optionalText }
-                fieldAs "category" (fun (w: CommentsProviderWire) -> w.Category) { withSchema optionalText }
-                fieldAs "categoryId" (fun (w: CommentsProviderWire) -> w.CategoryId) { withSchema optionalText }
-                fieldAs "theme" (fun (w: CommentsProviderWire) -> w.Theme) { withSchema optionalText }
+                field _.Kind
+                field _.Html
+                field _.Repo
+                field _.RepoId
+                field _.Category
+                field _.CategoryId
+                field _.Theme
                 construct (fun kind html repo repoId category categoryId theme ->
                     { Kind = kind; Html = html; Repo = repo; RepoId = repoId; Category = category; CategoryId = categoryId; Theme = theme })
             }
@@ -119,25 +118,24 @@ module SiteSchema =
     /// Deliberately separate from `siteConfig`, whose PascalCase shape is the persisted capsule
     /// wire format.
     let siteConfigFile : Schema<SiteConfig> =
-        let optional valueSchema = Schema.option valueSchema |> Schema.mayOmit
         let navigationFileItem =
             schema<NavigationItem> {
-                fieldAs "label" (fun (n: NavigationItem) -> n.Label) { withSchema Schema.text }
-                fieldAs "href" (fun (n: NavigationItem) -> n.Href) { withSchema Schema.text }
+                field _.Label
+                field _.Href
                 construct (fun label href -> { Label = label; Href = href })
             }
         schema<SiteConfig> {
-            fieldAs "repoUrl" (fun (s: SiteConfig) -> s.RepoUrl) { withSchema (optional Schema.text) }
-            fieldAs "siteName" (fun (s: SiteConfig) -> s.SiteName) { withSchema (optional Schema.text) }
-            fieldAs "logoText" (fun (s: SiteConfig) -> s.LogoText) { withSchema (optional Schema.text) }
-            fieldAs "logoPath" (fun (s: SiteConfig) -> s.LogoPath) { withSchema (optional Schema.text) }
-            fieldAs "logoDarkPath" (fun (s: SiteConfig) -> s.LogoDarkPath) { withSchema (optional Schema.text) }
-            fieldAs "showSiteName" (fun (s: SiteConfig) -> s.ShowSiteName) { withSchema (optional Schema.bool) }
-            fieldAs "stylesheet" (fun (s: SiteConfig) -> s.Stylesheet) { withSchema (optional Schema.text) }
-            fieldAs "themes" (fun (s: SiteConfig) -> s.Themes) { withSchema (optional (Schema.listWith Schema.text)) }
-            fieldAs "navigation" (fun (s: SiteConfig) -> s.Navigation) { withSchema (optional (Schema.listWith navigationFileItem)) }
-            fieldAs "fSharpPrelude" (fun (s: SiteConfig) -> s.FSharpPrelude) { withSchema (optional Schema.text) }
-            fieldAs "commentsProvider" (fun (s: SiteConfig) -> s.CommentsProvider) { withSchema (optional commentsProvider) }
+            field _.RepoUrl
+            field _.SiteName
+            field _.LogoText
+            field _.LogoPath
+            field _.LogoDarkPath
+            field _.ShowSiteName
+            field _.Stylesheet
+            field _.Themes
+            field _.Navigation { withSchema (Schema.option (Schema.listWith navigationFileItem) |> Schema.mayOmit) }
+            field (fun (s: SiteConfig) -> s.FSharpPrelude)
+            field _.CommentsProvider { withSchema (Schema.option commentsProvider |> Schema.mayOmit) }
             construct (fun repoUrl siteName logoText logoPath logoDarkPath showSiteName stylesheet themes navigation fsharpPrelude commentsProvider ->
                 { RepoUrl = repoUrl
                   SiteName = siteName

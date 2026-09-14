@@ -2557,7 +2557,7 @@ module BlogTests =
 
     [<Fact>]
     let ``giscus comments provider is read from site configuration json`` () =
-        let json = """{ "siteName": "Blog", "projects": ["a.fsproj"], "navigation": [ { "label": "Home", "href": "index.html" } ], "commentsProvider": { "kind": "giscus", "repo": "owner/repo", "repoId": "repo-id", "category": "Announcements", "categoryId": "category-id", "theme": "dark" } }"""
+        let json = """{ "siteName": "Blog", "projects": ["a.fsproj"], "fSharpPrelude": "open System", "navigation": [ { "label": "Home", "href": "index.html" } ], "commentsProvider": { "kind": "giscus", "repo": "owner/repo", "repoId": "repo-id", "category": "Announcements", "categoryId": "category-id", "theme": "dark" } }"""
         let config = Reified.Json.deserialize Workspace.siteConfigCodec json
         let expected =
             Giscus
@@ -2567,6 +2567,7 @@ module BlogTests =
                   CategoryId = "category-id"
                   Theme = Some "dark" }
         Assert.Equal(Some "Blog", config.SiteName)
+        Assert.Equal(Some "open System", config.FSharpPrelude)
         Assert.Equal(Some [ { Label = "Home"; Href = "index.html" } ], config.Navigation)
         Assert.Equal(Some expected, config.CommentsProvider)
         let custom = Reified.Json.deserialize Workspace.siteConfigCodec """{ "commentsProvider": { "kind": "custom", "html": "<div id=\"x\"></div>" } }"""
