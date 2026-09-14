@@ -29,40 +29,48 @@ module ReleaseCapsule =
     /// The renderer-neutral content artifact exactly as schema 1 persisted it, kept for migration only.
     module private LegacyContent =
 
+        /// Content schemas 1 and 2 predate blog metadata; fill every blog field with its default
+        /// explicitly so the strict schema-3 codec can decode the page metadata.
+        let private addBlogMetadataDefaults (metadata: Nodes.JsonObject) =
+            let defaults: (string * Nodes.JsonNode) list =
+                [ "Date", null
+                  "Tags", Nodes.JsonArray()
+                  "Category", null
+                  "Draft", Nodes.JsonValue.Create(false)
+                  "Summary", null
+                  "Slug", null
+                  "Series", null
+                  "SeriesOrder", null
+                  "Comments", Nodes.JsonValue.Create(false)
+                  "BlogList", null ]
+            for name, value in defaults do
+                if not (metadata.ContainsKey name) then metadata[name] <- value
+
         /// Schema 2 had documentation sets but predated blog metadata.  Do not depend on
         /// Json.NET's treatment of absent record fields: write every blog default explicitly.
         let migrateV2 (bytes: byte array) : ReleaseContentArtifact =
-            let root = Newtonsoft.Json.Linq.JObject.Parse(Encoding.UTF8.GetString bytes)
-            let schema = root["SchemaVersion"] |> fun value -> if isNull value then 0 else value.ToObject<int>()
+            let root =
+                match Nodes.JsonNode.Parse(Encoding.UTF8.GetString bytes) with
+                | :? Nodes.JsonObject as value -> value
+                | _ -> invalidOp "Content schema 2 payload must be an object."
+            let schema = match root["SchemaVersion"] with | null -> 0 | value -> value.GetValue<int>()
             if schema <> 2 then invalidOp $"Content schema 2 payload declares schema {schema}."
 
-            let defaults: (string * Newtonsoft.Json.Linq.JToken) list =
-                [ "Date", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Tags", Newtonsoft.Json.Linq.JArray()
-                  "Category", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Draft", Newtonsoft.Json.Linq.JValue(false)
-                  "Summary", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Slug", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Series", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "SeriesOrder", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Comments", Newtonsoft.Json.Linq.JValue(false)
-                  "BlogList", Newtonsoft.Json.Linq.JValue.CreateNull() ]
-
             match root["Pages"] with
-            | :? Newtonsoft.Json.Linq.JArray as pages ->
+            | :? Nodes.JsonArray as pages ->
                 for page in pages do
                     match page["Metadata"] with
-                    | :? Newtonsoft.Json.Linq.JObject as metadata ->
-                        for name, value in defaults do metadata[name] <- value.DeepClone()
+                    | :? Nodes.JsonObject as metadata ->
+                        addBlogMetadataDefaults metadata
                     | _ -> invalidOp "Content schema 2 page is missing Metadata."
             | _ -> invalidOp "Content schema 2 Pages must be an array."
 
             match root["Site"] with
-            | :? Newtonsoft.Json.Linq.JObject as site -> site["CommentsProvider"] <- Newtonsoft.Json.Linq.JValue.CreateNull()
+            | :? Nodes.JsonObject as site -> site["CommentsProvider"] <- null
             | _ -> invalidOp "Content schema 2 is missing Site."
 
-            root["SchemaVersion"] <- Newtonsoft.Json.Linq.JValue(ContentSchemaVersion)
-            root.ToObject<ReleaseContentArtifact>(JsonSerializer.Create(Serialization.jsonSettings))
+            root["SchemaVersion"] <- Nodes.JsonValue.Create(ContentSchemaVersion)
+            Json.deserialize (Json.compile ReleaseSchema.releaseContentArtifact) (root.ToJsonString())
 
         [<CLIMutable>]
         type ContentPageV1 =
@@ -104,7 +112,12 @@ module ReleaseCapsule =
                     (required root "Pages").EnumerateArray()
                     |> Seq.map (fun page ->
                         { SourcePath = (required page "SourcePath").GetString()
-                          Metadata = Json.deserialize contentMetadataCodec ((required page "Metadata").GetRawText())
+                          Metadata =
+                            match Nodes.JsonNode.Parse((required page "Metadata").GetRawText()) with
+                            | :? Nodes.JsonObject as metadata ->
+                                addBlogMetadataDefaults metadata
+                                Json.deserialize contentMetadataCodec (metadata.ToJsonString())
+                            | _ -> invalidOp "Content schema 1 page Metadata must be an object."
                           Markdown = (required page "Markdown").GetString() })
                     |> Seq.toList
                 | _ -> invalidOp "Content schema 1 Pages must be an array."

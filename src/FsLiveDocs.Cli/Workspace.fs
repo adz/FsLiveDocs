@@ -52,7 +52,7 @@ module internal Workspace =
             items |> Seq.choose (fun item -> try Some(item.GetValue<string>()) with _ -> None) |> Seq.toList
         | _ -> []
 
-    let private docsSetConfigCodec =
+    let internal docsSetConfigCodec =
         Json.compile (
             schema<DocsSetConfig> {
                 fieldAs "id" (fun (c: DocsSetConfig) -> c.Id) { withSchema Schema.text }
@@ -77,7 +77,7 @@ module internal Workspace =
             }
         )
 
-    let private siteConfigCodec = Json.compile SiteSchema.siteConfig
+    let internal siteConfigCodec = Json.compile SiteSchema.siteConfigFile
 
     let private defaultSiteConfig =
         { RepoUrl = None

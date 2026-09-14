@@ -4,11 +4,22 @@ open System
 open System.IO
 open System.Text.RegularExpressions
 open Xunit
+open Reified
 open FsLiveDocs.Core
+open FsLiveDocs.Core.Schema
 open FsLiveDocs.Cli
 open FsLiveDocs.Runner
 open FsLiveDocs.Renderer
-open Newtonsoft.Json
+
+/// Codecs shared by fixtures across this file that write or read the JSON a persisted release
+/// artifact is schema-pinned to. Every test builds these bytes by hand rather than going through
+/// `ReleaseCapsule`/`History`'s own write paths, so it needs the same codec those paths use.
+module private Codecs =
+    let semanticToken = Json.compile SemanticSchema.semanticToken
+    let semanticArtifact = Json.compile SemanticSchema.semanticDocumentationArtifact
+    let apiModelArtifact = Json.compile ApiSchema.apiModelArtifact
+    let historyManifest = Json.compile HistorySchema.historyManifest
+    let releaseCapsuleManifest = Json.compile ReleaseSchema.releaseCapsuleManifest
 
 module DocumentationSourceTests =
 
@@ -58,19 +69,19 @@ module HistoryTests =
             Diagnostics = []
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ block ] } ] }
-        File.WriteAllText(path, JsonConvert.SerializeObject(artifact, Formatting.Indented, Serialization.jsonSettings))
+        File.WriteAllText(path, Json.serialize Codecs.semanticArtifact artifact)
         let loaded = History.loadSemanticArtifact (History.sha256 path) path
         Assert.Equal("value", loaded.Pages.Head.Blocks.Head.Lines.Head.Tokens.Head.Text)
 
         let invalid = { artifact with Pages = [ { SourcePath = "guide.md"; Blocks = [ { block with Lines = [ { Tokens = [ { Text = "bad"; Kind = Identifier; Tooltip = Some 2 } ] } ] } ] } ] }
-        File.WriteAllText(path, JsonConvert.SerializeObject(invalid, Formatting.Indented, Serialization.jsonSettings))
+        File.WriteAllText(path, Json.serialize Codecs.semanticArtifact invalid)
         let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadSemanticArtifact (History.sha256 path) path |> ignore)
         Assert.Contains("invalid tooltip index", error.Message)
 
     [<Fact>]
     let ``unknown future semantic classifications degrade to plain text`` () =
         let json = "{\"Text\":\"future\",\"Kind\":\"FutureClassification\",\"Tooltip\":null}"
-        let token = JsonConvert.DeserializeObject<SemanticToken>(json, Serialization.jsonSettings)
+        let token = Json.deserialize Codecs.semanticToken json
         Assert.Equal(SemanticTokenKind.PlainText, token.Kind)
 
     [<Fact>]
@@ -78,7 +89,7 @@ module HistoryTests =
         let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
         let package : PackageModel = { Version = "1.2.3"; Entities = []; Scenarios = []; Packages = [] }
         let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
-        File.WriteAllText(path, JsonConvert.SerializeObject(artifact, Serialization.jsonSettings))
+        File.WriteAllText(path, Json.serialize Codecs.apiModelArtifact artifact)
 
         let loaded = History.loadArtifact "1.2.3" (History.sha256 path) path
         Assert.Equal("1.2.3", loaded.Version)
@@ -116,11 +127,11 @@ module HistoryTests =
                 Packages = []
             }
         let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
-        let json = JsonConvert.SerializeObject(artifact, Formatting.Indented, Serialization.jsonSettings)
+        let json = Json.serialize Codecs.apiModelArtifact artifact
 
         Assert.DoesNotContain("Html", json, StringComparison.OrdinalIgnoreCase)
         Assert.DoesNotContain("<p>", json, StringComparison.OrdinalIgnoreCase)
-        let loaded = JsonConvert.DeserializeObject<ApiModelArtifact>(json, Serialization.jsonSettings)
+        let loaded = Json.deserialize Codecs.apiModelArtifact json
         Assert.Equal("Use value", Documentation.plainText loaded.Package.Entities.Head.Summary)
 
     [<Fact>]
@@ -131,7 +142,7 @@ module HistoryTests =
             CurrentVersion = "2.0.0"
             Entries = [ { Version = "1.0.0"; ModelPath = "model.json"; ModelSha256 = "checksum"; SemanticPath = None; SemanticSha256 = None; DocsPath = "docs" } ]
         }
-        File.WriteAllText(path, JsonConvert.SerializeObject(manifest, Serialization.jsonSettings))
+        File.WriteAllText(path, Json.serialize Codecs.historyManifest manifest)
 
         let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadManifest path |> ignore)
         Assert.Contains("has no manifest entry", error.Message)
@@ -144,7 +155,7 @@ module HistoryTests =
             CurrentVersion = "1.0.0"
             Entries = [ { Version = "1.0.0"; ModelPath = "model.json"; ModelSha256 = "checksum"; SemanticPath = Some "semantic.json"; SemanticSha256 = None; DocsPath = "docs" } ]
         }
-        File.WriteAllText(path, JsonConvert.SerializeObject(manifest, Serialization.jsonSettings))
+        File.WriteAllText(path, Json.serialize Codecs.historyManifest manifest)
         let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadManifest path |> ignore)
         Assert.Contains("semanticPath and semanticSha256 together", error.Message)
 
@@ -2046,13 +2057,9 @@ module DocumentationSetTests =
     [<Fact>]
     let ``documentation set JSON uses the public camel-case configuration shape`` () =
         let json =
-            """[{"id":"sdk","title":"SDK","source":"guides","path":"","projects":["Sdk.fsproj"],"default":true,"sidebar":false,"api":true,"fSharpPrelude":"open Sdk"}]"""
+            """{"id":"sdk","title":"SDK","source":"guides","path":"","projects":["Sdk.fsproj"],"default":true,"sidebar":false,"api":true,"fSharpPrelude":"open Sdk"}"""
 
-        let serializer = JsonSerializer.Create(Serialization.jsonSettings)
-
-        let parsed =
-            Newtonsoft.Json.Linq.JArray.Parse(json).ToObject<DocsSetConfig list>(serializer)
-            |> List.head
+        let parsed = Json.deserialize Workspace.docsSetConfigCodec json
 
         Assert.Equal("sdk", parsed.Id)
         Assert.Equal(Some "SDK", parsed.Title)
@@ -2431,13 +2438,8 @@ module DocumentationSetTests =
               Prelude = "open System"
               Pages = [] }
 
-        let bytes value =
-            Text.Encoding.UTF8.GetBytes(
-                JsonConvert.SerializeObject(value, Formatting.Indented, Serialization.jsonSettings)
-            )
-
-        let apiBytes = bytes api
-        let semanticBytes = bytes semantic
+        let apiBytes = Json.serialize Codecs.apiModelArtifact api |> Text.Encoding.UTF8.GetBytes
+        let semanticBytes = Json.serialize Codecs.semanticArtifact semantic |> Text.Encoding.UTF8.GetBytes
 
         let releaseComponent schema path (value: byte array) : ReleaseComponent =
             { SchemaVersion = schema
@@ -2454,7 +2456,7 @@ module DocumentationSetTests =
               Semantic = releaseComponent semantic.SchemaVersion "semantic.json" semanticBytes
               Content = releaseComponent contentSchema "content.json" contentBytes }
 
-        let manifestBytes = bytes manifest
+        let manifestBytes = Json.serialize Codecs.releaseCapsuleManifest manifest |> Text.Encoding.UTF8.GetBytes
 
         use archive =
             System.IO.Compression.ZipFile.Open(capsule, System.IO.Compression.ZipArchiveMode.Create)
@@ -2555,8 +2557,8 @@ module BlogTests =
 
     [<Fact>]
     let ``giscus comments provider is read from site configuration json`` () =
-        let json = """{ "siteName": "Blog", "commentsProvider": { "kind": "giscus", "repo": "owner/repo", "repoId": "repo-id", "category": "Announcements", "categoryId": "category-id", "theme": "dark" } }"""
-        let config = JsonConvert.DeserializeObject<SiteConfig>(json, Serialization.jsonSettings)
+        let json = """{ "siteName": "Blog", "projects": ["a.fsproj"], "navigation": [ { "label": "Home", "href": "index.html" } ], "commentsProvider": { "kind": "giscus", "repo": "owner/repo", "repoId": "repo-id", "category": "Announcements", "categoryId": "category-id", "theme": "dark" } }"""
+        let config = Reified.Json.deserialize Workspace.siteConfigCodec json
         let expected =
             Giscus
                 { Repo = "owner/repo"
@@ -2564,11 +2566,13 @@ module BlogTests =
                   Category = "Announcements"
                   CategoryId = "category-id"
                   Theme = Some "dark" }
+        Assert.Equal(Some "Blog", config.SiteName)
+        Assert.Equal(Some [ { Label = "Home"; Href = "index.html" } ], config.Navigation)
         Assert.Equal(Some expected, config.CommentsProvider)
-        let custom = JsonConvert.DeserializeObject<SiteConfig>("""{ "commentsProvider": { "kind": "custom", "html": "<div id=\"x\"></div>" } }""", Serialization.jsonSettings)
+        let custom = Reified.Json.deserialize Workspace.siteConfigCodec """{ "commentsProvider": { "kind": "custom", "html": "<div id=\"x\"></div>" } }"""
         Assert.Equal(Some(Custom "<div id=\"x\"></div>"), custom.CommentsProvider)
-        Assert.Throws<InvalidOperationException>(fun () ->
-            JsonConvert.DeserializeObject<SiteConfig>("""{ "commentsProvider": { "kind": "giscus" } }""", Serialization.jsonSettings) |> ignore)
+        Assert.ThrowsAny<exn>(fun () ->
+            Reified.Json.deserialize Workspace.siteConfigCodec """{ "commentsProvider": { "kind": "giscus" } }""" |> ignore)
         |> ignore
 
     let private renderContext pages config : SiteBuilder.SiteRenderContext =

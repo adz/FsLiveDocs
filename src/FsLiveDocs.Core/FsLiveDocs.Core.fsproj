@@ -30,7 +30,6 @@
     <Compile Include="Schema/HistorySchema.fs" />
     <Compile Include="Schema/SiteSchema.fs" />
     <Compile Include="Schema/ReleaseSchema.fs" />
-    <Compile Include="Serialization.fs" />
     <Compile Include="History.fs" />
     <Compile Include="ReleaseCapsule.fs" />
     <Compile Include="SourceParameters.fs" />
@@ -47,7 +46,6 @@
     <PackageReference Include="FSharp.Formatting" Version="22.0.0" />
     <PackageReference Include="Markdig" Version="1.2.0" />
     <PackageReference Include="YamlDotNet" Version="17.1.0" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="Axial" Version="0.9.1" />
     <PackageReference Include="Axial.Process" Version="0.9.1" />
     <PackageReference Include="Axial.Console" Version="0.9.1" />

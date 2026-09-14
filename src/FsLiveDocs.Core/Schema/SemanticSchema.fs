@@ -9,25 +9,52 @@ open FsLiveDocs.Core
 /// Newtonsoft format: see `DocumentationSchema` for the shared compatibility rules.
 module SemanticSchema =
 
+    /// An older renderer must still open a capsule a newer capture tool produced, which may
+    /// classify tokens this build has never heard of. `Schema.enum` fails closed on an unknown
+    /// case, so this decodes as bare text and falls back to `PlainText` for anything it does not
+    /// recognize -- the same forward-compatibility behavior `FSharpUnionConverter`'s special case
+    /// for this one type gave the pre-Reified reader.
     let semanticTokenKind : Schema<SemanticTokenKind> =
-        Schema.enum [
-            EnumCase.create "PlainText" SemanticTokenKind.PlainText
-            EnumCase.create "Keyword" SemanticTokenKind.Keyword
-            EnumCase.create "Identifier" SemanticTokenKind.Identifier
-            EnumCase.create "TypeName" SemanticTokenKind.TypeName
-            EnumCase.create "Function" SemanticTokenKind.Function
-            EnumCase.create "Property" SemanticTokenKind.Property
-            EnumCase.create "UnionCase" SemanticTokenKind.UnionCase
-            EnumCase.create "ActivePatternCase" SemanticTokenKind.ActivePatternCase
-            EnumCase.create "Module" SemanticTokenKind.Module
-            EnumCase.create "Namespace" SemanticTokenKind.Namespace
-            EnumCase.create "Operator" SemanticTokenKind.Operator
-            EnumCase.create "Number" SemanticTokenKind.Number
-            EnumCase.create "String" SemanticTokenKind.String
-            EnumCase.create "Comment" SemanticTokenKind.Comment
-            EnumCase.create "Punctuation" SemanticTokenKind.Punctuation
-            EnumCase.create "Preprocessor" SemanticTokenKind.Preprocessor
-        ]
+        let toCase =
+            function
+            | "PlainText" -> SemanticTokenKind.PlainText
+            | "Keyword" -> SemanticTokenKind.Keyword
+            | "Identifier" -> SemanticTokenKind.Identifier
+            | "TypeName" -> SemanticTokenKind.TypeName
+            | "Function" -> SemanticTokenKind.Function
+            | "Property" -> SemanticTokenKind.Property
+            | "UnionCase" -> SemanticTokenKind.UnionCase
+            | "ActivePatternCase" -> SemanticTokenKind.ActivePatternCase
+            | "Module" -> SemanticTokenKind.Module
+            | "Namespace" -> SemanticTokenKind.Namespace
+            | "Operator" -> SemanticTokenKind.Operator
+            | "Number" -> SemanticTokenKind.Number
+            | "String" -> SemanticTokenKind.String
+            | "Comment" -> SemanticTokenKind.Comment
+            | "Punctuation" -> SemanticTokenKind.Punctuation
+            | "Preprocessor" -> SemanticTokenKind.Preprocessor
+            | _ -> SemanticTokenKind.PlainText
+
+        let toText =
+            function
+            | SemanticTokenKind.PlainText -> "PlainText"
+            | SemanticTokenKind.Keyword -> "Keyword"
+            | SemanticTokenKind.Identifier -> "Identifier"
+            | SemanticTokenKind.TypeName -> "TypeName"
+            | SemanticTokenKind.Function -> "Function"
+            | SemanticTokenKind.Property -> "Property"
+            | SemanticTokenKind.UnionCase -> "UnionCase"
+            | SemanticTokenKind.ActivePatternCase -> "ActivePatternCase"
+            | SemanticTokenKind.Module -> "Module"
+            | SemanticTokenKind.Namespace -> "Namespace"
+            | SemanticTokenKind.Operator -> "Operator"
+            | SemanticTokenKind.Number -> "Number"
+            | SemanticTokenKind.String -> "String"
+            | SemanticTokenKind.Comment -> "Comment"
+            | SemanticTokenKind.Punctuation -> "Punctuation"
+            | SemanticTokenKind.Preprocessor -> "Preprocessor"
+
+        Schema.text |> Schema.convert toCase toText
 
     let semanticDiagnosticSeverity : Schema<SemanticDiagnosticSeverity> =
         Schema.enum [
