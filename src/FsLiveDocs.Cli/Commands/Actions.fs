@@ -137,24 +137,7 @@ module Actions =
         | None -> DocAnalysis.analyze prelude projectPaths projectFingerprint package
 
     let private printAudit showSuccess (analysis: DocAnalysis.Analysis) =
-        let diagnosticsByBlock =
-            match analysis.CachedArtifact with
-            | Some artifact ->
-                artifact.Pages
-                |> List.collect _.Blocks
-                |> List.collect (fun block ->
-                    block.Diagnostics
-                    |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
-                    |> List.map (fun diagnostic -> block.Id, (diagnostic.StartLine, diagnostic.StartColumn, diagnostic.Message)))
-                |> List.groupBy fst
-                |> Map.ofList
-            | None ->
-                analysis.Results
-                |> List.collect _.Diagnostics
-                |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error)
-                |> List.choose (fun item -> item.BlockId |> Option.map (fun id -> id, (item.StartLine, item.StartColumn, item.Message)))
-                |> List.groupBy fst
-                |> Map.ofList
+        let diagnosticsByBlock = analysis.Errors |> List.groupBy fst |> Map.ofList
         let mutable failures = 0
         for block in analysis.Blocks do
             let errors = diagnosticsByBlock |> Map.tryFind block.Id |> Option.defaultValue [] |> List.map snd

@@ -48,9 +48,9 @@ module internal DocAnalysis =
 
     type Analysis =
         { Blocks: DocumentationBlock list
-          Results: CheckedCompilationUnit list
+          Errors: (string * (int * int * string)) list
           Prelude: string
-          CachedArtifact: SemanticDocumentationArtifact option
+          Artifact: SemanticDocumentationArtifact option
           CachePath: string }
 
     /// <summary>
@@ -289,11 +289,11 @@ module internal DocAnalysis =
                         return None
                 }
             Run.orRaise FileSystemError.describe $"Could not read semantic cache {cachePath}" work
-        let results =
+        let errors, artifact =
             match cachedArtifact with
-            | Some _ ->
+            | Some artifact ->
                 reportProgress "Checking documentation pages" pages.Length pages.Length
-                []
+                [], Some artifact
             | None ->
                 // Only page-selected projects need compiler evaluation. Evaluating every project
                 // leaks solution composition into documentation checking and can make an unrelated
@@ -309,41 +309,62 @@ module internal DocAnalysis =
                     (evaluated |> List.collect (snd >> _.References)) @ builtAssemblies
                     |> List.distinct
                 let evaluatedProjects = evaluated |> List.map (fun (path, project) -> path, { project with References = aggregateReferences }) |> Map.ofList
-                let completed = ref 0
-                pages
-                |> List.map (fun page ->
-                    async {
-                        let selectedEvaluation =
-                            match page.TargetFramework with
-                            | None -> evaluatedProjects.[page.SelectedProject]
-                            | Some _ ->
-                                let selected =
-                                    DocumentationCompiler.evaluateProjectFor page.TargetFramework page.SelectedProject
+                let mutable completed = 0
 
-                                let references =
-                                    selected.References @ aggregateReferences
-                                    |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
+                let checkAndExtract page = async {
+                    let selectedEvaluation =
+                        match page.TargetFramework with
+                        | None -> evaluatedProjects.[page.SelectedProject]
+                        | Some _ ->
+                            let selected = DocumentationCompiler.evaluateProjectFor page.TargetFramework page.SelectedProject
+                            let references =
+                                selected.References @ aggregateReferences
+                                |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
+                            { selected with References = references }
 
-                                { selected with
-                                    References = references }
+                    let! checkedUnits = DocumentationCompiler.checkBlocksWithProject selectedEvaluation page.Prelude page.Blocks
+                    let errors =
+                        checkedUnits
+                        |> List.collect _.Diagnostics
+                        |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error)
+                        |> List.choose (fun item -> item.BlockId |> Option.map (fun id -> id, (item.StartLine, item.StartColumn, item.Message)))
+                    let semantic = if errors.IsEmpty then Some(SemanticExtractor.artifact checkedUnits) else None
+                    let current = Threading.Interlocked.Increment(&completed)
+                    reportProgress "Checking documentation pages" current pages.Length
+                    return errors, semantic
+                }
 
-                        let! checkedUnits =
-                            DocumentationCompiler.checkBlocksWithProject selectedEvaluation page.Prelude page.Blocks
+                let checkedPages =
+                    pages
+                    |> List.chunkBySize 2
+                    |> FlowStream.fromSeq
+                    |> FlowStream.mapFlow (fun batch ->
+                        async {
+                            let! pageResults = batch |> List.map checkAndExtract |> Async.Parallel
+                            return Array.toList pageResults
+                        }
+                        |> Flow.fromAsync)
+                    |> FlowStream.runFold (fun accumulated batch -> List.rev batch @ accumulated) []
+                    |> Run.orRaise _.Message "Could not check documentation pages"
+                    |> List.rev
 
-                        let current = Threading.Interlocked.Increment(completed)
-                        reportProgress "Checking documentation pages" current pages.Length
-                        return checkedUnits
-                    })
-                |> fun checks -> Async.Parallel(checks, maxDegreeOfParallelism = max 1 Environment.ProcessorCount)
-                |> Async.RunSynchronously
-                |> Array.toList
-                |> List.collect id
+                let errors = checkedPages |> List.collect fst
+                let artifacts = checkedPages |> List.choose snd
+                let artifact =
+                    if not errors.IsEmpty then None
+                    else
+                        Some {
+                            SchemaVersion = History.SemanticSchemaVersion
+                            Prelude = defaultPrelude
+                            Pages = artifacts |> List.collect _.Pages |> List.sortBy _.SourcePath
+                        }
+                errors, artifact
         DocumentationDiscovery.validateCoverage blocks
 
         { Blocks = blocks
-          Results = results
+          Errors = errors
           Prelude = defaultPrelude
-          CachedArtifact = cachedArtifact
+          Artifact = artifact
           CachePath = cachePath }
 
     let analyzeWithProgress
@@ -379,41 +400,26 @@ module internal DocAnalysis =
 
     /// Materializes and caches the semantic artifact represented by an analysis result.
     let semanticArtifact (analysis: Analysis) =
-        match analysis.CachedArtifact with
-        | Some artifact -> artifact
-        | None ->
-            let artifact = SemanticExtractor.artifact analysis.Results
-            let directory = Path.GetDirectoryName analysis.CachePath
-            let serialized = Json.serialize semanticArtifactCodec artifact
+        let artifact =
+            analysis.Artifact
+            |> Option.defaultWith (fun () -> invalidOp "Cannot create semantic data while documentation contains compiler errors.")
+        let directory = Path.GetDirectoryName analysis.CachePath
+        let serialized = Json.serialize semanticArtifactCodec artifact
 
-            let work =
-                flow {
-                    do! FileSystem.createDirectory directory
-                    do! FileSystem.writeAllText analysis.CachePath serialized
-                    let! staleFiles = FileSystem.getFiles directory "*.semantic.json" SearchOption.TopDirectoryOnly
+        let work =
+            flow {
+                do! FileSystem.createDirectory directory
+                do! FileSystem.writeAllText analysis.CachePath serialized
+                let! staleFiles = FileSystem.getFiles directory "*.semantic.json" SearchOption.TopDirectoryOnly
 
-                    for stale in staleFiles do
-                        if not (Path.GetFullPath(stale).Equals(Path.GetFullPath(analysis.CachePath), StringComparison.Ordinal)) then
-                            do! FileSystem.deleteFile stale
-                }
+                for stale in staleFiles do
+                    if not (Path.GetFullPath(stale).Equals(Path.GetFullPath(analysis.CachePath), StringComparison.Ordinal)) then
+                        do! FileSystem.deleteFile stale
+            }
 
-            Run.orRaise FileSystemError.describe $"Could not write semantic cache {analysis.CachePath}" work
-            artifact
+        Run.orRaise FileSystemError.describe $"Could not write semantic cache {analysis.CachePath}" work
+        artifact
 
     /// Counts authored blocks with compiler errors, independent of how a caller presents them.
     let compilerFailureCount (analysis: Analysis) =
-        let failedBlockIds =
-            match analysis.CachedArtifact with
-            | Some artifact ->
-                artifact.Pages
-                |> List.collect _.Blocks
-                |> List.choose (fun block ->
-                    if block.Diagnostics |> List.exists (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
-                    then Some block.Id
-                    else None)
-            | None ->
-                analysis.Results
-                |> List.collect _.Diagnostics
-                |> List.choose (fun diagnostic ->
-                    if diagnostic.Severity = SemanticDiagnosticSeverity.Error then diagnostic.BlockId else None)
-        failedBlockIds |> List.distinct |> List.length
+        analysis.Errors |> List.map fst |> List.distinct |> List.length
