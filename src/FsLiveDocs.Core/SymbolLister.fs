@@ -270,7 +270,35 @@ module SymbolLister =
         let fromSource =
             match m.Symbol.DeclarationLocation with
             | Some loc ->
-                let texts = SourceParameters.parameterTexts loc.FileName loc.StartLine
+                // The reported line is not reliably the binding's own line (it can land on the XML
+                // documentation above it, or on the enclosing type's or module's), so the binding
+                // is identified by name, container and arity, with the line only as a tiebreak.
+                let names, containers =
+                    match box m.Symbol with
+                    | :? FSharpMemberOrFunctionOrValue as mfv ->
+                        let rec enclosing (entity: FSharpEntity option) acc =
+                            match entity with
+                            | Some e ->
+                                let parent = try e.DeclaringEntity with _ -> None
+                                let acc = e.LogicalName :: acc
+                                match parent with
+                                | Some _ -> enclosing parent acc
+                                | None ->
+                                    match e.Namespace with
+                                    | Some ns -> (ns.Split('.') |> List.ofArray) @ acc
+                                    | None -> acc
+                            | None -> acc
+                        let declaring = try mfv.DeclaringEntity with _ -> None
+                        [ mfv.LogicalName; mfv.CompiledName; mfv.DisplayName ] |> List.distinct,
+                        enclosing declaring []
+                    | _ -> [ m.Name ], []
+                let texts =
+                    SourceParameters.parameterTextsFor
+                        { File = loc.FileName
+                          Names = names
+                          Containers = containers
+                          Line = loc.StartLine
+                          Arity = m.Parameters.Length }
                 if texts.Length = m.Parameters.Length then
                     texts
                 elif texts.Length = 1 && m.Parameters.Length > 1 then

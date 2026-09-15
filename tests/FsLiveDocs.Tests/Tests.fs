@@ -562,6 +562,91 @@ module SymbolListerTests =
         Assert.Empty(package.Scenarios)
         Assert.Empty(package.Packages)
 
+module SourceParametersTests =
+
+    // Line numbers below are 1-based positions in this fixture and matter to the tests.
+    let private fixture =
+        """namespace Sample
+
+/// <summary>A wrapper.</summary>
+/// <remarks>Type documentation an assembly symbol may report as the member's location.</remarks>
+type Box<'v> =
+    | Box of 'v
+
+/// <summary>Module documentation.</summary>
+[<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
+module Box =
+    /// <summary>Maps.</summary>
+    /// <example>
+    /// </example>
+    let map
+        (f: 'v -> 'w)
+        (box: Box<'v>)
+        : Box<'w> =
+        let (Box value) = box
+        Box(f value)
+
+    /// <summary>Unwraps.</summary>
+    let unwrap (Box value) = value
+
+    let first (a: int) (b: int) = a + b
+    let second (c: int) (d: int) = c - d
+
+type Calculator() =
+    member _.Add(a: int) = a
+    member _.Add(a: int, b: int) = a + b
+"""
+
+    let private withFixture (test: string -> unit) =
+        let path = Path.Combine(Path.GetTempPath(), $"SourceParameters-{Guid.NewGuid():N}.fs")
+        File.WriteAllText(path, fixture)
+        try test path finally File.Delete path
+
+    let private query file name containers line arity : SourceParameters.BindingQuery =
+        { File = file; Names = [ name ]; Containers = containers; Line = line; Arity = arity }
+
+    [<Fact>]
+    let ``recovers named arguments when the reported line is the preceding XML comment`` () =
+        withFixture (fun file ->
+            // `map` is declared on line 14; the symbol reports the `/// </example>` line above it.
+            Assert.Empty(SourceParameters.parameterTexts file 13)
+            let texts = SourceParameters.parameterTextsFor (query file "map" [ "Sample"; "BoxModule" ] 13 2)
+            Assert.Equal<string list>([ "f"; "box" ], texts))
+
+    [<Fact>]
+    let ``recovers named arguments when the reported line is enclosing type or module documentation`` () =
+        withFixture (fun file ->
+            let fromTypeDocs = SourceParameters.parameterTextsFor (query file "map" [ "Sample"; "Box" ] 4 2)
+            let fromModuleDocs = SourceParameters.parameterTextsFor (query file "map" [ "Sample"; "Box" ] 8 2)
+            Assert.Equal<string list>([ "f"; "box" ], fromTypeDocs)
+            Assert.Equal<string list>([ "f"; "box" ], fromModuleDocs))
+
+    [<Fact>]
+    let ``a genuinely destructured argument recovers only its pattern, never a neighbour's name`` () =
+        withFixture (fun file ->
+            // Reported on its documentation line, directly after `map`'s named arguments.
+            let texts = SourceParameters.parameterTextsFor (query file "unwrap" [ "Sample"; "Box" ] 21 1)
+            Assert.Equal<string list>([ "Box value" ], texts)
+            // A symbol with no matching binding recovers nothing, so the diagnostic still fires.
+            Assert.Empty(SourceParameters.parameterTextsFor (query file "missing" [ "Sample"; "Box" ] 21 1)))
+
+    [<Fact>]
+    let ``nearby bindings are resolved by identity rather than by the next declaration`` () =
+        withFixture (fun file ->
+            // Both report the line before `first`; the next binding would be wrong for `second`.
+            let first = SourceParameters.parameterTextsFor (query file "first" [ "Sample"; "Box" ] 23 2)
+            let second = SourceParameters.parameterTextsFor (query file "second" [ "Sample"; "Box" ] 23 2)
+            Assert.Equal<string list>([ "a"; "b" ], first)
+            Assert.Equal<string list>([ "c"; "d" ], second))
+
+    [<Fact>]
+    let ``overloaded members with the same name are resolved by arity`` () =
+        withFixture (fun file ->
+            let one = SourceParameters.parameterTextsFor (query file "Add" [ "Sample"; "Calculator" ] 27 1)
+            let two = SourceParameters.parameterTextsFor (query file "Add" [ "Sample"; "Calculator" ] 27 2)
+            Assert.Equal<string list>([ "a" ], one)
+            Assert.Equal<string list>([ "a"; "b" ], two))
+
 module ContentProviderTests =
 
     let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
