@@ -2,13 +2,12 @@ namespace FsLiveDocs.Runner
 
 open System
 open System.Collections.Concurrent
-open System.Diagnostics
 open System.IO
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Text
+open System.Text.Json.Nodes
 open FsLiveDocs.Core
-open Newtonsoft.Json.Linq
 
 type EvaluatedProject = {
     ProjectPath: string
@@ -43,38 +42,20 @@ and CompilationSourceRange = { Block: DocumentationBlock; StartLine: int; EndLin
 /// Evaluates the real MSBuild project and checks canonical documentation compilation units with FCS.
 module DocumentationCompiler =
 
-    let private readString (item: JToken) name =
-        match item.[name] with
+    /// The property named `name` on `node`, or `None` if `node` is not an object or has no such
+    /// property -- the same permissive lookup `JObject.Item` gave Newtonsoft-based callers.
+    let private tryProperty (node: JsonNode) (name: string) : JsonNode option =
+        match node with
         | null -> None
-        | value -> value.Value<string>() |> Option.ofObj |> Option.filter (String.IsNullOrWhiteSpace >> not)
+        | :? JsonObject as obj ->
+            let mutable value = Unchecked.defaultof<JsonNode>
+            if obj.TryGetPropertyValue(name, &value) then Option.ofObj value else None
+        | _ -> None
 
-    let private runMsBuild (fullPath: string) (arguments: string list) =
-        let startInfo = ProcessStartInfo("dotnet")
-        startInfo.WorkingDirectory <- Path.GetDirectoryName(fullPath)
-        startInfo.RedirectStandardOutput <- true
-        startInfo.RedirectStandardError <- true
-        startInfo.UseShellExecute <- false
-        startInfo.ArgumentList.Add("msbuild")
-        startInfo.ArgumentList.Add(fullPath)
-        for argument in arguments do startInfo.ArgumentList.Add(argument)
-        startInfo.ArgumentList.Add("-nologo")
-        use evaluationProcess = Process.Start(startInfo)
-        let output = evaluationProcess.StandardOutput.ReadToEnd()
-        let errors = evaluationProcess.StandardError.ReadToEnd()
-        evaluationProcess.WaitForExit()
-        if evaluationProcess.ExitCode <> 0 then
-            // MSBuild reports errors on either stream depending on the failure.
-            let detail = (errors + Environment.NewLine + output).Trim()
-            // A project outside the solution is never restored by a solution-level build, so this
-            // failure usually means the project list includes something the solution does not build.
-            if detail.Contains("NETSDK1004", StringComparison.Ordinal) then
-                invalidOp
-                    $"Project is not restored: {fullPath}\n\
-                      Run 'dotnet restore \"{fullPath}\"' first. If this project is not part of your solution, \
-                      a solution-level restore never covers it — check that you meant to pass it to livedocs."
-            else
-                invalidOp $"MSBuild evaluation failed for {fullPath}: {detail}"
-        JObject.Parse(output)
+    let private readString (item: JsonNode) name =
+        tryProperty item name
+        |> Option.map (fun value -> value.GetValue<string>())
+        |> Option.filter (String.IsNullOrWhiteSpace >> not)
 
     /// Runs an inner-build ResolveReferences target so package, project, framework, and SDK references all come from MSBuild evaluation.
     /// For a cross-targeting project, the first framework declared in TargetFrameworks is the documentation context.
@@ -85,10 +66,10 @@ module DocumentationCompiler =
         // outer build imports only the dispatch targets, so choose its first declared
         // framework before asking MSBuild for compiler references.
         let dimensions =
-            runMsBuild fullPath [ "-getProperty:TargetFramework,TargetFrameworks" ]
-        let dimensionProperties = dimensions.["Properties"]
+            MsBuild.evaluate fullPath [ "-getProperty:TargetFramework,TargetFrameworks" ]
+        let dimensionProperty name = tryProperty dimensions "Properties" |> Option.bind (fun properties -> readString properties name)
         let declaredFrameworks =
-            match readString dimensionProperties "TargetFramework", readString dimensionProperties "TargetFrameworks" with
+            match dimensionProperty "TargetFramework", dimensionProperty "TargetFrameworks" with
             | Some framework, _ -> [ framework ]
             | None, Some frameworks ->
                 frameworks.Split(';', StringSplitOptions.RemoveEmptyEntries ||| StringSplitOptions.TrimEntries) |> Array.toList
@@ -101,32 +82,31 @@ module DocumentationCompiler =
         | _ -> ()
         let frameworkArgument =
             selectedFramework |> Option.map (fun framework -> $"-property:TargetFramework={framework}") |> Option.toList
-        let targetExists (json: JToken) =
-            json.["Properties"]
-            |> fun properties -> readString properties "TargetPath"
+        let targetExists (json: JsonObject) =
+            tryProperty json "Properties"
+            |> Option.bind (fun properties -> readString properties "TargetPath")
             |> Option.exists File.Exists
         let defaultBuild =
-            runMsBuild fullPath (frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
+            MsBuild.evaluate fullPath (frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
         let configurationArgument =
             if targetExists defaultBuild then []
             else
                 let releaseArgument = [ "-property:Configuration=Release" ]
                 let releaseBuild =
-                    runMsBuild fullPath (releaseArgument @ frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
+                    MsBuild.evaluate fullPath (releaseArgument @ frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
                 if targetExists releaseBuild then releaseArgument else []
         let json =
-            runMsBuild
+            MsBuild.evaluate
                 fullPath
                 (configurationArgument
                  @ frameworkArgument
                  @ [ "-target:ResolveReferences"
                      "-getProperty:TargetFramework,TargetPath,LangVersion,DefineConstants,NoWarn,WarningsAsErrors"
                      "-getItem:ReferencePath" ])
-        let properties = json.["Properties"]
-        let property name = readString properties name
+        let property name = tryProperty json "Properties" |> Option.bind (fun properties -> readString properties name)
         let references =
-            match json.SelectToken("Items.ReferencePath") with
-            | :? JArray as items ->
+            match tryProperty json "Items" |> Option.bind (fun items -> tryProperty items "ReferencePath") with
+            | Some(:? JsonArray as items) ->
                 items
                 |> Seq.choose (fun item -> readString item "FullPath" |> Option.orElseWith (fun () -> readString item "Identity"))
                 |> Seq.filter File.Exists
@@ -199,9 +179,8 @@ module DocumentationCompiler =
         }
 
     let private checkerCount = min 4 (max 1 Environment.ProcessorCount)
-    let private checkers = Array.init checkerCount (fun _ -> lazy FSharpChecker.Create(keepAssemblyContents = true))
-    let private optionChecker = checkers.[0]
-    let mutable private nextChecker = -1
+    let private checkerPool = CheckerPool.create checkerCount
+    let private optionChecker = CheckerPool.anyOne checkerPool
 
     let private optionsCache = ConcurrentDictionary<string, Lazy<FSharpProjectOptions * FSharpDiagnostic list>>()
 
@@ -218,12 +197,12 @@ module DocumentationCompiler =
                         |> Convert.ToHexString
                     let cacheFile = Path.Combine(Path.GetTempPath(), "fslivedocs", cacheName + ".fsx")
                     Directory.CreateDirectory(Path.GetDirectoryName(cacheFile)) |> ignore
-                    optionChecker.Value.GetProjectOptionsFromScript(cacheFile, SourceText.ofString "", otherFlags = otherFlags)
+                    optionChecker.GetProjectOptionsFromScript(cacheFile, SourceText.ofString "", otherFlags = otherFlags)
                     |> Async.RunSynchronously).Value
 
     /// Checks one page or isolated unit. It never evaluates the resulting script.
     let checkUnit (project: EvaluatedProject) (unit: CompilationUnit) = async {
-        let checker = checkers.[(Threading.Interlocked.Increment(&nextChecker) &&& Int32.MaxValue) % checkerCount].Value
+        let checker = CheckerPool.next checkerPool
         let source, ranges = syntheticSource unit
         let fileName = Path.Combine(Path.GetTempPath(), "fslivedocs", unit.Id.Replace('/', '_').Replace('#', '_') + ".fsx")
         let otherFlags =

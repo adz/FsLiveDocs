@@ -11,6 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Effects/LiveEnvironment.fs" />
+    <Compile Include="Effects/Run.fs" />
     <Compile Include="Transcript.fs" />
     <Compile Include="DocumentationModel.fs" />
     <Compile Include="ApiModel.fs" />
@@ -22,7 +24,12 @@
     <Compile Include="Blog.fs" />
     <Compile Include="DocsSetModel.fs" />
     <Compile Include="ReleaseModel.fs" />
-    <Compile Include="Serialization.fs" />
+    <Compile Include="Schema/DocumentationSchema.fs" />
+    <Compile Include="Schema/ApiSchema.fs" />
+    <Compile Include="Schema/SemanticSchema.fs" />
+    <Compile Include="Schema/HistorySchema.fs" />
+    <Compile Include="Schema/SiteSchema.fs" />
+    <Compile Include="Schema/ReleaseSchema.fs" />
     <Compile Include="History.fs" />
     <Compile Include="ReleaseCapsule.fs" />
     <Compile Include="SourceParameters.fs" />
@@ -39,7 +46,14 @@
     <PackageReference Include="FSharp.Formatting" Version="22.0.0" />
     <PackageReference Include="Markdig" Version="1.2.0" />
     <PackageReference Include="YamlDotNet" Version="17.1.0" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Axial" Version="0.9.1" />
+    <PackageReference Include="Axial.Process" Version="0.9.1" />
+    <PackageReference Include="Axial.Console" Version="0.9.1" />
+    <PackageReference Include="Axial.FileSystem" Version="0.9.1" />
+    <PackageReference Include="Axial.PlatformService" Version="0.9.1" />
+    <PackageReference Include="Axial.HttpClient" Version="0.9.1" />
+    <PackageReference Include="Reified.Constraint" Version="0.8.0" />
+    <PackageReference Include="Reified.Schema" Version="0.8.0" />
   </ItemGroup>
 
 </Project>

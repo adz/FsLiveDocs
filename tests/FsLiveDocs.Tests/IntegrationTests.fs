@@ -36,6 +36,88 @@ module IntegrationTests =
     }
 
     [<Fact>]
+    let ``documentation compiler checks blocks correctly when compilation units exceed the checker pool size`` () = async {
+        let markdown =
+            [ 1 .. 8 ]
+            |> List.map (fun index -> $"```fsharp isolated\nlet value{index} : int = {index}\n```")
+            |> String.concat "\n"
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" (Some coreProject) markdown
+        let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
+        Assert.Equal(8, results.Length)
+        Assert.All(results, fun result ->
+            let errors = result.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
+            Assert.Empty(errors))
+        for index in 1 .. 8 do
+            let result = results.[index - 1]
+            Assert.Contains($"value{index}", result.SyntheticSource)
+            for other in 1 .. 8 do
+                if other <> index then
+                    Assert.DoesNotContain($"value{other}", result.SyntheticSource)
+    }
+
+    [<Fact>]
+    let ``checkBlocksWithProject checks blocks using a pre-evaluated project`` () = async {
+        let evaluated = DocumentationCompiler.evaluateProject coreProject
+        let blocks =
+            DocumentationDiscovery.discoverMarkdown
+                "guide.md"
+                (Some coreProject)
+                "```fsharp\nopen FsLiveDocs.Core\nlet package : PackageModel = { Version = \"1\"; Entities = []; Scenarios = []; Packages = [] }\n```"
+        let! results = DocumentationCompiler.checkBlocksWithProject evaluated "" blocks
+        let result = Assert.Single(results)
+        let errors = result.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
+        Assert.Empty(errors)
+    }
+
+    [<Fact>]
+    let ``documentation compiler checks blocks from two different projects concurrently without cross-project diagnostic bleed`` () = async {
+        let secondDirectory = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", "ConcurrentSecondProject")
+        if Directory.Exists(secondDirectory) then Directory.Delete(secondDirectory, true)
+        Directory.CreateDirectory(secondDirectory) |> ignore
+        let secondProject = Path.Combine(secondDirectory, "ConcurrentSecondProject.fsproj")
+        File.WriteAllText(
+            secondProject,
+            """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Library.fs" />
+  </ItemGroup>
+</Project>""")
+        File.WriteAllText(
+            Path.Combine(secondDirectory, "Library.fs"),
+            "namespace ConcurrentSecondProject\ntype SecondProjectOnlyMarker = { Value: int }")
+        let build = System.Diagnostics.Process.Start(System.Diagnostics.ProcessStartInfo("dotnet", $"build \"{secondProject}\" --nologo"))
+        build.WaitForExit()
+        Assert.Equal(0, build.ExitCode)
+
+        let coreBlocks =
+            DocumentationDiscovery.discoverMarkdown
+                "core-guide.md"
+                (Some coreProject)
+                "```fsharp\nopen FsLiveDocs.Core\nlet package : PackageModel = { Version = \"1\"; Entities = []; Scenarios = []; Packages = [] }\n```"
+        let secondBlocks =
+            DocumentationDiscovery.discoverMarkdown
+                "second-guide.md"
+                (Some secondProject)
+                "```fsharp\nopen ConcurrentSecondProject\nlet marker : SecondProjectOnlyMarker = { Value = 1 }\n```"
+
+        let! results =
+            Async.Parallel(
+                [ DocumentationCompiler.checkBlocks coreProject "" coreBlocks
+                  DocumentationCompiler.checkBlocks secondProject "" secondBlocks ])
+        let coreResults, secondResults = results.[0], results.[1]
+
+        let coreErrors = coreResults |> List.collect _.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
+        let secondErrors = secondResults |> List.collect _.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
+        Assert.Empty(coreErrors)
+        Assert.Empty(secondErrors)
+        Assert.DoesNotContain(coreResults |> List.collect _.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("SecondProjectOnlyMarker"))
+        Assert.DoesNotContain(secondResults |> List.collect _.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("PackageModel"))
+    }
+
+    [<Fact>]
     let ``transcript references do not assume assembly names are namespaces`` () =
         let context : FsiTranscriptRunner.DocTestExecutionContext =
             { Project =
@@ -149,6 +231,38 @@ module IntegrationTests =
         Assert.Contains("is not restored", failure.Message)
         Assert.Contains("dotnet restore", failure.Message)
         Assert.Contains("Unrestored.fsproj", failure.Message)
+
+    [<Fact>]
+    let ``evaluating a project that fails to build reports the mixed-stream MSBuild error`` () =
+        let directory = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory) |> ignore
+        let projectPath = Path.Combine(directory, "BrokenBuild.fsproj")
+        File.WriteAllText(
+            projectPath,
+            """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Library.fs" />
+  </ItemGroup>
+  <Target Name="FailDeliberately" BeforeTargets="ResolveReferences">
+    <Error Text="Deliberate FsLiveDocsTests build failure FS0010" />
+  </Target>
+</Project>""")
+        File.WriteAllText(
+            Path.Combine(directory, "Library.fs"),
+            "module Library =\n    let value = 1\n")
+
+        let restore = System.Diagnostics.Process.Start(System.Diagnostics.ProcessStartInfo("dotnet", $"restore \"{projectPath}\" --nologo"))
+        restore.WaitForExit()
+        Assert.Equal(0, restore.ExitCode)
+
+        let failure =
+            Assert.Throws<InvalidOperationException>(fun () -> DocumentationCompiler.evaluateProject projectPath |> ignore)
+
+        Assert.Contains("MSBuild evaluation failed for", failure.Message)
+        Assert.Contains("Deliberate FsLiveDocsTests build failure FS0010", failure.Message)
 
     let createTestProject dirName files =
         let baseDir = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", dirName)

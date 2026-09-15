@@ -2,11 +2,19 @@ namespace FsLiveDocs.Cli
 
 open System
 open System.IO
+open Axial
+open Axial.FileSystem
+open Reified
 open FsLiveDocs.Core
+open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
 open FsLiveDocs.Runner
 
 /// Extracts and caches the compiler-derived package model.
 module internal PackageExtraction =
+
+    let private packageCodec = Json.compile ApiSchema.packageModel
+    let private diagnosticsCodec = Json.compile ApiSchema.apiDiagnostics
 
     /// <summary>Names of every XML example some documentation page transcludes.</summary>
     /// <remarks>
@@ -15,22 +23,46 @@ module internal PackageExtraction =
     /// on its own.
     /// </remarks>
     let private transcludedExamples projectPaths =
-        let root = Directory.GetCurrentDirectory()
         let sets = Workspace.loadDocsSets projectPaths
 
-        sets
-        |> List.collect (fun set ->
-            let docsDir = Path.GetFullPath(set.Source, root)
+        // Every directory-existence check, directory listing, and file read this scan needs is
+        // gathered into one Flow and run exactly once; the filtering below is pure, consuming the
+        // gathered listings the same way the original imperative scan did.
+        let gatherWork =
+            flow {
+                let! root = FileSystem.getCurrentDirectory
 
-            if not (Directory.Exists docsDir) then
-                []
-            else
-                Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
-                |> Array.filter (fun path ->
-                    let relative = Path.GetRelativePath(root, path).Replace('\\', '/')
-                    DocsSet.ownerOf sets relative |> Option.exists (fun owner -> owner.Id = set.Id))
-                |> Array.toList)
-        |> List.map (File.ReadAllText >> ContentProvider.transcludedExampleNames)
+                let! perSet =
+                    sets
+                    |> Flow.traverse (fun set ->
+                        let docsDir = Path.GetFullPath(set.Source, root)
+
+                        flow {
+                            let! docsDirExists = FileSystem.directoryExists docsDir
+
+                            let! files =
+                                if docsDirExists then
+                                    FileSystem.getFiles docsDir "*.md" SearchOption.AllDirectories
+                                    |> Flow.map Array.toList
+                                else
+                                    Flow.succeed []
+
+                            return set, files
+                        })
+
+                let ownedPaths =
+                    perSet
+                    |> List.collect (fun (set, files) ->
+                        files
+                        |> List.filter (fun path ->
+                            let relative = Path.GetRelativePath(root, path).Replace('\\', '/')
+                            DocsSet.ownerOf sets relative |> Option.exists (fun owner -> owner.Id = set.Id)))
+
+                return! ownedPaths |> Flow.traverse FileSystem.readAllText
+            }
+
+        Run.orRaise FileSystemError.describe "Could not scan documentation sets for transcluded examples" gatherWork
+        |> List.map ContentProvider.transcludedExampleNames
         |> Set.unionMany
 
     /// <summary>Loads and merges multiple project models into a unified package.</summary>
@@ -73,54 +105,125 @@ module internal PackageExtraction =
         |> _.ToLowerInvariant()
 
     let private documentationFingerprint projectPaths =
-        let root = Directory.GetCurrentDirectory()
         let sets = Workspace.loadDocsSets projectPaths
 
-        [ for set in sets do
+        // As above: gather every existence check, listing, and read into one Flow, run it once,
+        // then build the fingerprint text from the gathered snapshot.
+        let gatherWork =
+            flow {
+                let! root = FileSystem.getCurrentDirectory
+
+                let! perSet =
+                    sets
+                    |> Flow.traverse (fun set ->
+                        let sourceDir = Path.GetFullPath(set.Source, root)
+
+                        flow {
+                            let! sourceDirExists = FileSystem.directoryExists sourceDir
+
+                            let! files =
+                                if sourceDirExists then
+                                    FileSystem.getFiles sourceDir "*.md" SearchOption.AllDirectories
+                                    |> Flow.map (Array.sort >> Array.toList)
+                                else
+                                    Flow.succeed []
+
+                            let ownedPaths =
+                                files
+                                |> List.filter (fun path ->
+                                    let relative = Path.GetRelativePath(root, path).Replace('\\', '/')
+                                    DocsSet.ownerOf sets relative |> Option.exists (fun owner -> owner.Id = set.Id))
+
+                            let! ownedFiles =
+                                ownedPaths
+                                |> Flow.traverse (fun path ->
+                                    FileSystem.readAllText path
+                                    |> Flow.map (fun text -> Path.GetRelativePath(root, path).Replace('\\', '/'), text))
+
+                            return set, ownedFiles
+                        })
+
+                return perSet
+            }
+
+        let perSet = Run.orRaise FileSystemError.describe "Could not scan documentation sets" gatherWork
+
+        [ for set, ownedFiles in perSet do
               let setPrelude = set.FSharpPrelude |> Option.defaultValue ""
               yield $"set:{set.Id}|source:{set.Source}|prelude:{setPrelude}"
-              let sourceDir = Path.GetFullPath(set.Source, root)
 
-              if Directory.Exists sourceDir then
-                  for path in Directory.GetFiles(sourceDir, "*.md", SearchOption.AllDirectories) |> Array.sort do
-                      let relative = Path.GetRelativePath(root, path).Replace('\\', '/')
-
-                      if DocsSet.ownerOf sets relative |> Option.exists (fun owner -> owner.Id = set.Id) then
-                          yield relative
-                          yield File.ReadAllText path ]
+              for relative, text in ownedFiles do
+                  yield relative
+                  yield text ]
         |> String.concat "\n--fslivedocs-documentation-input--\n"
         |> sha256Text
 
     let inputFingerprint (projectPaths: string list) =
-        let root = Directory.GetCurrentDirectory()
         let ignoredSegments = set [ ".git"; ".livedocs"; "artifacts"; "bin"; "obj"; "output" ]
-        let isIgnored (path: string) =
-            Path.GetRelativePath(root, path).Split([| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |])
-            |> Array.exists ignoredSegments.Contains
-        let projectFiles =
-            projectPaths
-            |> List.collect (fun projectPath ->
-                let fullPath = Path.GetFullPath(projectPath)
-                let directory = Path.GetDirectoryName(fullPath)
-                fullPath :: (Directory.GetFiles(directory, "*.fs", SearchOption.AllDirectories) |> Array.toList))
-        let repositoryInputs =
-            [ "Directory.Build.props"; "Directory.Build.targets"; "Directory.Packages.props"; "global.json"; "NuGet.config" ]
-            |> List.map (fun path -> Path.Combine(root, path))
-            |> List.filter File.Exists
-        projectFiles @ repositoryInputs
-        |> List.filter (isIgnored >> not)
-        |> List.distinct
-        |> List.sort
-        |> List.collect (fun path -> [ Path.GetRelativePath(root, path).Replace('\\', '/'); File.ReadAllText(path) ])
+
+        // Gather the directory listings, existence checks, and reads this fingerprint needs into
+        // one Flow and run it once; the filtering/sorting/hashing below is pure.
+        let gatherWork =
+            flow {
+                let! root = FileSystem.getCurrentDirectory
+
+                let! projectFileLists =
+                    projectPaths
+                    |> Flow.traverse (fun projectPath ->
+                        let fullPath = Path.GetFullPath(projectPath)
+                        let directory = Path.GetDirectoryName(fullPath)
+
+                        FileSystem.getFiles directory "*.fs" SearchOption.AllDirectories
+                        |> Flow.map (fun files -> fullPath :: (files |> Array.toList)))
+
+                let repositoryCandidates =
+                    [ "Directory.Build.props"; "Directory.Build.targets"; "Directory.Packages.props"; "global.json"; "NuGet.config" ]
+                    |> List.map (fun path -> Path.Combine(root, path))
+
+                let! repositoryChecks =
+                    repositoryCandidates
+                    |> Flow.traverse (fun path -> FileSystem.fileExists path |> Flow.map (fun exists -> path, exists))
+
+                let repositoryInputs =
+                    repositoryChecks |> List.choose (fun (path, exists) -> if exists then Some path else None)
+
+                let isIgnored (path: string) =
+                    Path.GetRelativePath(root, path).Split([| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |])
+                    |> Array.exists ignoredSegments.Contains
+
+                let candidatePaths =
+                    (projectFileLists |> List.collect id) @ repositoryInputs
+                    |> List.filter (isIgnored >> not)
+                    |> List.distinct
+                    |> List.sort
+
+                return!
+                    candidatePaths
+                    |> Flow.traverse (fun path ->
+                        FileSystem.readAllText path
+                        |> Flow.map (fun text -> Path.GetRelativePath(root, path).Replace('\\', '/'), text))
+            }
+
+        Run.orRaise FileSystemError.describe "Could not compute input fingerprint" gatherWork
+        |> List.collect (fun (relative, text) -> [ relative; text ])
         |> String.concat "\n--fslivedocs-project-input--\n"
         |> sha256Text
 
     let private writeCurrentCache (path: string) (pattern: string) (value: string) =
         let directory = Path.GetDirectoryName(path)
-        Directory.CreateDirectory(directory) |> ignore
-        File.WriteAllText(path, value)
-        for stale in Directory.GetFiles(directory, pattern) do
-            if not (Path.GetFullPath(stale).Equals(Path.GetFullPath(path), StringComparison.Ordinal)) then File.Delete(stale)
+
+        let work =
+            flow {
+                do! FileSystem.createDirectory directory
+                do! FileSystem.writeAllText path value
+                let! staleFiles = FileSystem.getFiles directory pattern SearchOption.TopDirectoryOnly
+
+                for stale in staleFiles do
+                    if not (Path.GetFullPath(stale).Equals(Path.GetFullPath(path), StringComparison.Ordinal)) then
+                        do! FileSystem.deleteFile stale
+            }
+
+        Run.orRaise FileSystemError.describe $"Could not write cache {path}" work
 
     let extractCachedWithProgress reportProgress prelude (projectPaths: string list) =
         let inputHash = inputFingerprint projectPaths
@@ -145,21 +248,41 @@ module internal PackageExtraction =
         // Diagnostics describe the run, not the snapshot, so they live beside the cached package
         // rather than inside it — otherwise a warning would be reported once and never again.
         let diagnosticsPath = Path.Combine(cacheDirectory, cacheKey + ".diagnostics.json")
-        if File.Exists cachePath then
+
+        // Gather the cache-existence checks and reads into one Flow and run it once; the
+        // deserialization and cache-miss branch below stay pure/imperative as before.
+        let cacheWork =
+            flow {
+                let! cacheExists = FileSystem.fileExists cachePath
+
+                if cacheExists then
+                    let! packageText = FileSystem.readAllText cachePath
+                    let! diagnosticsExists = FileSystem.fileExists diagnosticsPath
+
+                    let! diagnosticsText =
+                        if diagnosticsExists then
+                            FileSystem.readAllText diagnosticsPath |> Flow.map Some
+                        else
+                            Flow.succeed None
+
+                    return Some(packageText, diagnosticsText)
+                else
+                    return None
+            }
+
+        match Run.orRaise FileSystemError.describe $"Could not read cached package {cachePath}" cacheWork with
+        | Some(packageText, diagnosticsText) ->
             reportProgress "Extracting API documentation" projectPaths.Length projectPaths.Length
-            let package = Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(File.ReadAllText(cachePath), FsLiveDocs.Core.Serialization.jsonSettings)
-            if isNull (box package) then invalidOp $"Invalid cached package model: {cachePath}"
+            let package = Json.deserialize packageCodec packageText
             let diagnostics =
-                if File.Exists diagnosticsPath then
-                    Newtonsoft.Json.JsonConvert.DeserializeObject<ApiDiagnostic list>(File.ReadAllText(diagnosticsPath), FsLiveDocs.Core.Serialization.jsonSettings)
-                    |> Option.ofObj
-                    |> Option.defaultValue []
-                else []
+                match diagnosticsText with
+                | Some text -> Json.deserialize diagnosticsCodec text
+                | None -> []
             package, diagnostics, inputHash
-        else
+        | None ->
             let package, diagnostics = extractWithProgress reportProgress prelude projectPaths |> Async.RunSynchronously
-            writeCurrentCache cachePath "*.package.json" (Newtonsoft.Json.JsonConvert.SerializeObject(package, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
-            writeCurrentCache diagnosticsPath "*.diagnostics.json" (Newtonsoft.Json.JsonConvert.SerializeObject(diagnostics, Newtonsoft.Json.Formatting.Indented, FsLiveDocs.Core.Serialization.jsonSettings))
+            writeCurrentCache cachePath "*.package.json" (Json.serialize packageCodec package)
+            writeCurrentCache diagnosticsPath "*.diagnostics.json" (Json.serialize diagnosticsCodec diagnostics)
             package, diagnostics, inputHash
 
     let extractCached prelude projectPaths =

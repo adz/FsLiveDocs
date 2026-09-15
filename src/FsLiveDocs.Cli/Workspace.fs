@@ -2,7 +2,15 @@ namespace FsLiveDocs.Cli
 
 open System
 open System.IO
+open System.Text.Json
+open System.Text.Json.Nodes
+open Axial
+open Axial.FileSystem
+open Reified
+open Reified.SchemaDSL
 open FsLiveDocs.Core
+open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
 
 /// Repository-local release publication settings, read from the top-level `history`
 /// object in `.livedocs/config.json`. These configure how CI locates and names
@@ -19,6 +27,58 @@ module internal Workspace =
 
     let emptyHistoryConfig = { UrlPattern = None; Discover = None }
 
+    /// `.livedocs/config.json` is a free-form document: `projects`, `docsSets`, and `history` are
+    /// read here, but every other top-level field belongs to `SiteConfig` (read via
+    /// `loadSiteConfig`, which tolerates and ignores these three keys), and the file may carry
+    /// other keys again in the future. That is why config reading uses `System.Text.Json.Nodes`
+    /// -- a dynamic document -- rather than a Reified schema for the whole file, while individual
+    /// well-typed sections (`SiteConfig`, `DocsSetConfig`) still decode through their own schema.
+    let private tryProperty (node: JsonNode) (name: string) : JsonNode option =
+        match node with
+        | null -> None
+        | :? JsonObject as obj ->
+            let mutable value = Unchecked.defaultof<JsonNode>
+            if obj.TryGetPropertyValue(name, &value) then Option.ofObj value else None
+        | _ -> None
+
+    let private tryString (node: JsonNode) (name: string) : string option =
+        tryProperty node name
+        |> Option.bind (fun value -> try Some(value.GetValue<string>()) with _ -> None)
+        |> Option.filter (String.IsNullOrWhiteSpace >> not)
+
+    let private stringArray (node: JsonNode) (name: string) : string list =
+        match tryProperty node name with
+        | Some(:? JsonArray as items) ->
+            items |> Seq.choose (fun item -> try Some(item.GetValue<string>()) with _ -> None) |> Seq.toList
+        | _ -> []
+
+    let internal docsSetConfigCodec =
+        Json.compile (
+            schema<DocsSetConfig> {
+                fieldAs "id" (fun (c: DocsSetConfig) -> c.Id) { withSchema Schema.text }
+                fieldAs "title" (fun (c: DocsSetConfig) -> c.Title) { withSchema (Schema.option Schema.text) }
+                fieldAs "source" (fun (c: DocsSetConfig) -> c.Source) { withSchema (Schema.option Schema.text) }
+                fieldAs "path" (fun (c: DocsSetConfig) -> c.Path) { withSchema (Schema.option Schema.text) }
+                fieldAs "projects" (fun (c: DocsSetConfig) -> c.Projects) { withSchema (Schema.listWith Schema.text |> Schema.withDefault []) }
+                fieldAs "default" (fun (c: DocsSetConfig) -> c.Default) { withSchema (Schema.option Schema.bool) }
+                fieldAs "sidebar" (fun (c: DocsSetConfig) -> c.Sidebar) { withSchema (Schema.option Schema.bool) }
+                fieldAs "api" (fun (c: DocsSetConfig) -> c.Api) { withSchema (Schema.option Schema.bool) }
+                fieldAs "fSharpPrelude" (fun (c: DocsSetConfig) -> c.FSharpPrelude) { withSchema (Schema.option Schema.text) }
+                construct (fun id title source path projects default_ sidebar api fsharpPrelude ->
+                    { Id = id
+                      Title = title
+                      Source = source
+                      Path = path
+                      Projects = projects
+                      Default = default_
+                      Sidebar = sidebar
+                      Api = api
+                      FSharpPrelude = fsharpPrelude })
+            }
+        )
+
+    let internal siteConfigCodec = Json.compile SiteSchema.siteConfigFile
+
     let private defaultSiteConfig =
         { RepoUrl = None
           SiteName = None
@@ -32,42 +92,54 @@ module internal Workspace =
           FSharpPrelude = None
           CommentsProvider = None }
 
+    /// Reads a config-shaped file's content if it exists, as one Flow. Every function below that
+    /// starts from ".livedocs/config.json" (or another config-shaped file) composes this once
+    /// instead of issuing separate exists/read calls.
+    let private readIfExists path =
+        flow {
+            let! exists = FileSystem.fileExists path
+            if exists then
+                let! text = FileSystem.readAllText path
+                return Some text
+            else
+                return None
+        }
+
     /// Finds documentable projects when callers omit the project list.
     let discoverProjects () =
-        let root = Directory.GetCurrentDirectory()
-        let ignored =
-            set [ ".git"; ".livedocs"; "artifacts"; "bin"; "node_modules"; "obj"; "output"; "packages"; "TestResults"; "tests" ]
-        let isIgnored (path: string) =
-            Path.GetRelativePath(root, path).Split([| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |])
-            |> Array.exists ignored.Contains
-        Directory.GetFiles(root, "*.fsproj", SearchOption.AllDirectories)
-        |> Array.filter (isIgnored >> not)
-        |> Array.sort
-        |> Array.map (fun path -> Path.GetRelativePath(root, path).Replace('\\', '/'))
-        |> Array.toList
+        let work =
+            flow {
+                let! root = FileSystem.getCurrentDirectory
+                let ignored =
+                    set [ ".git"; ".livedocs"; "artifacts"; "bin"; "node_modules"; "obj"; "output"; "packages"; "TestResults"; "tests" ]
+                let isIgnored (path: string) =
+                    Path.GetRelativePath(root, path).Split([| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |])
+                    |> Array.exists ignored.Contains
+
+                let! files = FileSystem.getFiles root "*.fsproj" SearchOption.AllDirectories
+
+                return
+                    files
+                    |> Array.filter (isIgnored >> not)
+                    |> Array.sort
+                    |> Array.map (fun path -> Path.GetRelativePath(root, path).Replace('\\', '/'))
+                    |> Array.toList
+            }
+        Run.orRaise FileSystemError.describe "Could not discover projects" work
 
     let private configuredProjects () =
         let configPath = Path.Combine(".livedocs", "config.json")
-        if not (File.Exists configPath) then []
-        else
-            let config = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText configPath)
-
-            let topLevel =
-                match config.GetValue("projects", StringComparison.OrdinalIgnoreCase) with
-                | :? Newtonsoft.Json.Linq.JArray as projects -> projects.Values<string>()
-                | _ -> Seq.empty
+        match Run.orRaise FileSystemError.describe $"Could not read {configPath}" (readIfExists configPath) with
+        | None -> []
+        | Some text ->
+            let config = JsonNode.Parse text
 
             let setProjects =
-                match config.GetValue("docsSets", StringComparison.OrdinalIgnoreCase) with
-                | :? Newtonsoft.Json.Linq.JArray as sets ->
-                    sets.Children<Newtonsoft.Json.Linq.JObject>()
-                    |> Seq.collect (fun set ->
-                        match set.GetValue("projects", StringComparison.OrdinalIgnoreCase) with
-                        | :? Newtonsoft.Json.Linq.JArray as projects -> projects.Values<string>()
-                        | _ -> Seq.empty)
+                match tryProperty config "docsSets" with
+                | Some(:? JsonArray as sets) -> sets |> Seq.collect (fun set -> stringArray set "projects")
                 | _ -> Seq.empty
 
-            Seq.append topLevel setProjects
+            Seq.append (stringArray config "projects") setProjects
             |> Seq.filter (String.IsNullOrWhiteSpace >> not)
             |> Seq.distinct
             |> Seq.toList
@@ -91,60 +163,58 @@ module internal Workspace =
         let projects = discoverProjects ()
         if projects.IsEmpty then invalidOp "No documentable .fsproj files were discovered."
         let configPath = Path.Combine(".livedocs", "config.json")
+
+        let existingText =
+            Run.orRaise FileSystemError.describe $"Could not read {configPath}" (readIfExists configPath)
+
         let config =
-            if File.Exists configPath then Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText configPath)
-            else Newtonsoft.Json.Linq.JObject()
-        config["projects"] <- Newtonsoft.Json.Linq.JArray(projects |> List.map Newtonsoft.Json.Linq.JValue)
-        File.WriteAllText(configPath, config.ToString(Newtonsoft.Json.Formatting.Indented) + Environment.NewLine)
+            match existingText with
+            | Some text -> JsonNode.Parse(text).AsObject()
+            | None -> JsonObject()
+
+        config["projects"] <- JsonArray(projects |> List.map (fun project -> JsonValue.Create project :> JsonNode) |> List.toArray)
+        let serialized = config.ToJsonString(JsonSerializerOptions(WriteIndented = true)) + Environment.NewLine
+
+        Run.orRaise
+            FileSystemError.describe
+            $"Could not write {configPath}"
+            (FileSystem.writeAllText configPath serialized)
+
         projects.Length, configPath
 
     let loadHistoryConfig () =
         let configPath = Path.Combine(".livedocs", "config.json")
-        if not (File.Exists configPath) then emptyHistoryConfig
-        else
+        match Run.orFallback (readIfExists configPath) None with
+        | None -> emptyHistoryConfig
+        | Some text ->
             try
-                let config = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText configPath)
-                match config.GetValue("history", StringComparison.OrdinalIgnoreCase) with
-                | :? Newtonsoft.Json.Linq.JObject as history ->
-                    let read name =
-                        match history.GetValue(name, StringComparison.OrdinalIgnoreCase) with
-                        | null -> None
-                        | token ->
-                            let value = token.ToString()
-                            if String.IsNullOrWhiteSpace value then None else Some value
-                    { UrlPattern = read "urlPattern"; Discover = read "discover" }
-                | _ -> emptyHistoryConfig
+                let config = JsonNode.Parse text
+                match tryProperty config "history" with
+                | Some history -> { UrlPattern = tryString history "urlPattern"; Discover = tryString history "discover" }
+                | None -> emptyHistoryConfig
             with _ -> emptyHistoryConfig
 
     let loadSiteConfig () =
         let configPath = Path.Combine(".livedocs", "config.json")
-        if File.Exists configPath then
-            try
-                let config =
-                    Newtonsoft.Json.JsonConvert.DeserializeObject<SiteConfig>(
-                        File.ReadAllText configPath,
-                        Serialization.jsonSettings)
-                if isNull (box config) then defaultSiteConfig else config
-            with _ -> defaultSiteConfig
-        else defaultSiteConfig
+        match Run.orFallback (readIfExists configPath) None with
+        | Some text -> (try Json.deserialize siteConfigCodec text with _ -> defaultSiteConfig)
+        | None -> defaultSiteConfig
 
     /// Reads the raw documentation-set array while preserving the distinction between an absent
     /// key (the byte-compatible legacy site) and an explicitly configured set list.
     let loadDocsSetConfigs () =
         let configPath = Path.Combine(".livedocs", "config.json")
 
-        if not (File.Exists configPath) then
-            None
-        else
-            let config = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText configPath)
+        match Run.orRaise FileSystemError.describe $"Could not read {configPath}" (readIfExists configPath) with
+        | None -> None
+        | Some text ->
+            let config = JsonNode.Parse text
 
-            match config.GetValue("docsSets", StringComparison.OrdinalIgnoreCase) with
-            | null -> None
-            | :? Newtonsoft.Json.Linq.JArray as sets ->
-                let serializer = Newtonsoft.Json.JsonSerializer.Create(Serialization.jsonSettings)
-                let values = sets.ToObject<DocsSetConfig list>(serializer)
-                Some(if isNull (box values) then [] else values)
-            | _ -> invalidOp "\"docsSets\" in .livedocs/config.json must be an array."
+            match tryProperty config "docsSets" with
+            | None -> None
+            | Some(:? JsonArray as sets) ->
+                sets |> Seq.map (fun set -> Json.deserialize docsSetConfigCodec (set.ToJsonString())) |> Seq.toList |> Some
+            | Some _ -> invalidOp "\"docsSets\" in .livedocs/config.json must be an array."
 
     let hasConfiguredDocsSets () = loadDocsSetConfigs().IsSome
 
@@ -155,31 +225,62 @@ module internal Workspace =
 
     let writeIfChanged (path: string) (content: string) =
         let normalized = content.Replace("\r\n", "\n").TrimEnd() + "\n"
-        let shouldWrite =
-            if File.Exists path then File.ReadAllText(path).Replace("\r\n", "\n").TrimEnd() + "\n" <> normalized
-            else true
-        if shouldWrite then
-            let directory = Path.GetDirectoryName path
-            if not (String.IsNullOrWhiteSpace directory) then Directory.CreateDirectory(directory) |> ignore
-            File.WriteAllText(path, normalized)
+
+        let work =
+            flow {
+                let! existing = readIfExists path
+
+                let shouldWrite =
+                    match existing with
+                    | Some text -> text.Replace("\r\n", "\n").TrimEnd() + "\n" <> normalized
+                    | None -> true
+
+                if shouldWrite then
+                    let directory = Path.GetDirectoryName path
+                    if not (String.IsNullOrWhiteSpace directory) then
+                        do! FileSystem.createDirectory directory
+                    do! FileSystem.writeAllText path normalized
+            }
+
+        Run.orRaise FileSystemError.describe $"Could not write {path}" work
 
     /// Creates the repository-local files required by the default workflow.
     let initialize discover =
-        Directory.CreateDirectory(".livedocs") |> ignore
-        if not (File.Exists ".livedocs/config.json") then File.WriteAllText(".livedocs/config.json", "{}")
+        let setupFlow =
+            flow {
+                do! FileSystem.createDirectory ".livedocs"
+                let! configExists = FileSystem.fileExists ".livedocs/config.json"
+                if not configExists then
+                    do! FileSystem.writeAllText ".livedocs/config.json" "{}"
+            }
+
+        Run.orRaise FileSystemError.describe "Could not initialize .livedocs directory" setupFlow
+
         let discovered = if discover then Some(recordDiscoveredProjects ()) else None
-        if not (File.Exists ".livedocs/history.json") then File.WriteAllText(".livedocs/history.json", Templates.HistoryIndex)
 
-        let ignorePath = ".gitignore"
-        let ignored =
-            if File.Exists ignorePath then File.ReadAllText(ignorePath).Replace("\r\n", "\n")
-            else ""
-        let requiredIgnores = [ ".livedocs/cache/"; ".livedocs/releases/" ]
-        let missing = requiredIgnores |> List.filter (fun item -> ignored.Split('\n') |> Array.contains item |> not)
-        if not missing.IsEmpty then
-            let prefix = if String.IsNullOrEmpty ignored || ignored.EndsWith("\n") then ignored else ignored + "\n"
-            File.WriteAllText(ignorePath, prefix + String.concat "\n" missing + "\n")
+        let restFlow =
+            flow {
+                let! historyExists = FileSystem.fileExists ".livedocs/history.json"
+                if not historyExists then
+                    do! FileSystem.writeAllText ".livedocs/history.json" Templates.HistoryIndex
 
-        Directory.CreateDirectory("docs") |> ignore
-        if not (File.Exists "docs/index.md") then File.WriteAllText("docs/index.md", Templates.DocIndex)
+                let ignorePath = ".gitignore"
+                let! ignoreContent = readIfExists ignorePath
+                let ignored =
+                    ignoreContent |> Option.map (fun s -> s.Replace("\r\n", "\n")) |> Option.defaultValue ""
+
+                let requiredIgnores = [ ".livedocs/cache/"; ".livedocs/releases/" ]
+                let missing = requiredIgnores |> List.filter (fun item -> ignored.Split('\n') |> Array.contains item |> not)
+                if not missing.IsEmpty then
+                    let prefix = if String.IsNullOrEmpty ignored || ignored.EndsWith("\n") then ignored else ignored + "\n"
+                    do! FileSystem.writeAllText ignorePath (prefix + String.concat "\n" missing + "\n")
+
+                do! FileSystem.createDirectory "docs"
+                let! indexExists = FileSystem.fileExists "docs/index.md"
+                if not indexExists then
+                    do! FileSystem.writeAllText "docs/index.md" Templates.DocIndex
+            }
+
+        Run.orRaise FileSystemError.describe "Could not initialize workspace files" restFlow
+
         discovered

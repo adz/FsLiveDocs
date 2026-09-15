@@ -6,8 +6,9 @@ open System.IO.Compression
 open System.Security.Cryptography
 open System.Text
 open System.Net.Http
-open Newtonsoft.Json
-open Newtonsoft.Json.Serialization
+open System.Text.Json
+open Reified
+open FsLiveDocs.Core.Schema
 
 /// Creates, validates, inspects, and extracts deterministic release capsules.
 module ReleaseCapsule =
@@ -28,40 +29,48 @@ module ReleaseCapsule =
     /// The renderer-neutral content artifact exactly as schema 1 persisted it, kept for migration only.
     module private LegacyContent =
 
+        /// Content schemas 1 and 2 predate blog metadata; fill every blog field with its default
+        /// explicitly so the strict schema-3 codec can decode the page metadata.
+        let private addBlogMetadataDefaults (metadata: Nodes.JsonObject) =
+            let defaults: (string * Nodes.JsonNode) list =
+                [ "Date", null
+                  "Tags", Nodes.JsonArray()
+                  "Category", null
+                  "Draft", Nodes.JsonValue.Create(false)
+                  "Summary", null
+                  "Slug", null
+                  "Series", null
+                  "SeriesOrder", null
+                  "Comments", Nodes.JsonValue.Create(false)
+                  "BlogList", null ]
+            for name, value in defaults do
+                if not (metadata.ContainsKey name) then metadata[name] <- value
+
         /// Schema 2 had documentation sets but predated blog metadata.  Do not depend on
         /// Json.NET's treatment of absent record fields: write every blog default explicitly.
         let migrateV2 (bytes: byte array) : ReleaseContentArtifact =
-            let root = Newtonsoft.Json.Linq.JObject.Parse(Encoding.UTF8.GetString bytes)
-            let schema = root["SchemaVersion"] |> fun value -> if isNull value then 0 else value.ToObject<int>()
+            let root =
+                match Nodes.JsonNode.Parse(Encoding.UTF8.GetString bytes) with
+                | :? Nodes.JsonObject as value -> value
+                | _ -> invalidOp "Content schema 2 payload must be an object."
+            let schema = match root["SchemaVersion"] with | null -> 0 | value -> value.GetValue<int>()
             if schema <> 2 then invalidOp $"Content schema 2 payload declares schema {schema}."
 
-            let defaults: (string * Newtonsoft.Json.Linq.JToken) list =
-                [ "Date", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Tags", Newtonsoft.Json.Linq.JArray()
-                  "Category", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Draft", Newtonsoft.Json.Linq.JValue(false)
-                  "Summary", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Slug", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Series", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "SeriesOrder", Newtonsoft.Json.Linq.JValue.CreateNull()
-                  "Comments", Newtonsoft.Json.Linq.JValue(false)
-                  "BlogList", Newtonsoft.Json.Linq.JValue.CreateNull() ]
-
             match root["Pages"] with
-            | :? Newtonsoft.Json.Linq.JArray as pages ->
+            | :? Nodes.JsonArray as pages ->
                 for page in pages do
                     match page["Metadata"] with
-                    | :? Newtonsoft.Json.Linq.JObject as metadata ->
-                        for name, value in defaults do metadata[name] <- value.DeepClone()
+                    | :? Nodes.JsonObject as metadata ->
+                        addBlogMetadataDefaults metadata
                     | _ -> invalidOp "Content schema 2 page is missing Metadata."
             | _ -> invalidOp "Content schema 2 Pages must be an array."
 
             match root["Site"] with
-            | :? Newtonsoft.Json.Linq.JObject as site -> site["CommentsProvider"] <- Newtonsoft.Json.Linq.JValue.CreateNull()
+            | :? Nodes.JsonObject as site -> site["CommentsProvider"] <- null
             | _ -> invalidOp "Content schema 2 is missing Site."
 
-            root["SchemaVersion"] <- Newtonsoft.Json.Linq.JValue(ContentSchemaVersion)
-            root.ToObject<ReleaseContentArtifact>(JsonSerializer.Create(Serialization.jsonSettings))
+            root["SchemaVersion"] <- Nodes.JsonValue.Create(ContentSchemaVersion)
+            Json.deserialize (Json.compile ReleaseSchema.releaseContentArtifact) (root.ToJsonString())
 
         [<CLIMutable>]
         type ContentPageV1 =
@@ -76,48 +85,49 @@ module ReleaseCapsule =
               Assets: ReleaseAsset list
               Site: SiteConfig }
 
+        let private contentMetadataCodec = Json.compile SiteSchema.contentMetadata
+        let private releaseAssetsCodec = Json.compile (Schema.listWith ReleaseSchema.releaseAsset)
+        let private siteConfigCodec = Json.compile SiteSchema.siteConfig
+
+        /// Case-insensitive lookup, matching the property-name tolerance the pre-Reified
+        /// Newtonsoft-based reader had for this legacy format.
+        let private required (objectValue: JsonElement) name =
+            objectValue.EnumerateObject()
+            |> Seq.tryFind (fun property -> property.NameEquals(name: string) || String.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            |> Option.map (fun property -> property.Value)
+            |> Option.defaultWith (fun () -> invalidOp $"Content schema 1 is missing required field {name}.")
+
         let deserialize (bytes: byte array) =
-            let root = Newtonsoft.Json.Linq.JObject.Parse(Encoding.UTF8.GetString bytes)
+            use document = JsonDocument.Parse(bytes)
+            let root = document.RootElement
 
-            let required (objectValue: Newtonsoft.Json.Linq.JObject) name =
-                match objectValue.GetValue(name, StringComparison.OrdinalIgnoreCase) with
-                | null -> invalidOp $"Content schema 1 is missing required field {name}."
-                | value -> value
-
-            let serializer = JsonSerializer.Create(Serialization.jsonSettings)
-            let schema = required root "SchemaVersion" |> fun token -> token.ToObject<int>()
+            let schema = (required root "SchemaVersion").GetInt32()
 
             if schema <> 1 then
                 invalidOp $"Content schema 1 payload declares schema {schema}."
 
             let pages =
-                match required root "Pages" with
-                | :? Newtonsoft.Json.Linq.JArray as values ->
-                    values
-                    |> Seq.map (fun token ->
-                        let page = token :?> Newtonsoft.Json.Linq.JObject
-
-                        { SourcePath = required page "SourcePath" |> fun value -> value.ToObject<string>()
+                match (required root "Pages").ValueKind with
+                | JsonValueKind.Array ->
+                    (required root "Pages").EnumerateArray()
+                    |> Seq.map (fun page ->
+                        { SourcePath = (required page "SourcePath").GetString()
                           Metadata =
-                            required page "Metadata"
-                            |> fun value -> value.ToObject<ContentMetadata>(serializer)
-                          Markdown = required page "Markdown" |> fun value -> value.ToObject<string>() })
+                            match Nodes.JsonNode.Parse((required page "Metadata").GetRawText()) with
+                            | :? Nodes.JsonObject as metadata ->
+                                addBlogMetadataDefaults metadata
+                                Json.deserialize contentMetadataCodec (metadata.ToJsonString())
+                            | _ -> invalidOp "Content schema 1 page Metadata must be an object."
+                          Markdown = (required page "Markdown").GetString() })
                     |> Seq.toList
                 | _ -> invalidOp "Content schema 1 Pages must be an array."
 
-            let assets =
-                required root "Assets"
-                |> fun value -> value.ToObject<ReleaseAsset list>(serializer)
-
-            let site =
-                required root "Site" |> fun value -> value.ToObject<SiteConfig>(serializer)
-
-            if isNull (box site) then
-                invalidOp "Content schema 1 contains an invalid Site object."
+            let assets = Json.deserialize releaseAssetsCodec ((required root "Assets").GetRawText())
+            let site = Json.deserialize siteConfigCodec ((required root "Site").GetRawText())
 
             { SchemaVersion = schema
-              Pages = if isNull (box pages) then [] else pages
-              Assets = if isNull (box assets) then [] else assets
+              Pages = pages
+              Assets = assets
               Site = site }
 
         /// Deterministically lifts a schema-1 content artifact to schema 2: one implicit default
@@ -186,12 +196,20 @@ module ReleaseCapsule =
     let private sha256Bytes (bytes: byte array) =
         bytes |> SHA256.HashData |> Convert.ToHexString |> _.ToLowerInvariant()
 
-    let private serialize value =
-        JsonConvert.SerializeObject(value, Formatting.Indented, Serialization.jsonSettings)
-        |> Encoding.UTF8.GetBytes
+    // Every persisted release-artifact type is serialized through a Reified.Schema codec compiled
+    // from `FsLiveDocs.Core.Schema`, wire-compatible with the
+    // pre-Reified format (see `DocumentationSchema` for the shared compatibility rules).
+    let private apiCodec = Json.compile ApiSchema.apiModelArtifact
+    let private semanticCodec = Json.compile SemanticSchema.semanticDocumentationArtifact
+    let private contentCodec = Json.compile ReleaseSchema.releaseContentArtifact
+    let private manifestCodec = Json.compile ReleaseSchema.releaseCapsuleManifest
+    let private historyIndexCodec = Json.compile ReleaseSchema.releaseHistoryIndex
 
-    let private deserialize<'value> (bytes: byte array) =
-        JsonConvert.DeserializeObject<'value>(Encoding.UTF8.GetString bytes, Serialization.jsonSettings)
+    let private serializeWith codec value =
+        Json.serialize codec value |> Encoding.UTF8.GetBytes
+
+    let private deserializeWith codec (bytes: byte array) =
+        Json.deserialize codec (Encoding.UTF8.GetString bytes)
 
     let private normalizedEntryPath (path: string) =
         let normalized = path.Replace('\\', '/').TrimStart('/')
@@ -405,8 +423,8 @@ module ReleaseCapsule =
         let duplicates = normalizedAssets |> List.countBy fst |> List.filter (fun (_, count) -> count > 1)
         if not duplicates.IsEmpty then invalidOp $"Release content contains duplicate asset path: {fst duplicates.Head}"
 
-        let apiBytes = serialize api
-        let semanticBytes = serialize semantic
+        let apiBytes = serializeWith apiCodec api
+        let semanticBytes = serializeWith semanticCodec semantic
 
         let content: ReleaseContentArtifact =
             { SchemaVersion = ContentSchemaVersion
@@ -428,7 +446,7 @@ module ReleaseCapsule =
         validateApi api
         validateSemantic semantic
         validateContent content
-        let contentBytes = serialize content
+        let contentBytes = serializeWith contentCodec content
         let manifest =
             {
                 SchemaVersion = ManifestSchemaVersion
@@ -439,7 +457,7 @@ module ReleaseCapsule =
                 Semantic = createComponent semantic.SchemaVersion "semantic.json" semanticBytes
                 Content = createComponent content.SchemaVersion "content.json" contentBytes
             }
-        let manifestBytes = serialize manifest
+        let manifestBytes = serializeWith manifestCodec manifest
 
         use file = File.Create fullPath
         use archive = new ZipArchive(file, ZipArchiveMode.Create)
@@ -558,22 +576,21 @@ module ReleaseCapsule =
         let fullPath = Path.GetFullPath path
         if not (File.Exists fullPath) then invalidOp $"Release capsule is missing: {fullPath}"
         let entries = readEntries fullPath
-        let manifest = required "manifest.json" entries |> deserialize<ReleaseCapsuleManifest>
-        if isNull (box manifest) || manifest.SchemaVersion <> ManifestSchemaVersion then
-            let actual = if isNull (box manifest) then 0 else manifest.SchemaVersion
-            invalidOp $"Unsupported release capsule manifest schema {actual}; expected {ManifestSchemaVersion}."
-        let api = verifyComponent manifest.Api entries |> deserialize<ApiModelArtifact>
+        let manifest = required "manifest.json" entries |> deserializeWith manifestCodec
+        if manifest.SchemaVersion <> ManifestSchemaVersion then
+            invalidOp $"Unsupported release capsule manifest schema {manifest.SchemaVersion}; expected {ManifestSchemaVersion}."
+        let api = verifyComponent manifest.Api entries |> deserializeWith apiCodec
 
         let semantic =
             verifyComponent manifest.Semantic entries
-            |> deserialize<SemanticDocumentationArtifact>
+            |> deserializeWith semanticCodec
 
         let contentBytes = verifyComponent manifest.Content entries
         // The manifest records the exact persisted content contract. Deserialize against that
         // version's shape, then migrate supported older versions with a small deterministic step.
         let content =
             match manifest.Content.SchemaVersion with
-            | 3 -> deserialize<ReleaseContentArtifact> contentBytes
+            | 3 -> deserializeWith contentCodec contentBytes
             | 2 -> LegacyContent.migrateV2 contentBytes
             | 1 -> LegacyContent.migrate semantic.Prelude api (LegacyContent.deserialize contentBytes)
             | other ->
@@ -643,13 +660,17 @@ module ReleaseCapsule =
             Counts = captureCounts api semantic content
         }
 
-    let private frontMatterSettings =
-        let settings = JsonSerializerSettings(
-            ContractResolver = CamelCasePropertyNamesContractResolver(),
-            NullValueHandling = NullValueHandling.Ignore)
-        for converter in Serialization.jsonSettings.Converters do
-            settings.Converters.Add(converter)
-        settings
+    /// Markdown frontmatter for materialized pages: camelCase, omitting absent fields -- a
+    /// human/tool-facing rendering, not part of the capsule wire format `ContentMetadata` itself
+    /// is schema-pinned to, so it is built directly rather than through a Reified codec.
+    let private frontMatterJson (metadata: ContentMetadata) =
+        let node = Nodes.JsonObject()
+        node["title"] <- Nodes.JsonValue.Create metadata.Title
+        metadata.Type |> Option.iter (fun value -> node["type"] <- Nodes.JsonValue.Create value)
+        metadata.Project |> Option.iter (fun value -> node["project"] <- Nodes.JsonValue.Create value)
+        metadata.TargetFramework |> Option.iter (fun value -> node["targetFramework"] <- Nodes.JsonValue.Create value)
+        metadata.Platform |> Option.iter (fun value -> node["platform"] <- Nodes.JsonValue.Create value)
+        node.ToJsonString(JsonSerializerOptions(WriteIndented = true))
 
     /// Materializes renderer-neutral content under a validated destination.
     /// Pages and assets are laid out under each set's route prefix, so a history render can scan
@@ -686,7 +707,7 @@ module ReleaseCapsule =
 
             let output = safeCombine (routePrefix + sourceRelative)
             Directory.CreateDirectory(Path.GetDirectoryName output) |> ignore
-            let frontMatter = JsonConvert.SerializeObject(page.Metadata, Formatting.Indented, frontMatterSettings)
+            let frontMatter = frontMatterJson page.Metadata
             File.WriteAllText(output, "---\n" + frontMatter + "\n---\n" + page.Markdown)
         for asset in content.Assets do
             let relative = normalizedEntryPath asset.Path
@@ -765,15 +786,14 @@ module ReleaseCapsule =
         let normalized = normalizeHistoryIndex index
         let directory = Path.GetDirectoryName(Path.GetFullPath path)
         Directory.CreateDirectory directory |> ignore
-        File.WriteAllText(path, JsonConvert.SerializeObject(normalized, Formatting.Indented, Serialization.jsonSettings) + Environment.NewLine)
+        File.WriteAllText(path, Json.serialize historyIndexCodec normalized + Environment.NewLine)
 
     /// Loads a capsule history index and validates its structural invariants.
     let loadHistoryIndex path =
         if not (File.Exists path) then invalidOp $"Release history index is missing: {path}"
-        let index = JsonConvert.DeserializeObject<ReleaseHistoryIndex>(File.ReadAllText path, Serialization.jsonSettings)
-        if isNull (box index) || index.SchemaVersion <> HistoryIndexSchemaVersion then
-            let actual = if isNull (box index) then 0 else index.SchemaVersion
-            invalidOp $"Unsupported release history index schema {actual}; expected {HistoryIndexSchemaVersion}."
+        let index = Json.deserialize historyIndexCodec (File.ReadAllText path)
+        if index.SchemaVersion <> HistoryIndexSchemaVersion then
+            invalidOp $"Unsupported release history index schema {index.SchemaVersion}; expected {HistoryIndexSchemaVersion}."
         if index.Entries.IsEmpty then invalidOp "Release history index must contain at least one entry."
         index.Entries |> List.iter (fun entry -> parseVersion entry.Version |> ignore)
         if index.Entries |> List.countBy _.Version |> List.exists (fun (_, count) -> count > 1) then

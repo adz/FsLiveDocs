@@ -4,11 +4,22 @@ open System
 open System.IO
 open System.Text.RegularExpressions
 open Xunit
+open Reified
 open FsLiveDocs.Core
+open FsLiveDocs.Core.Schema
 open FsLiveDocs.Cli
 open FsLiveDocs.Runner
 open FsLiveDocs.Renderer
-open Newtonsoft.Json
+
+/// Codecs shared by fixtures across this file that write or read the JSON a persisted release
+/// artifact is schema-pinned to. Every test builds these bytes by hand rather than going through
+/// `ReleaseCapsule`/`History`'s own write paths, so it needs the same codec those paths use.
+module private Codecs =
+    let semanticToken = Json.compile SemanticSchema.semanticToken
+    let semanticArtifact = Json.compile SemanticSchema.semanticDocumentationArtifact
+    let apiModelArtifact = Json.compile ApiSchema.apiModelArtifact
+    let historyManifest = Json.compile HistorySchema.historyManifest
+    let releaseCapsuleManifest = Json.compile ReleaseSchema.releaseCapsuleManifest
 
 module DocumentationSourceTests =
 
@@ -58,19 +69,19 @@ module HistoryTests =
             Diagnostics = []
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ block ] } ] }
-        File.WriteAllText(path, JsonConvert.SerializeObject(artifact, Formatting.Indented, Serialization.jsonSettings))
+        File.WriteAllText(path, Json.serialize Codecs.semanticArtifact artifact)
         let loaded = History.loadSemanticArtifact (History.sha256 path) path
         Assert.Equal("value", loaded.Pages.Head.Blocks.Head.Lines.Head.Tokens.Head.Text)
 
         let invalid = { artifact with Pages = [ { SourcePath = "guide.md"; Blocks = [ { block with Lines = [ { Tokens = [ { Text = "bad"; Kind = Identifier; Tooltip = Some 2 } ] } ] } ] } ] }
-        File.WriteAllText(path, JsonConvert.SerializeObject(invalid, Formatting.Indented, Serialization.jsonSettings))
+        File.WriteAllText(path, Json.serialize Codecs.semanticArtifact invalid)
         let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadSemanticArtifact (History.sha256 path) path |> ignore)
         Assert.Contains("invalid tooltip index", error.Message)
 
     [<Fact>]
     let ``unknown future semantic classifications degrade to plain text`` () =
         let json = "{\"Text\":\"future\",\"Kind\":\"FutureClassification\",\"Tooltip\":null}"
-        let token = JsonConvert.DeserializeObject<SemanticToken>(json, Serialization.jsonSettings)
+        let token = Json.deserialize Codecs.semanticToken json
         Assert.Equal(SemanticTokenKind.PlainText, token.Kind)
 
     [<Fact>]
@@ -78,7 +89,7 @@ module HistoryTests =
         let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
         let package : PackageModel = { Version = "1.2.3"; Entities = []; Scenarios = []; Packages = [] }
         let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
-        File.WriteAllText(path, JsonConvert.SerializeObject(artifact, Serialization.jsonSettings))
+        File.WriteAllText(path, Json.serialize Codecs.apiModelArtifact artifact)
 
         let loaded = History.loadArtifact "1.2.3" (History.sha256 path) path
         Assert.Equal("1.2.3", loaded.Version)
@@ -116,11 +127,11 @@ module HistoryTests =
                 Packages = []
             }
         let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
-        let json = JsonConvert.SerializeObject(artifact, Formatting.Indented, Serialization.jsonSettings)
+        let json = Json.serialize Codecs.apiModelArtifact artifact
 
         Assert.DoesNotContain("Html", json, StringComparison.OrdinalIgnoreCase)
         Assert.DoesNotContain("<p>", json, StringComparison.OrdinalIgnoreCase)
-        let loaded = JsonConvert.DeserializeObject<ApiModelArtifact>(json, Serialization.jsonSettings)
+        let loaded = Json.deserialize Codecs.apiModelArtifact json
         Assert.Equal("Use value", Documentation.plainText loaded.Package.Entities.Head.Summary)
 
     [<Fact>]
@@ -131,7 +142,7 @@ module HistoryTests =
             CurrentVersion = "2.0.0"
             Entries = [ { Version = "1.0.0"; ModelPath = "model.json"; ModelSha256 = "checksum"; SemanticPath = None; SemanticSha256 = None; DocsPath = "docs" } ]
         }
-        File.WriteAllText(path, JsonConvert.SerializeObject(manifest, Serialization.jsonSettings))
+        File.WriteAllText(path, Json.serialize Codecs.historyManifest manifest)
 
         let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadManifest path |> ignore)
         Assert.Contains("has no manifest entry", error.Message)
@@ -144,7 +155,7 @@ module HistoryTests =
             CurrentVersion = "1.0.0"
             Entries = [ { Version = "1.0.0"; ModelPath = "model.json"; ModelSha256 = "checksum"; SemanticPath = Some "semantic.json"; SemanticSha256 = None; DocsPath = "docs" } ]
         }
-        File.WriteAllText(path, JsonConvert.SerializeObject(manifest, Serialization.jsonSettings))
+        File.WriteAllText(path, Json.serialize Codecs.historyManifest manifest)
         let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadManifest path |> ignore)
         Assert.Contains("semanticPath and semanticSha256 together", error.Message)
 
@@ -326,6 +337,55 @@ module ReleaseCapsuleTests =
         Assert.Contains("links do not resolve", error.Message)
 
     [<Fact>]
+    let ``history verification checks documentation-set entry point identity`` () =
+        // Every documentation-set link target is also one of the pages `verify` already scanned
+        // (it's an .html file under root, like every local link target), so this specifically
+        // exercises gatherVerificationFacts' cached-page-text reuse for set-link targets, not a
+        // fresh read -- proving the cache key (a resolved target path) actually matches how that
+        // same page's path was enumerated.
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let setDirectory = Path.Combine(root, "sets", "foo")
+        Directory.CreateDirectory(setDirectory) |> ignore
+        let hash = String.replicate 64 "0"
+        let indexPath = Path.Combine(root, "history.json")
+        ReleaseCapsule.saveHistoryIndex indexPath {
+            SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion
+            CurrentVersion = "1.0.0"
+            Entries = [ { Version = "1.0.0"; CapsulePath = None; CapsuleUrl = Some "https://example.com/1.0.0.zip"; CapsuleSha256 = hash } ]
+        }
+        File.WriteAllText(
+            Path.Combine(root, "index.html"),
+            "<span>1.0.0</span><a href=\"sets/foo/index.html\" data-docs-set-link=\"foo\">Foo</a>")
+        File.WriteAllText(Path.Combine(setDirectory, "index.html"), "<span data-docs-set-id=\"foo\">Foo</span>")
+        Assert.Equal(2, ReleaseHistoryCommands.verify indexPath root)
+
+        File.WriteAllText(Path.Combine(setDirectory, "index.html"), "<span data-docs-set-id=\"wrong\">Foo</span>")
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ReleaseHistoryCommands.verify indexPath root |> ignore)
+        Assert.Contains("wrong set identity", error.Message)
+
+    [<Fact>]
+    let ``history verification reports an unreadable page instead of crashing`` () =
+        if not (OperatingSystem.IsWindows()) then
+            let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(root) |> ignore
+            let hash = String.replicate 64 "0"
+            let indexPath = Path.Combine(root, "history.json")
+            ReleaseCapsule.saveHistoryIndex indexPath {
+                SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion
+                CurrentVersion = "1.0.0"
+                Entries = [ { Version = "1.0.0"; CapsulePath = None; CapsuleUrl = Some "https://example.com/1.0.0.zip"; CapsuleSha256 = hash } ]
+            }
+            let unreadable = Path.Combine(root, "index.html")
+            File.WriteAllText(unreadable, "<span>1.0.0</span>")
+            File.SetUnixFileMode(unreadable, UnixFileMode.None)
+            try
+                let error = Assert.Throws<InvalidOperationException>(fun () -> ReleaseHistoryCommands.verify indexPath root |> ignore)
+                Assert.Contains("Could not verify generated pages", error.Message)
+                Assert.Contains(unreadable, error.Message)
+            finally
+                File.SetUnixFileMode(unreadable, UnixFileMode.UserRead ||| UnixFileMode.UserWrite)
+
+    [<Fact>]
     let ``history verification ignores pagefind assets`` () =
         let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore
@@ -359,7 +419,7 @@ module ReleaseCapsuleTests =
         let shaFile = capsule + ".sha256"
         File.WriteAllText(shaFile, hash.ToUpperInvariant() + "\n")
         let indexPath = Path.Combine(root, "history.json")
-        Program.historyAddAction indexPath "1.0.0" None (Some "https://example.com/pkg-1.0.0-livedocs.zip") None (Some shaFile) |> ignore
+        Actions.historyAddAction indexPath "1.0.0" None (Some "https://example.com/pkg-1.0.0-livedocs.zip") None (Some shaFile) |> ignore
         let index = ReleaseCapsule.loadHistoryIndex indexPath
         Assert.Equal(hash, index.Entries.Head.CapsuleSha256)
 
@@ -371,14 +431,14 @@ module ReleaseCapsuleTests =
             CurrentVersion = "1.0.0"
             Entries = [ { Version = "1.0.0"; CapsulePath = None; CapsuleUrl = Some "https://example.com/1.0.0.zip"; CapsuleSha256 = String.replicate 64 "0" } ]
         }
-        let error = Assert.Throws<InvalidOperationException>(fun () -> Program.historyCheckAction indexPath (Some "candidate.zip") None "light" 3 |> ignore)
+        let error = Assert.Throws<InvalidOperationException>(fun () -> Actions.historyCheckAction indexPath (Some "candidate.zip") None "light" 3 |> ignore)
         Assert.Contains("requires --version", error.Message)
 
     [<Fact>]
     let ``url pattern expansion fills version and tag`` () =
         Assert.Equal(
             "https://h/x/v1.4.0/pkg-1.4.0.zip",
-            Program.expandUrlPattern "https://h/x/{tag}/pkg-{version}.zip" "1.4.0")
+            Actions.expandUrlPattern "https://h/x/{tag}/pkg-{version}.zip" "1.4.0")
 
 module SymbolListerTests =
 
@@ -486,6 +546,22 @@ module SymbolListerTests =
 
         Assert.Equal<string list>([ "Example.CoreFlow"; "Example.Http" ], root.Entities |> List.map _.Id |> List.sort)
 
+    [<Fact>]
+    let ``extractFromProject returns an empty package when no built assembly can be found`` () =
+        // The Axial.FileSystem migration rewired dll/xml discovery (bin/artifacts search,
+        // existence and timestamp checks) into a single composed Flow. This pins down that the
+        // "nothing found" branch still yields the same empty-package fallback it did before the
+        // migration, rather than raising, for a project with no build output anywhere nearby.
+        let projectPath =
+            Path.Combine(Path.GetTempPath(), $"NoBuildOutput-{Guid.NewGuid():N}", "NoBuildOutput.fsproj")
+
+        let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
+
+        Assert.Equal("0.1.0", package.Version)
+        Assert.Empty(package.Entities)
+        Assert.Empty(package.Scenarios)
+        Assert.Empty(package.Packages)
+
 module ContentProviderTests =
 
     let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
@@ -559,6 +635,31 @@ module ContentProviderTests =
         Assert.Equal(Some "src/Browser/Browser.fsproj", parsed |> Option.bind (fun (metadata, _) -> metadata.Project))
         Assert.Equal(Some "net8.0", parsed |> Option.bind (fun (metadata, _) -> metadata.TargetFramework))
         Assert.Equal(Some "dotnet", parsed |> Option.bind (fun (metadata, _) -> metadata.Platform))
+
+    [<Fact>]
+    let ``applyApiDocs replaces an entity's summary from its docs/api markdown file`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let apiDir = Path.Combine(root, "api")
+        Directory.CreateDirectory(apiDir) |> ignore
+        File.WriteAllText(Path.Combine(apiDir, "Example.Math.md"), "Long-form summary for Math.")
+        let entity = { Id = "Example.Math"; Name = "Math"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] }
+        let package = { emptyPackage with Entities = [ entity ] }
+
+        let updated = ContentProvider.applyApiDocs root root package
+
+        let updatedEntity = updated.Entities |> List.exactlyOne
+        Assert.NotEmpty(updatedEntity.Summary)
+
+    [<Fact>]
+    let ``applyApiDocs is a no-op when the docs/api directory does not exist`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let entity = { Id = "Example.Math"; Name = "Math"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] }
+        let package = { emptyPackage with Entities = [ entity ] }
+
+        let updated = ContentProvider.applyApiDocs root root package
+
+        Assert.Equal<PackageModel>(package, updated)
 
     [<Fact>]
     let ``persisted semantic records render accessible encoded tooltips and reject stale source`` () =
@@ -909,6 +1010,40 @@ module DocTestRunnerTests =
         let resolved = ProjectResolver.resolveAssemblyPath projectPath
 
         Assert.Equal(Path.Combine(ownOutput, "Actual.Name.dll"), resolved)
+
+    [<Fact>]
+    let ``project resolver picks the most recently written assembly when multiple candidates match`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let projectDir = Path.Combine(root, "outer", "src", "Example.Project")
+        // Two ancestor levels each produce a matching `<ancestor>/artifacts/bin/Example.Project` candidate.
+        let olderOutput = Path.Combine(root, "outer", "artifacts", "bin", "Example.Project")
+        let newerOutput = Path.Combine(root, "artifacts", "bin", "Example.Project")
+        Directory.CreateDirectory(projectDir) |> ignore
+        Directory.CreateDirectory(olderOutput) |> ignore
+        Directory.CreateDirectory(newerOutput) |> ignore
+        let projectPath = Path.Combine(projectDir, "Example.Project.fsproj")
+        File.WriteAllText(projectPath, "<Project><PropertyGroup><AssemblyName>Actual.Name</AssemblyName></PropertyGroup></Project>")
+        for directory in [ olderOutput; newerOutput ] do
+            File.WriteAllText(Path.Combine(directory, "Actual.Name.dll"), "fixture")
+            File.WriteAllText(Path.Combine(directory, "Actual.Name.xml"), "<doc />")
+        File.SetLastWriteTimeUtc(Path.Combine(olderOutput, "Actual.Name.dll"), DateTime.UtcNow.AddDays(-1.0))
+        File.SetLastWriteTimeUtc(Path.Combine(newerOutput, "Actual.Name.dll"), DateTime.UtcNow)
+
+        let resolved = ProjectResolver.resolveAssemblyPath projectPath
+
+        Assert.Equal(Path.Combine(newerOutput, "Actual.Name.dll"), resolved)
+
+    [<Fact>]
+    let ``project resolver returns an empty assembly path when no artifacts directory exists`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let projectDir = Path.Combine(root, "src", "Example.Project")
+        Directory.CreateDirectory(projectDir) |> ignore
+        let projectPath = Path.Combine(projectDir, "Example.Project.fsproj")
+        File.WriteAllText(projectPath, "<Project><PropertyGroup><AssemblyName>Actual.Name</AssemblyName></PropertyGroup></Project>")
+
+        let resolved = ProjectResolver.resolveAssemblyPath projectPath
+
+        Assert.Equal("", resolved)
 
     [<Fact>]
     let ``ExampleTranscript parses FSI sessions`` () =
@@ -1922,13 +2057,9 @@ module DocumentationSetTests =
     [<Fact>]
     let ``documentation set JSON uses the public camel-case configuration shape`` () =
         let json =
-            """[{"id":"sdk","title":"SDK","source":"guides","path":"","projects":["Sdk.fsproj"],"default":true,"sidebar":false,"api":true,"fSharpPrelude":"open Sdk"}]"""
+            """{"id":"sdk","title":"SDK","source":"guides","path":"","projects":["Sdk.fsproj"],"default":true,"sidebar":false,"api":true,"fSharpPrelude":"open Sdk"}"""
 
-        let serializer = JsonSerializer.Create(Serialization.jsonSettings)
-
-        let parsed =
-            Newtonsoft.Json.Linq.JArray.Parse(json).ToObject<DocsSetConfig list>(serializer)
-            |> List.head
+        let parsed = Json.deserialize Workspace.docsSetConfigCodec json
 
         Assert.Equal("sdk", parsed.Id)
         Assert.Equal(Some "SDK", parsed.Title)
@@ -2307,13 +2438,8 @@ module DocumentationSetTests =
               Prelude = "open System"
               Pages = [] }
 
-        let bytes value =
-            Text.Encoding.UTF8.GetBytes(
-                JsonConvert.SerializeObject(value, Formatting.Indented, Serialization.jsonSettings)
-            )
-
-        let apiBytes = bytes api
-        let semanticBytes = bytes semantic
+        let apiBytes = Json.serialize Codecs.apiModelArtifact api |> Text.Encoding.UTF8.GetBytes
+        let semanticBytes = Json.serialize Codecs.semanticArtifact semantic |> Text.Encoding.UTF8.GetBytes
 
         let releaseComponent schema path (value: byte array) : ReleaseComponent =
             { SchemaVersion = schema
@@ -2330,7 +2456,7 @@ module DocumentationSetTests =
               Semantic = releaseComponent semantic.SchemaVersion "semantic.json" semanticBytes
               Content = releaseComponent contentSchema "content.json" contentBytes }
 
-        let manifestBytes = bytes manifest
+        let manifestBytes = Json.serialize Codecs.releaseCapsuleManifest manifest |> Text.Encoding.UTF8.GetBytes
 
         use archive =
             System.IO.Compression.ZipFile.Open(capsule, System.IO.Compression.ZipArchiveMode.Create)
@@ -2431,8 +2557,8 @@ module BlogTests =
 
     [<Fact>]
     let ``giscus comments provider is read from site configuration json`` () =
-        let json = """{ "siteName": "Blog", "commentsProvider": { "kind": "giscus", "repo": "owner/repo", "repoId": "repo-id", "category": "Announcements", "categoryId": "category-id", "theme": "dark" } }"""
-        let config = JsonConvert.DeserializeObject<SiteConfig>(json, Serialization.jsonSettings)
+        let json = """{ "siteName": "Blog", "projects": ["a.fsproj"], "fSharpPrelude": "open System", "navigation": [ { "label": "Home", "href": "index.html" } ], "commentsProvider": { "kind": "giscus", "repo": "owner/repo", "repoId": "repo-id", "category": "Announcements", "categoryId": "category-id", "theme": "dark" } }"""
+        let config = Reified.Json.deserialize Workspace.siteConfigCodec json
         let expected =
             Giscus
                 { Repo = "owner/repo"
@@ -2440,11 +2566,14 @@ module BlogTests =
                   Category = "Announcements"
                   CategoryId = "category-id"
                   Theme = Some "dark" }
+        Assert.Equal(Some "Blog", config.SiteName)
+        Assert.Equal(Some "open System", config.FSharpPrelude)
+        Assert.Equal(Some [ { Label = "Home"; Href = "index.html" } ], config.Navigation)
         Assert.Equal(Some expected, config.CommentsProvider)
-        let custom = JsonConvert.DeserializeObject<SiteConfig>("""{ "commentsProvider": { "kind": "custom", "html": "<div id=\"x\"></div>" } }""", Serialization.jsonSettings)
+        let custom = Reified.Json.deserialize Workspace.siteConfigCodec """{ "commentsProvider": { "kind": "custom", "html": "<div id=\"x\"></div>" } }"""
         Assert.Equal(Some(Custom "<div id=\"x\"></div>"), custom.CommentsProvider)
-        Assert.Throws<InvalidOperationException>(fun () ->
-            JsonConvert.DeserializeObject<SiteConfig>("""{ "commentsProvider": { "kind": "giscus" } }""", Serialization.jsonSettings) |> ignore)
+        Assert.ThrowsAny<exn>(fun () ->
+            Reified.Json.deserialize Workspace.siteConfigCodec """{ "commentsProvider": { "kind": "giscus" } }""" |> ignore)
         |> ignore
 
     let private renderContext pages config : SiteBuilder.SiteRenderContext =
@@ -2594,3 +2723,39 @@ module BlogTests =
         let index = Blog.buildPostIndex false [ { Metadata = metadata; ContentHtml = ""; Markdown = "Body"; FilePath = "post.md"; OutputPath = "blog/post/index.html"; SectionOrder = 0 } ]
         Assert.Single(index.ByDateDesc) |> ignore
         Assert.Empty(index.ByTag)
+
+module WorkspaceTests =
+
+    let private tempFile extension =
+        Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + extension)
+
+    [<Fact>]
+    let ``writeIfChanged creates a missing file and its directory`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let path = Path.Combine(root, "nested", "file.txt")
+
+        Workspace.writeIfChanged path "hello"
+
+        Assert.True(File.Exists path)
+        Assert.Equal("hello\n", File.ReadAllText path)
+
+    [<Fact>]
+    let ``writeIfChanged does not rewrite a file whose normalized content already matches`` () =
+        let path = tempFile ".txt"
+        File.WriteAllText(path, "hello\n")
+        let before = File.GetLastWriteTimeUtc path
+        System.Threading.Thread.Sleep 20
+
+        Workspace.writeIfChanged path "hello"
+
+        Assert.Equal(before, File.GetLastWriteTimeUtc path)
+        Assert.Equal("hello\n", File.ReadAllText path)
+
+    [<Fact>]
+    let ``writeIfChanged rewrites a file whose normalized content differs`` () =
+        let path = tempFile ".txt"
+        File.WriteAllText(path, "old\n")
+
+        Workspace.writeIfChanged path "new"
+
+        Assert.Equal("new\n", File.ReadAllText path)

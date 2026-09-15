@@ -4,215 +4,32 @@ open System
 open System.IO
 open System.Text.RegularExpressions
 open Giraffe.ViewEngine
+open Axial
+open Axial.FileSystem
+open Reified
 open FsLiveDocs.Core
+open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
+open FsLiveDocs.Renderer.Rendering
 
-/// <summary>The high-level site assembly engine.</summary>
+/// <summary>The high-level site assembly engine: decides which pages exist and where they go.
+/// Page-by-page HTML templating is a deep module of its own -- see
+/// <see cref="T:FsLiveDocs.Renderer.Rendering.PageRenderer"/>.</summary>
 module SiteBuilder =
 
-    let private parallelRender (items: 'a array) (render: 'a -> unit) =
-        let options = Threading.Tasks.ParallelOptions(MaxDegreeOfParallelism = min 4 Environment.ProcessorCount)
-        Threading.Tasks.Parallel.ForEach(items, options, Action<'a>(render)) |> ignore
-
-    let private packageIntroduction packageName entities =
-        let rec findExact = function
-            | [] -> None
-            | entity :: rest ->
-                if entity.Id.Equals(packageName, StringComparison.OrdinalIgnoreCase)
-                   && not (Documentation.isEmpty entity.Summary) then
-                    Some entity.Summary
-                else
-                    findExact entity.Entities |> Option.orElseWith (fun () -> findExact rest)
-
-        let rec findFirst = function
-            | [] -> None
-            | entity :: rest ->
-                if not (Documentation.isEmpty entity.Summary) then Some entity.Summary
-                else findFirst entity.Entities |> Option.orElseWith (fun () -> findFirst rest)
-
-        findExact entities |> Option.orElseWith (fun () -> findFirst entities)
-
-    let private shiftApiHtmlIntoPackageDirectory html =
-        Regex.Replace(
-            html,
-            "(?<attribute>href|src)=\"(?<url>[^\"]+)\"",
-            MatchEvaluator(fun matchedValue ->
-                let url = matchedValue.Groups["url"].Value
-                if url.StartsWith("#", StringComparison.Ordinal)
-                   || url.StartsWith("/", StringComparison.Ordinal)
-                   || Uri.IsWellFormedUriString(url, UriKind.Absolute) then
-                    matchedValue.Value
-                else
-                    let attributeName = matchedValue.Groups["attribute"].Value
-                    $"{attributeName}=\"../{url}\""),
-            RegexOptions.IgnoreCase)
-
-    let private validateGeneratedApiLinks (apiDir: string) =
-        let hrefPattern = Regex("href=\"(?<href>[^\"]+)\"", RegexOptions.IgnoreCase)
-        let apiRoot = Path.GetFullPath(apiDir) + string Path.DirectorySeparatorChar
-
-        for pagePath in Directory.GetFiles(apiDir, "*.html", SearchOption.TopDirectoryOnly) do
-            let html = File.ReadAllText(pagePath)
-            for link in hrefPattern.Matches(html) do
-                let href = link.Groups.["href"].Value
-                if not (href.StartsWith("#", StringComparison.Ordinal))
-                   && not (href.StartsWith("../", StringComparison.Ordinal))
-                   && not (href.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
-                   && not (href.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                   && not (href.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) then
-                    let targetName = href.Split([| '#'; '?' |], 2).[0] |> Uri.UnescapeDataString
-                    let targetPath = Path.GetFullPath(Path.Combine(apiDir, targetName))
-                    if not (targetPath.StartsWith(apiRoot, StringComparison.Ordinal)) || not (File.Exists targetPath) then
-                        invalidOp $"Broken generated API link in {Path.GetFileName(pagePath)}: {href}"
+    let private packageCodec = Json.compile ApiSchema.packageModel
 
     /// <summary>Shared inputs for rendering a documentation page.</summary>
-    type SiteRenderContext = {
-        AllPages: ContentPage list
-        Package: PackageModel
-        Config: SiteConfig
-        Versions: string list
-        Theme: string
-        RootPath: string
-        SiteRootPath: string
-    }
-
-    /// <summary>Shared inputs for building the generated site.</summary>
-    type SiteBuildContext = {
-        Pages: ContentPage list
-        Package: PackageModel
-        Config: SiteConfig
-        Versions: string list
-        Theme: string
-        RootPath: string
-        SiteRootPath: string
-        OutputDir: string
-    }
-
-    /// <summary>One resolved documentation set ready for renderer-only site assembly.</summary>
-    type DocsSetSite =
-        {
-            Set: ReleaseDocsSet
-            /// Global package model, optionally enriched by this set's API Markdown.
-            Package: PackageModel
-            Pages: ContentPage list
-        }
-
-    /// <summary>One captured version and its renderer-neutral set model.</summary>
-    type DocsSetVersionSite =
-        { Version: string
-          Package: PackageModel
-          Sets: DocsSetSite list
-          StaticRoot: string option
-          UsesDocumentationSets: bool }
+    type SiteRenderContext = PageRenderer.SiteRenderContext
 
     /// <summary>Renders a single Markdown guide page.</summary>
-    /// <param name="page">The processed content page to render.</param>
-    /// <returns>The rendered HTML document as a string.</returns>
-    let private renderPageCore chrome (page: ContentPage) (context: SiteRenderContext) =
-        let blogShortcodes =
-            let posts = Blog.buildPostIndex true context.AllPages
-            let attribute name (args: string) =
-                let matched = Regex.Match(args, name + "=\"(?<value>[^\"]*)\"")
-                if matched.Success then Some matched.Groups.["value"].Value else None
-            // Markdig renders a shortcode written as its own paragraph as escaped text. Matching only that
-            // whole-paragraph form leaves shortcode syntax shown inside code spans and blocks untouched.
-            let listing = Regex.Replace(page.ContentHtml, @"<p>{{&lt;\s*posts\b(?<args>.*?)&gt;}}</p>", fun matched ->
-                let args = Net.WebUtility.HtmlDecode matched.Groups.["args"].Value
-                let options = page.Metadata.BlogList
-                let configured field = options |> Option.bind field
-                let tag = attribute "tag" args |> Option.orElseWith (fun () -> configured _.Tag) |> Option.map _.Trim().ToLowerInvariant()
-                let category = attribute "category" args |> Option.orElseWith (fun () -> configured _.Category) |> Option.map _.Trim().ToLowerInvariant()
-                let limit =
-                    attribute "limit" args
-                    |> Option.bind (fun value -> match Int32.TryParse value with | true, number when number >= 0 -> Some number | _ -> None)
-                    |> Option.orElseWith (fun () -> configured _.Limit)
-                let layout = attribute "layout" args |> Option.orElseWith (fun () -> configured _.Layout) |> Option.defaultValue "list" |> _.Trim().ToLowerInvariant()
-                let show =
-                    attribute "show" args
-                    |> Option.map (fun value -> value.Split(',') |> Array.map _.Trim().ToLowerInvariant() |> Set.ofArray)
-                    |> Option.orElseWith (fun () -> configured (fun value -> if List.isEmpty value.Show then None else Some(value.Show |> List.map (fun item -> item.Trim().ToLowerInvariant()) |> Set.ofList)))
-                    |> Option.defaultValue (match layout with | "preview" -> set [ "date"; "readingtime"; "summary"; "tags" ] | "compact" -> set [ "date" ] | _ -> Set.empty)
-                if not (set [ "list"; "compact"; "preview" ] |> Set.contains layout) then invalidOp $"Unsupported blogList layout '{layout}' on {page.FilePath}."
-                let selected =
-                    posts.ByDateDesc
-                    |> List.filter (fun post -> tag |> Option.forall (fun value -> post.Metadata.Tags |> List.exists (fun item -> item.Trim().ToLowerInvariant() = value)))
-                    |> List.filter (fun post -> category |> Option.forall (fun value -> post.Metadata.Category |> Option.exists (fun item -> item.Trim().ToLowerInvariant() = value)))
-                    |> fun values -> limit |> Option.map (fun number -> values |> List.truncate number) |> Option.defaultValue values
-                let item post =
-                    let link = "<a href=\"" + context.RootPath + Net.WebUtility.HtmlEncode post.OutputPath + "\">" + Net.WebUtility.HtmlEncode post.Metadata.Title + "</a>"
-                    let date = if show.Contains "date" then "<span class=\"livedocs-post-date\">" + post.Metadata.Date.Value.ToString("yyyy-MM-dd") + "</span>" else ""
-                    let reading = if show.Contains "readingtime" then "<span class=\"livedocs-post-reading-time\">" + string (Blog.estimatedReadingMinutes post) + " min read</span>" else ""
-                    let summary = if show.Contains "summary" then "<p>" + Net.WebUtility.HtmlEncode(Blog.excerpt post) + "</p>" else ""
-                    let tags = if show.Contains "tags" then "<span class=\"livedocs-post-tags\">" + (post.Metadata.Tags |> List.map Net.WebUtility.HtmlEncode |> String.concat ", ") + "</span>" else ""
-                    if layout = "list" then "<li>" + link + "</li>" else "<article class=\"livedocs-post-" + layout + "\"><h3>" + link + "</h3>" + date + reading + summary + tags + "</article>"
-                if layout = "list" then "<ul class=\"livedocs-post-list\">" + (selected |> List.map item |> String.concat "") + "</ul>"
-                else "<div class=\"livedocs-post-list livedocs-post-list-" + layout + "\">" + (selected |> List.map item |> String.concat "") + "</div>")
-            let series = Blog.buildSeriesIndex true context.AllPages
-            Regex.Replace(listing, @"<p>{{&lt;\s*series-nav\s*&gt;}}</p>", fun _ ->
-                match page.Metadata.Series |> Option.map _.Trim().ToLowerInvariant() |> Option.bind (fun name -> series.BySeriesName |> Map.tryFind name) with
-                | None -> ""
-                | Some entries -> "<ol class=\"livedocs-series-nav\">" + (entries |> List.map (fun entry -> "<li><a href=\"" + context.RootPath + Net.WebUtility.HtmlEncode entry.Post.OutputPath + "\">Part " + string entry.PartNumber + ": " + Net.WebUtility.HtmlEncode entry.Post.Metadata.Title + "</a></li>") |> String.concat "") + "</ol>")
-        let blogChrome =
-            if page.Metadata.Date.IsNone then ""
-            else
-                let posts = Blog.buildPostIndex true context.AllPages
-                let series = Blog.buildSeriesIndex true context.AllPages
-                let navigation = Blog.navigation page posts series
-                let link label target = target |> Option.map (fun item -> $"<a href=\"{context.RootPath}{Net.WebUtility.HtmlEncode item.OutputPath}\">{label}: {Net.WebUtility.HtmlEncode item.Metadata.Title}</a>") |> Option.defaultValue ""
-                let seriesPart = navigation.SeriesPart |> Option.map (fun (number, count) -> $"<p>Part {number} of {count}</p>") |> Option.defaultValue ""
-                let date = page.Metadata.Date.Value.ToString("yyyy-MM-dd")
-                let newer = link "Newer" navigation.Prev
-                let older = link "Older" navigation.Next
-                "<aside class=\"livedocs-blog-meta\"><p>" + date + " · " + string (Blog.estimatedReadingMinutes page) + " min read</p>" + seriesPart + "<nav>" + newer + " " + older + "</nav></aside>"
-        let comments =
-            if not page.Metadata.Comments then ""
-            else
-                let encode = Net.WebUtility.HtmlEncode
-                // One provider-agnostic toggle and one embed region. Only the region's contents differ by
-                // provider; the count is unknown at build time, so it stays a placeholder until provider
-                // script reports it in the browser.
-                let section (embed: string) =
-                    "<section id=\"comments\" class=\"livedocs-comments not-prose mt-10\">"
-                    + "<h2 class=\"text-xl font-semibold\"><a class=\"livedocs-comments-toggle link link-hover\" href=\"#comments\" aria-controls=\"livedocs-comments-embed\">Comments <span class=\"livedocs-comments-count\" data-state=\"loading\" aria-live=\"polite\">(…)</span></a></h2>"
-                    + "<div id=\"livedocs-comments-embed\" class=\"livedocs-comments-embed mt-4\">" + embed + "</div></section>"
-                match context.Config.CommentsProvider with
-                | Some (Giscus settings) ->
-                    let theme = settings.Theme |> Option.defaultValue context.Theme
-                    section (
-                        $"<script src=\"https://giscus.app/client.js\" data-repo=\"{encode settings.Repo}\" data-repo-id=\"{encode settings.RepoId}\" data-category=\"{encode settings.Category}\" data-category-id=\"{encode settings.CategoryId}\" data-mapping=\"pathname\" data-emit-metadata=\"1\" data-theme=\"{encode theme}\" crossorigin=\"anonymous\" async></script>"
-                        + "<script>(function(){var count=document.querySelector('#comments .livedocs-comments-count');window.addEventListener('message',function(event){if(event.origin!=='https://giscus.app'||!event.data||!event.data.giscus)return;var discussion=event.data.giscus.discussion;if(!count)return;var total=discussion?(discussion.totalCommentCount||0)+(discussion.totalReplyCount||0):0;count.textContent='('+total+')';count.setAttribute('data-state','ready');});})();</script>")
-                | Some (Custom html) -> section html
-                | _ -> ""
-        let content = [ div [] [ rawText (blogChrome + blogShortcodes + comments) ] ]
+    let renderPage page context = PageRenderer.renderPage page context
 
-        match chrome with
-        | Some value ->
-            View.layoutWithChrome
-                value
-                page.Metadata.Title
-                context.AllPages
-                context.Package
-                context.Config
-                context.Versions
-                context.Theme
-                context.RootPath
-                context.SiteRootPath
-                page.OutputPath
-                content
-        | None ->
-            View.layout
-                page.Metadata.Title
-                context.AllPages
-                context.Package
-                context.Config
-                context.Versions
-                context.Theme
-                context.RootPath
-                context.SiteRootPath
-                page.OutputPath
-                content
-        |> fun node -> RenderView.AsString.htmlNode node
+    /// <summary>Renders a single API entity page.</summary>
+    let renderEntityPage entity context = PageRenderer.renderEntityPage entity context
 
-    let renderPage page context = renderPageCore None page context
+    /// <summary>Generates a text-based summary of the API for LLM consumption.</summary>
+    let generateLlmsTxt package = PageRenderer.generateLlmsTxt package
 
     /// <summary>One renderer-generated blog listing page before it is placed in the site layout.</summary>
     type private BlogListingPage = { Path: string; Title: string; Body: string }
@@ -325,437 +142,167 @@ module SiteBuilder =
                 write listing.Path (render page)
             write "blog/feed.xml" (blogFeed pages)
 
-    /// <summary>Renders a single API entity page (Module or Type).</summary>
-    /// <param name="e">The entity to render.</param>
-    /// <returns>The rendered HTML document as a string.</returns>
-    let private renderEntityPageCore chrome (e: EntityModel) (context: SiteRenderContext) =
-        let entityTargets =
-            match chrome with
-            | Some(value: View.SiteChrome) ->
-                value.ApiRoutes
-                |> Map.map (fun id route -> context.RootPath + value.VersionPath + route + "api/" + id + ".html")
-            | None -> Map.empty
+    /// <summary>Shared inputs for building the generated site.</summary>
+    type SiteBuildContext = {
+        Pages: ContentPage list
+        Package: PackageModel
+        Config: SiteConfig
+        Versions: string list
+        Theme: string
+        RootPath: string
+        SiteRootPath: string
+        OutputDir: string
+    }
 
-        let renderDocumentation nodes =
-            if entityTargets.IsEmpty then
-                Presentation.renderDocumentationHtml context.Package nodes
-            else
-                Presentation.renderDocumentationHtmlWithTargets context.Package entityTargets nodes
-        // Other projects' own root entities (e.g. "Axial.Layers") nest under a shared parent
-        // namespace ("Axial") in the merged tree. Each such project already gets its own sidebar
-        // group and API index card, so listing it again in the parent's Contents is noise.
-        let otherPackageRootIds =
-            (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
-            |> List.map (fun package -> package.Name)
-            |> Set.ofList
+    /// <summary>One resolved documentation set ready for renderer-only site assembly.</summary>
+    type DocsSetSite =
+        {
+            Set: ReleaseDocsSet
+            /// Global package model, optionally enriched by this set's API Markdown.
+            Package: PackageModel
+            Pages: ContentPage list
+        }
 
-        let renderPackageBadges (ent: EntityModel) =
-            let packageNames =
-                // Only a package that directly owns this entity (not merely an ancestor namespace
-                // shared by many packages) is worth surfacing here - otherwise every package that
-                // nests anything below a shared namespace root would show up on that root's page.
-                (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
-                |> List.filter (fun package -> package.EntityIds |> List.contains ent.Id)
-                |> List.map (fun package -> package.Name)
-                // A package name that matches the entity's own id is already implied by the page's
-                // breadcrumb, so surfacing it as a badge is noise.
-                |> List.filter (fun name -> name <> ent.Id)
-                |> List.distinct
-                |> List.sort
-            if packageNames.IsEmpty then emptyText
-            else
-                div [ _class "not-prose flex flex-wrap items-center gap-2 -mt-4 mb-8" ] [
-                    span [ _class "text-[10px] font-black uppercase tracking-widest opacity-40" ] [ str "Package" ]
-                    yield! packageNames |> List.map (fun name -> span [ _class "badge badge-outline font-mono" ] [ str name ])
-                ]
+    /// <summary>One captured version and its renderer-neutral set model.</summary>
+    type DocsSetVersionSite =
+        { Version: string
+          Package: PackageModel
+          Sets: DocsSetSite list
+          StaticRoot: string option
+          UsesDocumentationSets: bool }
 
-        let renderSummaryBlock summary =
-            if Documentation.isEmpty summary then
-                emptyText
-            else
-                let rendered = renderDocumentation summary
+    let private parallelRender (items: 'a array) (render: 'a -> unit) =
+        let options = Threading.Tasks.ParallelOptions(MaxDegreeOfParallelism = min 4 Environment.ProcessorCount)
+        Threading.Tasks.Parallel.ForEach(items, options, Action<'a>(render)) |> ignore
 
-                div
-                    [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ]
-                    [ rawText rendered ]
+    /// Computes `f` over every item concurrently and returns the results in input order. Pure
+    /// rendering work (building an HTML string) stays parallel here; only the file-system writes
+    /// that follow are gathered into a Flow.
+    let private parallelMap (items: 'a array) (f: 'a -> 'b) : 'b array =
+        let results: 'b array = Array.zeroCreate items.Length
+        let options = Threading.Tasks.ParallelOptions(MaxDegreeOfParallelism = min 4 Environment.ProcessorCount)
+        Threading.Tasks.Parallel.For(0, items.Length, options, (fun i -> results.[i] <- f items.[i])) |> ignore
+        results
 
-        let renderFieldTable (title: string) (items: MemberModel list) =
-            if items.IsEmpty then emptyText
-            else
-                div [ _class "mb-16 not-prose" ] [
-                    View.h2WithAnchor (e.Id + "-fields") title "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                    div [ _class "overflow-x-auto rounded-2xl border border-base-300 shadow-sm" ] [
-                        table [ _class "table table-zebra w-full" ] [
-                            thead [ _class "bg-base-200/50" ] [
-                                tr [] [
-                                    th [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Name" ]
-                                    th [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Type" ]
-                                    th [ attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ] [ str "Description" ]
-                                ]
-                            ]
-                            tbody [] (
-                                items
-                                |> List.map (fun m ->
-                                    tr [] [
-                                        td [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                            a [ _href ("#" + m.Id); _class "font-bold text-primary hover:underline" ] [ str m.Name ]
-                                        ]
-                                        td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                            span [ _class "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText m.Signature ]
-                                        ]
-                                        td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
-                                            str (Presentation.synopsis m.Summary)
-                                        ]
-                                    ]
-                                )
-                            )
-                        ]
-                    ]
-                ]
+    /// Writes every (path, content) pair as one composed Flow, run exactly once -- never one
+    /// `Run.*` call per output file, however many pages or entities are being rendered.
+    let private writeAll (writes: (string * string) list) =
+        let work =
+            writes
+            |> Flow.traverse (fun (path, content) ->
+                flow {
+                    match Path.GetDirectoryName(path: string) with
+                    | null
+                    | "" -> ()
+                    | directory -> do! FileSystem.createDirectory directory
+                    do! FileSystem.writeAllText path content
+                })
+            |> Flow.map ignore
+        Run.orRaise FileSystemError.describe "Could not write generated site output" work
 
-        let renderGenericEntity (ent: EntityModel) =
-            div
-                [ _class ""; _id ent.Id ]
-                [ h1
-                      [ _class
-                            "text-4xl font-black mb-8 pb-4 border-b-8 border-primary/10 tracking-tight group scroll-mt-24 flex items-center gap-3"
-                        attr "data-toc-title" ent.Name ]
-                      [ span [ _class "leading-tight" ] [ str ent.Name ]
-                        span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str (string ent.Kind) ]
-                        a
-                            [ _href ("#" + ent.Id)
-                              _class
-                                  "anchor-link opacity-0 group-hover:opacity-60 transition-opacity no-underline inline-flex items-center justify-center w-6 h-6 text-base-content/60 hover:text-primary"
-                              attr "aria-label" $"Copy link to {ent.Name}"
-                              attr "title" $"Copy link to {ent.Name}" ]
-                            [ i [ _class "bi bi-link-45deg text-base" ] [] ] ]
+    /// Ensures a directory exists, even when nothing is subsequently written into it (an empty API
+    /// surface still needs `api/` to exist for link validation to have somewhere to look).
+    let private ensureDirectory (path: string) =
+        Run.orRaise FileSystemError.describe $"Could not create directory {path}" (FileSystem.createDirectory path)
 
-                  renderPackageBadges ent
+    /// Deletes an existing output directory and recreates it empty, as one composed Flow.
+    let private resetOutputDirectory (outputDir: string) =
+        let work =
+            flow {
+                let! exists = FileSystem.directoryExists outputDir
+                if exists then do! FileSystem.deleteDirectory outputDir true
+                do! FileSystem.createDirectory outputDir
+            }
+        Run.orRaise FileSystemError.describe $"Could not reset output directory {outputDir}" work
 
-                  renderSummaryBlock ent.Summary
+    let private packageIntroduction packageName entities =
+        let rec findExact = function
+            | [] -> None
+            | entity :: rest ->
+                if entity.Id.Equals(packageName, StringComparison.OrdinalIgnoreCase)
+                   && not (Documentation.isEmpty entity.Summary) then
+                    Some entity.Summary
+                else
+                    findExact entity.Entities |> Option.orElseWith (fun () -> findExact rest)
 
-                  let ownContents =
-                      ent.Entities |> List.filter (fun ne -> not (otherPackageRootIds.Contains ne.Id))
+        let rec findFirst = function
+            | [] -> None
+            | entity :: rest ->
+                if not (Documentation.isEmpty entity.Summary) then Some entity.Summary
+                else findFirst entity.Entities |> Option.orElseWith (fun () -> findFirst rest)
 
-                  let contentsCard (ne: EntityModel) =
-                      a
-                          [ _href (ne.Id + ".html")
-                            _class
-                                "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ]
-                          [ span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str ne.Name ]
-                            span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string ne.Kind) ] ]
+        findExact entities |> Option.orElseWith (fun () -> findFirst entities)
 
-                  if not ownContents.IsEmpty then
-                      // Two independent projects can both add members directly to the same shared
-                      // namespace (e.g. "Axial" and "Axial.Telemetry" both declare things in namespace
-                      // "Axial.Telemetry"). Split Contents by the owning project and give each group an
-                      // anchor, so a sidebar link scoped to one project can land on that project's own
-                      // members instead of the page just looking like it belongs to a different one.
-                      let packagesFor (childId: string) =
-                          (if isNull (box context.Package.Packages) then
-                               []
-                           else
-                               context.Package.Packages)
-                          |> List.filter (fun package -> package.EntityIds |> List.contains childId)
-                          |> List.map (fun package -> package.Name)
+    let private shiftApiHtmlIntoPackageDirectory html =
+        Regex.Replace(
+            html,
+            "(?<attribute>href|src)=\"(?<url>[^\"]+)\"",
+            MatchEvaluator(fun matchedValue ->
+                let url = matchedValue.Groups["url"].Value
+                if url.StartsWith("#", StringComparison.Ordinal)
+                   || url.StartsWith("/", StringComparison.Ordinal)
+                   || Uri.IsWellFormedUriString(url, UriKind.Absolute) then
+                    matchedValue.Value
+                else
+                    let attributeName = matchedValue.Groups["attribute"].Value
+                    $"{attributeName}=\"../{url}\""),
+            RegexOptions.IgnoreCase)
 
-                      let groupedByPackage =
-                          ownContents
-                          |> List.groupBy (fun ne -> packagesFor ne.Id |> List.tryHead |> Option.defaultValue "")
-                          |> List.sortBy fst
+    let private validateGeneratedApiLinks (apiDir: string) =
+        let hrefPattern = Regex("href=\"(?<href>[^\"]+)\"", RegexOptions.IgnoreCase)
+        let apiRoot = Path.GetFullPath(apiDir) + string Path.DirectorySeparatorChar
 
-                      div
-                          [ _class "mb-16" ]
-                          [ View.h2WithAnchor
-                                (ent.Id + "-contents")
-                                "Contents"
-                                "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                            if groupedByPackage.Length > 1 then
-                                div
-                                    [ _class "flex flex-col gap-8" ]
-                                    (groupedByPackage
-                                     |> List.map (fun (packageName, items) ->
-                                         div
-                                             [ _class "flex flex-col gap-4" ]
-                                             [ if packageName <> "" then
-                                                   h3
-                                                       [ _id ("package-" + packageName)
-                                                         _class
-                                                             "scroll-mt-24 text-[10px] font-black uppercase tracking-widest opacity-40" ]
-                                                       [ str packageName ]
-                                               div
-                                                   [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ]
-                                                   (items |> List.map contentsCard) ]))
-                            else
-                                div
-                                    [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ]
-                                    (ownContents |> List.map contentsCard) ]
+        // Every generated page's HTML is read up front, and every link target's existence is
+        // checked up front, as one composed Flow -- rather than one read/exists call per page or
+        // per link, of which a large API surface can have many.
+        let work =
+            flow {
+                let! files = FileSystem.getFiles apiDir "*.html" SearchOption.TopDirectoryOnly
 
-                  if ent.Kind <> EntityKind.Module && not ent.Members.IsEmpty then
-                      div
-                          [ _class "mb-16 not-prose" ]
-                          [ View.h2WithAnchor
-                                (ent.Id + "-spec")
-                                "Specification"
-                                "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                            div
-                                [ _class "rounded-3xl border border-base-300 bg-base-100 shadow-sm overflow-hidden" ]
-                                [ div
-                                      [ _class "grid grid-cols-1 md:grid-cols-3 gap-0 border-b border-base-300" ]
-                                      [ div
-                                            [ _class "p-5 md:p-6" ]
-                                            [ div
-                                                  [ _class
-                                                        "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ]
-                                                  [ str "Kind" ]
-                                              div [ _class "text-lg font-black" ] [ str (string ent.Kind) ] ]
-                                        div
-                                            [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ]
-                                            [ div
-                                                  [ _class
-                                                        "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ]
-                                                  [ str "Members" ]
-                                              div [ _class "text-lg font-black" ] [ str (string ent.Members.Length) ] ]
-                                        div
-                                            [ _class "p-5 md:p-6 border-t md:border-t-0 md:border-l border-base-300" ]
-                                            [ div
-                                                  [ _class
-                                                        "text-[10px] uppercase tracking-[0.3em] opacity-40 mb-2 font-black" ]
-                                                  [ str "Examples" ]
-                                              div
-                                                  [ _class "text-lg font-black" ]
-                                                  [ str (string (Presentation.entityExamples ent).Length) ] ] ]
-                                  div
-                                      [ _class "p-5 md:p-6 space-y-3" ]
-                                      (ent.Members
-                                       |> List.take (min 5 ent.Members.Length)
-                                       |> List.map (fun m ->
-                                           div
-                                               [ _class
-                                                     "flex flex-col gap-2 rounded-2xl border border-base-300 bg-base-200/20 p-4" ]
-                                               [ div
-                                                     [ _class "flex items-center justify-between gap-4" ]
-                                                     [ span [ _class "font-bold text-primary" ] [ str m.Name ]
-                                                       span
-                                                           [ _class
-                                                                 "text-[10px] uppercase tracking-[0.3em] opacity-40 font-black" ]
-                                                           [ str "Signature" ] ]
-                                                 div
-                                                     [ _class "font-mono text-sm text-accent overflow-x-auto" ]
-                                                     [ rawText (Presentation.highlightSignatureHtml m.Signature) ] ])) ] ]
+                return!
+                    files
+                    |> Array.toList
+                    |> Flow.traverse (fun path -> FileSystem.readAllText path |> Flow.map (fun html -> path, html))
+            }
 
-                  if not ent.Members.IsEmpty then
-                      div
-                          [ _class "mb-16 not-prose" ]
-                          [ View.h2WithAnchor
-                                (ent.Id + "-summary")
-                                "Summary"
-                                "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                            div
-                                [ _class "overflow-x-auto rounded-2xl border border-base-300 shadow-sm" ]
-                                [ table
-                                      [ _class "table table-zebra w-full" ]
-                                      [ thead
-                                            [ _class "bg-base-200/50" ]
-                                            [ tr
-                                                  []
-                                                  [ th
-                                                        [ attr
-                                                              "style"
-                                                              "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ]
-                                                        [ str "Name" ]
-                                                    th
-                                                        [ attr
-                                                              "style"
-                                                              "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ]
-                                                        [ str "Signature" ]
-                                                    th
-                                                        [ attr
-                                                              "style"
-                                                              "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ]
-                                                        [ str "Synopsis" ] ] ]
-                                        tbody
-                                            []
-                                            (ent.Members
-                                             |> List.map (fun m ->
-                                                 tr
-                                                     []
-                                                     [ td
-                                                           [ attr
-                                                                 "style"
-                                                                 "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
-                                                           [ a
-                                                                 [ _href ("#" + m.Id)
-                                                                   _class "font-bold text-primary hover:underline" ]
-                                                                 [ str m.Name ] ]
-                                                       td
-                                                           [ attr
-                                                                 "style"
-                                                                 "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
-                                                           [ span
-                                                                 [ _class
-                                                                       "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ]
-                                                                 [ rawText m.Signature ] ]
-                                                       td
-                                                           [ _class "text-sm opacity-80 leading-relaxed"
-                                                             attr
-                                                                 "style"
-                                                                 "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
-                                                           [ str (Presentation.synopsis m.Summary) ] ])) ] ] ]
+        let pages = Run.orRaise FileSystemError.describe $"Could not validate generated API links under {apiDir}" work
 
-                  div
-                      [ _class "space-y-12" ]
-                      (ent.Members
-                       |> List.map (fun memberModel ->
-                           if entityTargets.IsEmpty then
-                               View.apiCard context.Package context.Config.RepoUrl memberModel
-                           else
-                               View.apiCardWithTargets context.Package entityTargets context.Config.RepoUrl memberModel))
+        let candidateLinks =
+            pages
+            |> List.collect (fun (pagePath, html) ->
+                hrefPattern.Matches(html)
+                |> Seq.cast<Match>
+                |> Seq.choose (fun link ->
+                    let href = link.Groups.["href"].Value
+                    if not (href.StartsWith("#", StringComparison.Ordinal))
+                       && not (href.StartsWith("../", StringComparison.Ordinal))
+                       && not (href.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                       && not (href.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                       && not (href.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) then
+                        let targetName = href.Split([| '#'; '?' |], 2).[0] |> Uri.UnescapeDataString
+                        let targetPath = Path.GetFullPath(Path.Combine(apiDir, targetName))
+                        Some(pagePath, href, targetPath)
+                    else
+                        None)
+                |> Seq.toList)
 
-                  let examples = Presentation.entityExamples ent
+        let existenceWork =
+            candidateLinks
+            |> List.map (fun (_, _, targetPath) -> targetPath)
+            |> List.distinct
+            |> Flow.traverse (fun targetPath -> FileSystem.fileExists targetPath |> Flow.map (fun exists -> targetPath, exists))
 
-                  if not examples.IsEmpty then
-                      div
-                          [ _class "mt-24 border-t border-base-300 pt-16" ]
-                          [ View.h2WithAnchor
-                                (ent.Id + "-examples")
-                                "Examples"
-                                "text-3xl font-black mb-10 tracking-tighter"
-                            div
-                                [ _class "space-y-12" ]
-                                (examples
-                                 |> List.map (fun ex ->
-                                     let exampleId =
-                                         let slug =
-                                             Regex.Replace(ex.Name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-')
+        let targetExists =
+            Run.orRaise FileSystemError.describe $"Could not validate generated API links under {apiDir}" existenceWork
+            |> Map.ofList
 
-                                         if String.IsNullOrWhiteSpace slug then "example" else slug
-
-                                     div
-                                         [ _class "not-prose" ]
-                                         [ if ex.Name <> "Example" then
-                                               View.h3WithAnchor
-                                                   (ent.Id + "-example-" + exampleId)
-                                                   ex.Name
-                                                   "text-sm font-black mb-4 opacity-40 tracking-[0.3em]"
-                                           pre
-                                               [ _class
-                                                     "bg-neutral text-neutral-content p-6 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-md" ]
-                                               [ code [ _class "language-fsharp" ] [ str ex.Content ] ] ])) ] ]
-
-        let renderRecordEntity (ent: EntityModel) =
-            div [ _id ent.Id ] [
-                h1 [
-                    _class "text-4xl font-black mb-8 pb-4 border-b-8 border-primary/10 tracking-tight group scroll-mt-24 flex items-center gap-3"
-                    attr "data-toc-title" ent.Name
-                ] [
-                    span [ _class "leading-tight" ] [ str ent.Name ]
-                    span [ _class "badge badge-primary opacity-50 font-mono text-[10px]" ] [ str (string ent.Kind) ]
-                    a [
-                        _href ("#" + ent.Id)
-                        _class "anchor-link opacity-0 group-hover:opacity-60 transition-opacity no-underline inline-flex items-center justify-center w-6 h-6 text-base-content/60 hover:text-primary"
-                        attr "aria-label" $"Copy link to {ent.Name}"
-                        attr "title" $"Copy link to {ent.Name}"
-                    ] [ i [ _class "bi bi-link-45deg text-base" ] [] ]
-                ]
-
-                renderPackageBadges ent
-
-                renderSummaryBlock ent.Summary
-                renderFieldTable "Fields" ent.Members
-
-                let examples = Presentation.entityExamples ent
-                if not examples.IsEmpty then
-                    div [ _class "mt-24 border-t border-base-300 pt-16" ] [
-                        View.h2WithAnchor (ent.Id + "-examples") "Examples" "text-3xl font-black mb-10 tracking-tighter"
-                        div [ _class "space-y-12" ] (
-                            examples |> List.map (fun ex ->
-                                let exampleId =
-                                    let slug = Regex.Replace(ex.Name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-')
-                                    if String.IsNullOrWhiteSpace slug then "example" else slug
-                                div [ _class "not-prose" ] [
-                                    if ex.Name <> "Example" then
-                                        View.h3WithAnchor (ent.Id + "-example-" + exampleId) ex.Name "text-sm font-black mb-4 opacity-40 tracking-[0.3em]"
-                                    pre [ _class "bg-neutral text-neutral-content p-6 rounded-2xl text-sm font-mono overflow-x-auto border-0 shadow-md" ] [
-                                        code [ _class "language-fsharp" ] [ str ex.Content ]
-                                    ]
-                                ])
-                        )
-                    ]
-            ]
-
-        let content =
-            [ match e.Kind with
-              | EntityKind.Record -> renderRecordEntity e
-              | _ -> renderGenericEntity e ]
-
-        match chrome with
-        | Some value ->
-            View.layoutWithChrome
-                value
-                e.Name
-                context.AllPages
-                context.Package
-                context.Config
-                context.Versions
-                context.Theme
-                context.RootPath
-                context.SiteRootPath
-                ("api/" + e.Id + ".html")
-                content
-        | None ->
-            View.layout
-                e.Name
-                context.AllPages
-                context.Package
-                context.Config
-                context.Versions
-                context.Theme
-                context.RootPath
-                context.SiteRootPath
-                ("api/" + e.Id + ".html")
-                content
-        |> fun node -> RenderView.AsString.htmlNode node
-
-    let renderEntityPage entity context =
-        renderEntityPageCore None entity context
-
-    /// <summary>Generates a text-based summary of the API for LLM consumption.</summary>
-    /// <param name="package">The package model to summarize.</param>
-    /// <returns>A plaintext `llms.txt` document.</returns>
-    /// <example name="GenerateLlmsTxtExample" data-livedocs="snapshot">
-    /// > open FsLiveDocs.Core;;
-    ///
-    /// > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
-    /// val package: PackageModel = { Version = "1.0"
-    ///   Entities = []
-    ///   Scenarios = []
-    ///   Packages = [] }
-    ///
-    /// > let summary = SiteBuilder.generateLlmsTxt package;;
-    /// val summary: string = "# API Reference for LLMs
-    /// "
-    ///
-    /// > summary.Split('\n').[0];;
-    /// val it: string = "# API Reference for LLMs"
-    /// </example>
-    let generateLlmsTxt (package: PackageModel) =
-        let sb = System.Text.StringBuilder()
-        sb.AppendLine("# API Reference for LLMs") |> ignore
-        let rec walkEntity (e: EntityModel) indent =
-            let pad = String.replicate indent "  "
-            sb.AppendLine($"{pad}- {e.Kind}: {e.Name} ({e.Id})") |> ignore
-            for m in e.Members do
-                sb.AppendLine($"{pad}  * {m.Name}: {m.Signature}") |> ignore
-            for ne in e.Entities do
-                walkEntity ne (indent + 1)
-        for e in package.Entities do
-            walkEntity e 0
-        sb.ToString()
+        for pagePath, href, targetPath in candidateLinks do
+            if not (targetPath.StartsWith(apiRoot, StringComparison.Ordinal)) || not targetExists.[targetPath] then
+                invalidOp $"Broken generated API link in {Path.GetFileName(pagePath)}: {href}"
 
     /// <summary>Builds the primary documentation site.</summary>
     let build (context: SiteBuildContext) =
-        let renderContext = {
+        let renderContext : SiteRenderContext = {
             AllPages = context.Pages
             Package = context.Package
             Config = context.Config
@@ -765,27 +312,24 @@ module SiteBuilder =
             SiteRootPath = context.SiteRootPath
         }
 
-        if Directory.Exists(context.OutputDir) then Directory.Delete(context.OutputDir, true)
-        Directory.CreateDirectory(context.OutputDir) |> ignore
-        
-        // LLMS Integration
-        File.WriteAllText(Path.Combine(context.OutputDir, "llms.txt"), generateLlmsTxt context.Package)
-        
+        resetOutputDirectory context.OutputDir
+
         // Pages are independent immutable renders. Rendering them concurrently avoids making
-        // large documentation sets pay the full HTML generation cost serially.
-        context.Pages
-        |> List.toArray
-        |> fun pages -> parallelRender pages (fun page ->
-            let depth = page.OutputPath.Split('/').Length - 1
-            let pageContext =
-                { renderContext with
-                    RootPath = context.RootPath + String.replicate depth "../"
-                    SiteRootPath = context.SiteRootPath + String.replicate depth "../" }
-            let html = renderPage page pageContext
-            let outputPath = Path.Combine(context.OutputDir, page.OutputPath)
-            let outputDirectory = Path.GetDirectoryName(outputPath)
-            Directory.CreateDirectory(outputDirectory) |> ignore
-            File.WriteAllText(outputPath, html))
+        // large documentation sets pay the full HTML generation cost serially; the resulting
+        // (path, html) pairs are then written as one composed Flow, run exactly once.
+        let pageWrites =
+            context.Pages
+            |> List.toArray
+            |> fun pages ->
+                parallelMap pages (fun page ->
+                    let depth = page.OutputPath.Split('/').Length - 1
+                    let pageContext =
+                        { renderContext with
+                            RootPath = context.RootPath + String.replicate depth "../"
+                            SiteRootPath = context.SiteRootPath + String.replicate depth "../" }
+                    let html = renderPage page pageContext
+                    Path.Combine(context.OutputDir, page.OutputPath), html)
+            |> Array.toList
 
         renderBlogOutputs
             (fun page ->
@@ -800,60 +344,73 @@ module SiteBuilder =
 
         // Render API docs - Multi-page approach
         let apiDir = Path.Combine(context.OutputDir, "api")
-        if not (Directory.Exists(apiDir)) then Directory.CreateDirectory(apiDir) |> ignore
-        
+
         let apiRenderContext =
             { renderContext with
                 RootPath = context.RootPath + "../"
                 SiteRootPath = context.SiteRootPath + "../" }
         let allEntities = Presentation.flattenEntities context.Package.Entities
 
-        allEntities
-        |> List.toArray
-        |> fun entities -> parallelRender entities (fun entity ->
-            let html = renderEntityPage entity apiRenderContext
-            File.WriteAllText(Path.Combine(apiDir, entity.Id + ".html"), html))
+        let entityWrites =
+            allEntities
+            |> List.toArray
+            |> fun entities ->
+                parallelMap entities (fun entity ->
+                    Path.Combine(apiDir, entity.Id + ".html"), renderEntityPage entity apiRenderContext)
+            |> Array.toList
 
         let packageDir = Path.Combine(apiDir, "packages")
-        Directory.CreateDirectory(packageDir) |> ignore
 
-        (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
-        |> List.toArray
-        |> fun packages -> parallelRender packages (fun packageInfo ->
-            let ownedIds = packageInfo.EntityIds |> Set.ofList
-            let ownedEntities = allEntities |> List.filter (fun entity -> ownedIds.Contains entity.Id)
-            let contributedEntities = View.entitiesForPackage packageInfo context.Package.Entities
+        let packageWrites =
+            (if isNull (box context.Package.Packages) then [] else context.Package.Packages)
+            |> List.toArray
+            |> fun packages ->
+                parallelMap packages (fun packageInfo ->
+                    let ownedIds = packageInfo.EntityIds |> Set.ofList
+                    let ownedEntities = allEntities |> List.filter (fun entity -> ownedIds.Contains entity.Id)
+                    let contributedEntities = View.entitiesForPackage packageInfo context.Package.Entities
 
-            if not ownedEntities.IsEmpty then
-                let introduction =
-                    packageIntroduction packageInfo.Name contributedEntities
-                    |> Option.map (Presentation.renderDocumentationHtml context.Package >> shiftApiHtmlIntoPackageDirectory)
+                    if not ownedEntities.IsEmpty then
+                        let introduction =
+                            packageIntroduction packageInfo.Name contributedEntities
+                            |> Option.map (Presentation.renderDocumentationHtml context.Package >> shiftApiHtmlIntoPackageDirectory)
 
-                let packageContent = [
-                    div [ _class "flex items-center gap-3 mb-8" ] [
-                        h1 [ _id "package"; attr "data-toc-title" packageInfo.Name; _class "text-5xl font-black tracking-tighter" ] [ str packageInfo.Name ]
-                        span [ _class "badge badge-primary badge-sm" ] [ str "Package" ]
-                    ]
-                    match introduction with
-                    | Some html ->
-                        div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ rawText html ]
-                    | None -> emptyText
-                    View.h2WithAnchor "contents" "Contents" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                    div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (
-                        ownedEntities |> List.map (fun entity ->
-                            a [ _href ("../" + entity.Id + ".html"); _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
-                                span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str entity.Name ]
-                                span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string entity.Kind) ]
-                            ])
-                    )
-                ]
-                let packageContext =
-                    { renderContext with
-                        RootPath = context.RootPath + "../../"
-                        SiteRootPath = context.SiteRootPath + "../../" }
-                let outputPath = "api/packages/" + Uri.EscapeDataString packageInfo.Name + ".html"
-                let html = View.layout packageInfo.Name context.Pages context.Package context.Config context.Versions context.Theme packageContext.RootPath packageContext.SiteRootPath outputPath packageContent |> RenderView.AsString.htmlNode
-                File.WriteAllText(Path.Combine(packageDir, Uri.EscapeDataString packageInfo.Name + ".html"), html))
+                        let packageContent = [
+                            div [ _class "flex items-center gap-3 mb-8" ] [
+                                h1 [ _id "package"; attr "data-toc-title" packageInfo.Name; _class "text-5xl font-black tracking-tighter" ] [ str packageInfo.Name ]
+                                span [ _class "badge badge-primary badge-sm" ] [ str "Package" ]
+                            ]
+                            match introduction with
+                            | Some html ->
+                                div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ rawText html ]
+                            | None -> emptyText
+                            View.h2WithAnchor "contents" "Contents" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
+                            div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (
+                                ownedEntities |> List.map (fun entity ->
+                                    a [ _href ("../" + entity.Id + ".html"); _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
+                                        span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str entity.Name ]
+                                        span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string entity.Kind) ]
+                                    ])
+                            )
+                        ]
+                        let packageContext =
+                            { renderContext with
+                                RootPath = context.RootPath + "../../"
+                                SiteRootPath = context.SiteRootPath + "../../" }
+                        let outputPath = "api/packages/" + Uri.EscapeDataString packageInfo.Name + ".html"
+                        let html = View.layout packageInfo.Name context.Pages context.Package context.Config context.Versions context.Theme packageContext.RootPath packageContext.SiteRootPath outputPath packageContent |> RenderView.AsString.htmlNode
+                        Some(Path.Combine(packageDir, Uri.EscapeDataString packageInfo.Name + ".html"), html)
+                    else
+                        None)
+            |> Array.toList
+            |> List.choose id
+
+        ensureDirectory apiDir
+
+        writeAll (
+            (Path.Combine(context.OutputDir, "llms.txt"), generateLlmsTxt context.Package)
+            :: pageWrites @ entityWrites @ packageWrites
+        )
 
         validateGeneratedApiLinks apiDir
 
@@ -905,11 +462,12 @@ module SiteBuilder =
             )
         ]
         let (apiHtml: string) = View.layout "API Reference" context.Pages context.Package context.Config context.Versions context.Theme context.RootPath context.SiteRootPath "api.html" apiOverview |> RenderView.AsString.htmlNode
-        File.WriteAllText(Path.Combine(context.OutputDir, "api.html"), apiHtml)
+        writeAll [ Path.Combine(context.OutputDir, "api.html"), apiHtml ]
 
         // Generate a fallback homepage only when the consumer has not authored docs/index.md.
         let indexPath = Path.Combine(context.OutputDir, "index.html")
-        if not (File.Exists(indexPath)) then
+        let indexAlreadyExists = Run.orFallback (FileSystem.fileExists indexPath) false
+        if not indexAlreadyExists then
           let indexContent = [
             h1 [
                 _id "home"
@@ -957,7 +515,7 @@ module SiteBuilder =
             ]
           ]
           let (html: string) = View.layout "Home" context.Pages context.Package context.Config context.Versions context.Theme context.RootPath context.SiteRootPath "index.html" indexContent |> RenderView.AsString.htmlNode
-          File.WriteAllText(indexPath, html)
+          writeAll [ indexPath, html ]
 
     let private packageForEntityIds (package: PackageModel) (entityIds: string list) =
         let allowed = Set.ofList entityIds
@@ -1119,7 +677,7 @@ module SiteBuilder =
                    VersionTargets = targets }
                 : View.SiteChrome)
 
-            let baseContext rootPath =
+            let baseContext rootPath : SiteRenderContext =
                 { AllPages = docsSet.Pages
                   Package = docsSet.Package
                   Config = config
@@ -1128,154 +686,163 @@ module SiteBuilder =
                   RootPath = rootPath
                   SiteRootPath = rootPath }
 
-            docsSet.Pages
-            |> List.toArray
-            |> fun pages ->
-                parallelRender pages (fun page ->
-                    let depth = page.OutputPath.Split('/').Length - 1
-                    let context = baseContext (siteRootPath + String.replicate depth "../")
-
-                    let html =
-                        renderPageCore
-                            (Some(chrome (guideVersionTargets currentVersion allSites set page)))
-                            page
-                            context
-
-                    let output = Path.Combine(destination, page.OutputPath)
-                    Directory.CreateDirectory(Path.GetDirectoryName output) |> ignore
-                    File.WriteAllText(output, html))
-
-            if set.Api then
-                let apiDir =
-                    Path.Combine(destination, (routePrefix set).Replace('/', Path.DirectorySeparatorChar), "api")
-
-                Directory.CreateDirectory(apiDir) |> ignore
-                let allEntities = Presentation.flattenEntities navigationPackage.Entities
-
-                let entityContext =
-                    baseContext (siteRootPath + String.replicate ((setApiOutput set).Split('/').Length - 1) "../")
-
-                allEntities
+            let pageWrites =
+                docsSet.Pages
                 |> List.toArray
-                |> fun entities ->
-                    parallelRender entities (fun entity ->
-                        let targets = apiVersionTargets currentVersion allSites set entity.Id
-                        let html = renderEntityPageCore (Some(chrome targets)) entity entityContext
-                        File.WriteAllText(Path.Combine(apiDir, entity.Id + ".html"), html))
-
-                let packageDir = Path.Combine(apiDir, "packages")
-                Directory.CreateDirectory(packageDir) |> ignore
-
-                navigationPackage.Packages
-                |> List.iter (fun packageInfo ->
-                    let owned =
-                        View.entitiesForPackage packageInfo navigationPackage.Entities
-                        |> Presentation.flattenEntities
-
-                    if not owned.IsEmpty then
-                        let packageContent =
-                            [ h1
-                                  [ _id "package"
-                                    attr "data-toc-title" packageInfo.Name
-                                    _class "text-5xl font-black tracking-tighter mb-12" ]
-                                  [ str packageInfo.Name ]
-                              div
-                                  [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ]
-                                  (owned
-                                   |> List.map (fun entity ->
-                                       a
-                                           [ _href ("../" + entity.Id + ".html")
-                                             _class "p-4 border border-base-300 rounded-2xl font-bold" ]
-                                           [ str entity.Name ])) ]
-
-                        let packageRoot =
-                            siteRootPath
-                            + String.replicate
-                                ((routePrefix set).Split('/', StringSplitOptions.RemoveEmptyEntries).Length + 2)
-                                "../"
+                |> fun pages ->
+                    parallelMap pages (fun page ->
+                        let depth = page.OutputPath.Split('/').Length - 1
+                        let context = baseContext (siteRootPath + String.replicate depth "../")
 
                         let html =
-                            View.layoutWithChrome
-                                (chrome (rootVersionTargets currentVersion allSites set true))
-                                packageInfo.Name
-                                docsSet.Pages
-                                docsSet.Package
-                                config
-                                versions
-                                theme
-                                packageRoot
-                                packageRoot
-                                (routePrefix set + "api/packages/" + Uri.EscapeDataString packageInfo.Name + ".html")
-                                packageContent
-                            |> RenderView.AsString.htmlNode
+                            PageRenderer.renderPageCore
+                                (Some(chrome (guideVersionTargets currentVersion allSites set page)))
+                                page
+                                context
 
-                        File.WriteAllText(
-                            Path.Combine(packageDir, Uri.EscapeDataString packageInfo.Name + ".html"),
-                            html
-                        ))
+                        Path.Combine(destination, page.OutputPath), html)
+                |> Array.toList
 
-                let card entity =
-                    a
-                        [ _href (entity.Id + ".html")
-                          _class "card bg-base-100 border border-base-300 p-5 hover:border-primary transition-all" ]
-                        [ h3 [ _class "text-lg font-bold" ] [ str entity.Name ]
-                          p [ _class "text-sm opacity-60 mt-2" ] [ str (Presentation.synopsis entity.Summary) ] ]
+            let apiWrites, apiDirForValidation =
+                if set.Api then
+                    let apiDir =
+                        Path.Combine(destination, (routePrefix set).Replace('/', Path.DirectorySeparatorChar), "api")
 
-                let overview =
-                    [ View.h1WithAnchor "api-reference" "API Reference" "text-5xl font-black mb-12 tracking-tighter"
-                      div
-                          [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 not-prose" ]
-                          (allEntities |> List.map card) ]
+                    let allEntities = Presentation.flattenEntities navigationPackage.Entities
 
-                let overviewRoot =
-                    siteRootPath + String.replicate ((setApiOutput set).Split('/').Length - 1) "../"
+                    let entityContext =
+                        baseContext (siteRootPath + String.replicate ((setApiOutput set).Split('/').Length - 1) "../")
 
-                let apiHtml =
-                    View.layoutWithChrome
-                        (chrome (rootVersionTargets currentVersion allSites set true))
-                        "API Reference"
-                        docsSet.Pages
-                        docsSet.Package
-                        config
-                        versions
-                        theme
-                        overviewRoot
-                        overviewRoot
-                        (setApiOutput set)
-                        overview
-                    |> RenderView.AsString.htmlNode
+                    let entityWrites =
+                        allEntities
+                        |> List.toArray
+                        |> fun entities ->
+                            parallelMap entities (fun entity ->
+                                let targets = apiVersionTargets currentVersion allSites set entity.Id
+                                let html = PageRenderer.renderEntityPageCore (Some(chrome targets)) entity entityContext
+                                Path.Combine(apiDir, entity.Id + ".html"), html)
+                        |> Array.toList
 
-                File.WriteAllText(Path.Combine(apiDir, "index.html"), apiHtml)
-                validateGeneratedApiLinks apiDir
+                    let packageDir = Path.Combine(apiDir, "packages")
+
+                    let packageWrites =
+                        navigationPackage.Packages
+                        |> List.choose (fun packageInfo ->
+                            let owned =
+                                View.entitiesForPackage packageInfo navigationPackage.Entities
+                                |> Presentation.flattenEntities
+
+                            if not owned.IsEmpty then
+                                let packageContent =
+                                    [ h1
+                                          [ _id "package"
+                                            attr "data-toc-title" packageInfo.Name
+                                            _class "text-5xl font-black tracking-tighter mb-12" ]
+                                          [ str packageInfo.Name ]
+                                      div
+                                          [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ]
+                                          (owned
+                                           |> List.map (fun entity ->
+                                               a
+                                                   [ _href ("../" + entity.Id + ".html")
+                                                     _class "p-4 border border-base-300 rounded-2xl font-bold" ]
+                                                   [ str entity.Name ])) ]
+
+                                let packageRoot =
+                                    siteRootPath
+                                    + String.replicate
+                                        ((routePrefix set).Split('/', StringSplitOptions.RemoveEmptyEntries).Length + 2)
+                                        "../"
+
+                                let html =
+                                    View.layoutWithChrome
+                                        (chrome (rootVersionTargets currentVersion allSites set true))
+                                        packageInfo.Name
+                                        docsSet.Pages
+                                        docsSet.Package
+                                        config
+                                        versions
+                                        theme
+                                        packageRoot
+                                        packageRoot
+                                        (routePrefix set + "api/packages/" + Uri.EscapeDataString packageInfo.Name + ".html")
+                                        packageContent
+                                    |> RenderView.AsString.htmlNode
+
+                                Some(Path.Combine(packageDir, Uri.EscapeDataString packageInfo.Name + ".html"), html)
+                            else
+                                None)
+
+                    let card entity =
+                        a
+                            [ _href (entity.Id + ".html")
+                              _class "card bg-base-100 border border-base-300 p-5 hover:border-primary transition-all" ]
+                            [ h3 [ _class "text-lg font-bold" ] [ str entity.Name ]
+                              p [ _class "text-sm opacity-60 mt-2" ] [ str (Presentation.synopsis entity.Summary) ] ]
+
+                    let overview =
+                        [ View.h1WithAnchor "api-reference" "API Reference" "text-5xl font-black mb-12 tracking-tighter"
+                          div
+                              [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 not-prose" ]
+                              (allEntities |> List.map card) ]
+
+                    let overviewRoot =
+                        siteRootPath + String.replicate ((setApiOutput set).Split('/').Length - 1) "../"
+
+                    let apiHtml =
+                        View.layoutWithChrome
+                            (chrome (rootVersionTargets currentVersion allSites set true))
+                            "API Reference"
+                            docsSet.Pages
+                            docsSet.Package
+                            config
+                            versions
+                            theme
+                            overviewRoot
+                            overviewRoot
+                            (setApiOutput set)
+                            overview
+                        |> RenderView.AsString.htmlNode
+
+                    entityWrites @ packageWrites @ [ Path.Combine(apiDir, "index.html"), apiHtml ], Some apiDir
+                else
+                    [], None
 
             let indexPath = Path.Combine(destination, setRootOutput set)
+            let indexAlreadyExists = Run.orFallback (FileSystem.fileExists indexPath) false
 
-            if not (File.Exists indexPath) then
-                Directory.CreateDirectory(Path.GetDirectoryName indexPath) |> ignore
-                let rootDepth = setRootOutput set |> fun output -> output.Split('/').Length - 1
-                let rootPath = siteRootPath + String.replicate rootDepth "../"
+            let indexWrites =
+                if not indexAlreadyExists then
+                    let rootDepth = setRootOutput set |> fun output -> output.Split('/').Length - 1
+                    let rootPath = siteRootPath + String.replicate rootDepth "../"
 
-                let content =
-                    [ View.h1WithAnchor "home" set.Title "text-6xl font-black mb-8 tracking-tighter"
-                      if set.Api then
-                          a [ _href "api/"; _class "btn btn-primary" ] [ str "Explore API" ] ]
+                    let content =
+                        [ View.h1WithAnchor "home" set.Title "text-6xl font-black mb-8 tracking-tighter"
+                          if set.Api then
+                              a [ _href "api/"; _class "btn btn-primary" ] [ str "Explore API" ] ]
 
-                let html =
-                    View.layoutWithChrome
-                        (chrome (rootVersionTargets currentVersion allSites set false))
-                        set.Title
-                        docsSet.Pages
-                        docsSet.Package
-                        config
-                        versions
-                        theme
-                        rootPath
-                        rootPath
-                        (setRootOutput set)
-                        content
-                    |> RenderView.AsString.htmlNode
+                    let html =
+                        View.layoutWithChrome
+                            (chrome (rootVersionTargets currentVersion allSites set false))
+                            set.Title
+                            docsSet.Pages
+                            docsSet.Package
+                            config
+                            versions
+                            theme
+                            rootPath
+                            rootPath
+                            (setRootOutput set)
+                            content
+                        |> RenderView.AsString.htmlNode
 
-                File.WriteAllText(indexPath, html)
+                    [ indexPath, html ]
+                else
+                    []
+
+            writeAll (pageWrites @ apiWrites @ indexWrites)
+
+            apiDirForValidation |> Option.iter validateGeneratedApiLinks
 
         // Posts may live in any set; the generated blog pages sit at the site root and use the
         // default set's chrome.
@@ -1298,7 +865,7 @@ module SiteBuilder =
             renderBlogOutputs
                 (fun page ->
                     let rootPath = siteRootPath + String.replicate (page.OutputPath.Split('/').Length - 1) "../"
-                    renderPageCore
+                    PageRenderer.renderPageCore
                         (Some chrome)
                         page
                         { AllPages = defaultSite.Pages
@@ -1320,11 +887,8 @@ module SiteBuilder =
               StaticRoot = None
               UsesDocumentationSets = true }
 
-        if Directory.Exists outputDir then
-            Directory.Delete(outputDir, true)
-
-        Directory.CreateDirectory(outputDir) |> ignore
-        File.WriteAllText(Path.Combine(outputDir, "llms.txt"), generateLlmsTxt site.Package)
+        resetOutputDirectory outputDir
+        writeAll [ Path.Combine(outputDir, "llms.txt"), generateLlmsTxt site.Package ]
         renderDocsSetVersion currentVersion versions [ site ] config theme "" outputDir site
 
     let private versionSiteOutputIdentities (site: DocsSetVersionSite) =
@@ -1341,19 +905,49 @@ module SiteBuilder =
                           prefix + "api/packages/" + Uri.EscapeDataString(packageInfo.Name) + ".html") ]
         |> Set.ofList
 
-    let private writeVersionFallback (destination: string) (identity: string) (fallback: string) =
-        let output = Path.GetFullPath(Path.Combine(destination, identity.Replace('/', Path.DirectorySeparatorChar)))
+    /// Writes every missing redirect stub for one destination as one composed Flow -- a history
+    /// build can have many sites times many stable identities, so every existence check and every
+    /// write is gathered up front and run exactly once, rather than once per identity.
+    let private writeVersionFallbacks (destination: string) (identities: string Set) (fallbackFor: string -> string) =
         let destinationRoot = Path.GetFullPath(destination) + string Path.DirectorySeparatorChar
 
-        if output.StartsWith(destinationRoot, StringComparison.Ordinal) && not (File.Exists output) then
-            Directory.CreateDirectory(Path.GetDirectoryName output) |> ignore
-            let target = Path.GetFullPath(Path.Combine(destination, fallback.Replace('/', Path.DirectorySeparatorChar)))
-            let relative = Path.GetRelativePath(Path.GetDirectoryName output, target).Replace('\\', '/')
-            let encoded = Net.WebUtility.HtmlEncode(relative)
-            File.WriteAllText(
-                output,
-                $"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"robots\" content=\"noindex\"><meta http-equiv=\"refresh\" content=\"0; url={encoded}\"></head><body><a href=\"{encoded}\">Documentation moved</a></body></html>"
-            )
+        let candidates =
+            identities
+            |> Set.toList
+            |> List.map (fun identity ->
+                identity, Path.GetFullPath(Path.Combine(destination, identity.Replace('/', Path.DirectorySeparatorChar))))
+            |> List.filter (fun (_, output) -> output.StartsWith(destinationRoot, StringComparison.Ordinal))
+
+        let work =
+            flow {
+                let! existing =
+                    candidates
+                    |> Flow.traverse (fun (identity, output) ->
+                        FileSystem.fileExists output |> Flow.map (fun exists -> identity, output, exists))
+
+                let missing =
+                    existing
+                    |> List.filter (fun (_, _, exists) -> not exists)
+                    |> List.map (fun (identity, output, _) -> identity, output)
+
+                for identity, output in missing do
+                    let fallback = fallbackFor identity
+                    let target = Path.GetFullPath(Path.Combine(destination, fallback.Replace('/', Path.DirectorySeparatorChar)))
+                    let relative = Path.GetRelativePath(Path.GetDirectoryName output, target).Replace('\\', '/')
+                    let encoded = Net.WebUtility.HtmlEncode(relative)
+
+                    match Path.GetDirectoryName(output: string) with
+                    | null
+                    | "" -> ()
+                    | directory -> do! FileSystem.createDirectory directory
+
+                    do!
+                        FileSystem.writeAllText
+                            output
+                            $"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"robots\" content=\"noindex\"><meta http-equiv=\"refresh\" content=\"0; url={encoded}\"></head><body><a href=\"{encoded}\">Documentation moved</a></body></html>"
+            }
+
+        Run.orRaise FileSystemError.describe $"Could not write version fallbacks under {destination}" work
 
     let private fallbackForIdentity (site: DocsSetVersionSite) (identity: string) =
         let owningSet =
@@ -1383,20 +977,32 @@ module SiteBuilder =
             currentVersion
             :: (sites |> List.map _.Version |> List.filter ((<>) currentVersion))
 
-        if Directory.Exists outputDir then
-            Directory.Delete(outputDir, true)
+        resetOutputDirectory outputDir
 
-        Directory.CreateDirectory(outputDir) |> ignore
+        let sitesToRender = current :: (sites |> List.filter (fun site -> site.Version <> currentVersion))
 
-        for site in current :: (sites |> List.filter (fun site -> site.Version <> currentVersion)) do
-            let siteRootPath, destination =
-                if site.Version = currentVersion then
-                    "", outputDir
-                else
-                    "../../", Path.Combine(outputDir, "history", site.Version)
+        let siteDestinations =
+            sitesToRender
+            |> List.map (fun site ->
+                let siteRootPath, destination =
+                    if site.Version = currentVersion then
+                        "", outputDir
+                    else
+                        "../../", Path.Combine(outputDir, "history", site.Version)
 
-            Directory.CreateDirectory(destination) |> ignore
+                site, siteRootPath, destination)
 
+        // Every history-site destination directory is created up front, as one composed Flow --
+        // there are as many of these as there are captured versions, not as many as there are pages.
+        let createDestinationsWork =
+            siteDestinations
+            |> List.map (fun (_, _, destination) -> destination)
+            |> Flow.traverse FileSystem.createDirectory
+
+        Run.orRaise FileSystemError.describe $"Could not create history site output directories under {outputDir}" createDestinationsWork
+        |> ignore
+
+        for site, siteRootPath, destination in siteDestinations do
             if site.UsesDocumentationSets then
                 renderDocsSetVersion currentVersion versions sites config theme siteRootPath destination site
             else
@@ -1425,10 +1031,9 @@ module SiteBuilder =
                 if site.Version = currentVersion then outputDir
                 else Path.Combine(outputDir, "history", site.Version)
 
-            for identity in identities do
-                writeVersionFallback destination identity (fallbackForIdentity site identity)
+            writeVersionFallbacks destination identities (fallbackForIdentity site)
 
-        File.WriteAllText(Path.Combine(outputDir, "llms.txt"), generateLlmsTxt current.Package)
+        writeAll [ Path.Combine(outputDir, "llms.txt"), generateLlmsTxt current.Package ]
 
     /// <summary>Builds the current site and computes the version list from history snapshots.</summary>
     /// <param name="historyDir">The directory containing previous package snapshots.</param>
@@ -1438,15 +1043,28 @@ module SiteBuilder =
     /// <param name="theme">The active DaisyUI theme.</param>
     /// <param name="outputDir">The output directory that will receive the rendered site.</param>
     let buildAll (historyDir: string) (currentPackage: PackageModel) (pages: ContentPage list) (config: SiteConfig) (theme: string) (outputDir: string) =
-        let versions = 
-            if Directory.Exists(historyDir) then
-                Directory.GetFiles(historyDir, "*.json")
-                |> Array.map Path.GetFileNameWithoutExtension
-                |> Array.toList
-            else []
-        
+        // The history directory's listing and every captured version's JSON are read up front, as
+        // one composed Flow, run exactly once -- rather than once per historical version.
+        let historyWork =
+            flow {
+                let! historyExists = FileSystem.directoryExists historyDir
+
+                if historyExists then
+                    let! files = FileSystem.getFiles historyDir "*.json" SearchOption.TopDirectoryOnly
+
+                    return!
+                        files
+                        |> Array.toList
+                        |> Flow.traverse (fun path -> FileSystem.readAllText path |> Flow.map (fun text -> path, text))
+                else
+                    return []
+            }
+
+        let historyFiles = Run.orRaise FileSystemError.describe $"Could not scan history directory {historyDir}" historyWork
+
+        let versions = historyFiles |> List.map (fst >> Path.GetFileNameWithoutExtension)
         let allVersions = currentPackage.Version :: versions |> List.distinct
-        
+
         build {
             Pages = pages
             Package = currentPackage
@@ -1458,22 +1076,20 @@ module SiteBuilder =
             OutputDir = outputDir
         }
 
-        if Directory.Exists(historyDir) then
-            for vJson in Directory.GetFiles(historyDir, "*.json") do
-                let v = Path.GetFileNameWithoutExtension(vJson)
-                let json = File.ReadAllText(vJson)
-                let package = Newtonsoft.Json.JsonConvert.DeserializeObject<PackageModel>(json, FsLiveDocs.Core.Serialization.jsonSettings)
-                let vDir = Path.Combine(outputDir, "history", v)
-                build {
-                    Pages = pages
-                    Package = package
-                    Config = config
-                    Versions = allVersions
-                    Theme = theme
-                    RootPath = ""
-                    SiteRootPath = "../../"
-                    OutputDir = vDir
-                }
+        for vJson, json in historyFiles do
+            let v = Path.GetFileNameWithoutExtension(vJson)
+            let package = Json.deserialize packageCodec json
+            let vDir = Path.Combine(outputDir, "history", v)
+            build {
+                Pages = pages
+                Package = package
+                Config = config
+                Versions = allVersions
+                Theme = theme
+                RootPath = ""
+                SiteRootPath = "../../"
+                OutputDir = vDir
+            }
 
     /// <summary>Builds current and historical sites from verified API models and tagged documentation trees.</summary>
     let buildHistory (currentVersion: string) (sites: (string * PackageModel * ContentPage list * string) list) (config: SiteConfig) (theme: string) (outputDir: string) =

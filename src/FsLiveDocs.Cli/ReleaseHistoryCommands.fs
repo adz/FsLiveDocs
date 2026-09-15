@@ -2,29 +2,50 @@ namespace FsLiveDocs.Cli
 
 open System
 open System.IO
-open System.Net.Http
-open System.Net.Http.Headers
 open System.Text.RegularExpressions
+open Axial
+open Axial.FileSystem
+open Axial.HttpClient
+open Axial.PlatformService
+open Reified
+open Reified.SchemaDSL
 open FsLiveDocs.Core
-open Newtonsoft.Json
+open FsLiveDocs.Core.Effects
 
-[<CLIMutable>]
+/// The parts of a GitHub API release/asset this tool reads. Field names are pinned to GitHub's
+/// own snake_case JSON, not FsLiveDocs' PascalCase convention -- this is an external API
+/// contract, not a persisted FsLiveDocs model.
 type internal GitHubReleaseAsset =
-    { [<JsonProperty("name")>]
-      Name: string
-      [<JsonProperty("browser_download_url")>]
+    { Name: string
       BrowserDownloadUrl: string
-      [<JsonProperty("digest")>]
-      Digest: string }
+      /// Absent for assets uploaded before GitHub started computing digests; GitHub's response
+      /// simply omits the field rather than sending it null.
+      Digest: string option }
 
-[<CLIMutable>]
 type internal GitHubRelease =
-    { [<JsonProperty("tag_name")>]
-      TagName: string
-      [<JsonProperty("draft")>]
+    { TagName: string
       Draft: bool
-      [<JsonProperty("assets")>]
       Assets: GitHubReleaseAsset array }
+
+module internal GitHubReleaseSchema =
+    let private asset : Schema<GitHubReleaseAsset> =
+        schema<GitHubReleaseAsset> {
+            fieldAs "name" (fun (a: GitHubReleaseAsset) -> a.Name) { withSchema Schema.text }
+            fieldAs "browser_download_url" (fun (a: GitHubReleaseAsset) -> a.BrowserDownloadUrl) { withSchema Schema.text }
+            fieldAs "digest" (fun (a: GitHubReleaseAsset) -> a.Digest) { withSchema (Schema.option Schema.text) }
+            construct (fun name browserDownloadUrl digest ->
+                { Name = name; BrowserDownloadUrl = browserDownloadUrl; Digest = digest })
+        }
+
+    let releases : Schema<GitHubRelease list> =
+        Schema.listWith (
+            schema<GitHubRelease> {
+                fieldAs "tag_name" (fun (r: GitHubRelease) -> r.TagName) { withSchema Schema.text }
+                fieldAs "draft" (fun (r: GitHubRelease) -> r.Draft) { withSchema Schema.bool }
+                fieldAs "assets" (fun (r: GitHubRelease) -> r.Assets |> Array.toList) { withSchema (Schema.listWith asset) }
+                construct (fun tagName draft assets -> { TagName = tagName; Draft = draft; Assets = List.toArray assets })
+            }
+        )
 
 module ReleaseHistoryCommands =
 
@@ -33,6 +54,9 @@ module ReleaseHistoryCommands =
     type DiscoverySource =
         | GithubRepo of string
         | Command of string
+
+    let private fileExists path = Run.orFallback (FileSystem.fileExists path) false
+    let private runOrRaise description flow = Run.orRaise FileSystemError.describe description flow
 
     let private normalizedSha (context: string) (value: string) =
         let sha = value.Trim().ToLowerInvariant()
@@ -75,7 +99,10 @@ module ReleaseHistoryCommands =
         )
         |> Array.toList
 
-    let private requiredSha (digest: string) =
+    let private githubReleasesCodec = Json.compile GitHubReleaseSchema.releases
+
+    let private requiredSha (digest: string option) =
+        let digest = digest |> Option.defaultValue ""
         if String.IsNullOrWhiteSpace digest || not (digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)) then
             invalidOp "A LiveDocs release asset is missing its GitHub SHA-256 digest."
         let value = digest.Substring("sha256:".Length).ToLowerInvariant()
@@ -87,30 +114,46 @@ module ReleaseHistoryCommands =
         if String.IsNullOrWhiteSpace repository || repository.Split('/').Length <> 2 then
             invalidArg "repository" "GitHub repository must have the form owner/name."
         let repositoryName = repository.Split('/')[1]
-        use client = new HttpClient()
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("FsLiveDocs")
-        client.DefaultRequestHeaders.Accept.Add(MediaTypeWithQualityHeaderValue("application/vnd.github+json"))
-        match Environment.GetEnvironmentVariable "GH_TOKEN" |> Option.ofObj |> Option.filter (String.IsNullOrWhiteSpace >> not) with
-        | Some token -> client.DefaultRequestHeaders.Authorization <- AuthenticationHeaderValue("Bearer", token)
-        | None -> ()
-        let rec load page accumulated =
-            let uri = $"https://api.github.com/repos/{repository}/releases?per_page=100&page={page}"
-            use response = client.GetAsync(uri).GetAwaiter().GetResult()
-            response.EnsureSuccessStatusCode() |> ignore
-            let releases = JsonConvert.DeserializeObject<GitHubRelease array>(response.Content.ReadAsStringAsync().GetAwaiter().GetResult())
-            let releases = if isNull releases then [||] else releases
-            let combined = Array.append accumulated releases
-            if releases.Length = 100 then load (page + 1) combined else combined
-        load 1 [||]
-        |> Array.filter (fun release -> not release.Draft && not (String.IsNullOrWhiteSpace release.TagName))
-        |> Array.choose (fun release ->
+
+        // The token is read once and reused across every page, matching the original's one
+        // client-configured-once-then-paginated shape.
+        let work =
+            flow {
+                let! token =
+                    EnvironmentVariables.tryGet "GH_TOKEN"
+                    |> Flow.map (Option.filter (String.IsNullOrWhiteSpace >> not))
+
+                let rec load page accumulated =
+                    flow {
+                        let uri = $"https://api.github.com/repos/{repository}/releases?per_page=100&page={page}"
+                        let request =
+                            Http.get uri
+                            |> Request.userAgent "FsLiveDocs"
+                            |> Request.accept "application/vnd.github+json"
+                        let request = match token with Some value -> request |> Request.bearer value | None -> request
+                        let! text = Http.text request
+                        let releases = Json.deserialize githubReleasesCodec text
+                        let combined = accumulated @ releases
+                        if releases.Length = 100 then return! load (page + 1) combined else return combined
+                    }
+
+                return! load 1 []
+            }
+
+        let releases =
+            match work |> Flow.run LiveEnvironment.instance with
+            | Exit.Success releases -> releases
+            | Exit.Failure(Cause.Fail error) -> invalidOp $"Could not list GitHub releases for {repository}: {HttpError.describe error}"
+            | Exit.Failure cause -> invalidOp $"Could not list GitHub releases for {repository}: {cause}"
+
+        releases
+        |> List.filter (fun release -> not release.Draft && not (String.IsNullOrWhiteSpace release.TagName))
+        |> List.choose (fun release ->
             let version = if release.TagName.StartsWith 'v' then release.TagName.Substring 1 else release.TagName
             try
                 ReleaseCapsule.compareVersions version version |> ignore
                 let expectedName = $"{repositoryName}-{version}-livedocs.zip"
                 release.Assets
-                |> Option.ofObj
-                |> Option.defaultValue [||]
                 |> Array.tryFind (fun asset -> asset.Name.Equals(expectedName, StringComparison.OrdinalIgnoreCase))
                 |> Option.map (fun asset ->
                     ({ Version = version
@@ -118,7 +161,6 @@ module ReleaseHistoryCommands =
                        CapsuleUrl = Some asset.BrowserDownloadUrl
                        CapsuleSha256 = requiredSha asset.Digest }: ReleaseHistoryEntry))
             with :? InvalidOperationException -> None)
-        |> Array.toList
 
     let private discoveredEntries source =
         match source with
@@ -132,7 +174,7 @@ module ReleaseHistoryCommands =
 
     let sync (source: DiscoverySource) (indexPath: string) (expectedVersion: string option) (expectedUrl: string option) (expectedSha: string option) =
         let existing =
-            if File.Exists indexPath then (ReleaseCapsule.loadHistoryIndex indexPath).Entries
+            if fileExists indexPath then (ReleaseCapsule.loadHistoryIndex indexPath).Entries
             else []
         // The oldest committed entry is the repository's explicit compatibility floor. Capsules
         // predating that floor may use artifact contracts the current renderer intentionally does
@@ -167,29 +209,117 @@ module ReleaseHistoryCommands =
         ReleaseCapsule.loadHistoryIndex indexPath |> ignore
         updated
 
-    let private localTarget (output: string) (page: string) (target: string) =
+    /// Resolves a page-relative href to the local file it would materialize as, or None for an
+    /// external/non-local target. An unsafe path (one that would escape `output`) resolves to a
+    /// sentinel file instead, matching the guard `verify` relies on to report it as broken.
+    let private localTarget (output: string) (page: string) (target: string) : Flow<LiveEnvironment, FileSystemError, string option> =
         let target = target.Split([| '#'; '?' |], 2)[0]
         if String.IsNullOrWhiteSpace target
            || target.StartsWith("http:", StringComparison.OrdinalIgnoreCase)
            || target.StartsWith("https:", StringComparison.OrdinalIgnoreCase)
            || target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)
-           || target.StartsWith("data:", StringComparison.OrdinalIgnoreCase) then None
+           || target.StartsWith("data:", StringComparison.OrdinalIgnoreCase) then
+            Flow.succeed None
         else
-            let asFile (relative: string) =
+            let asFile (relative: string) : Flow<LiveEnvironment, FileSystemError, string> =
                 let path = Path.GetFullPath(Path.Combine(output, relative))
                 if path <> output && not (path.StartsWith(output + string Path.DirectorySeparatorChar, StringComparison.Ordinal)) then
-                    Path.Combine(output, ".livedocs-unsafe-link")
-                elif Directory.Exists path then Path.Combine(path, "index.html")
-                else path
-            if target.StartsWith '/' then
-                let relative = Uri.UnescapeDataString(target.TrimStart '/')
-                let direct = asFile relative
-                if File.Exists direct then Some direct
+                    Flow.succeed (Path.Combine(output, ".livedocs-unsafe-link"))
                 else
-                    let slash = relative.IndexOf '/'
-                    Some(asFile (if slash >= 0 then relative.Substring(slash + 1) else relative))
+                    FileSystem.directoryExists path
+                    |> Flow.map (fun isDirectory -> if isDirectory then Path.Combine(path, "index.html") else path)
+            if target.StartsWith '/' then
+                flow {
+                    let relative = Uri.UnescapeDataString(target.TrimStart '/')
+                    let! direct = asFile relative
+                    let! directExists = FileSystem.fileExists direct
+                    if directExists then
+                        return Some direct
+                    else
+                        let slash = relative.IndexOf '/'
+                        let! fallback = asFile (if slash >= 0 then relative.Substring(slash + 1) else relative)
+                        return Some fallback
+                }
             else
-                Some(asFile (Path.Combine(Path.GetDirectoryName page, Uri.UnescapeDataString target)))
+                asFile (Path.Combine(Path.GetDirectoryName page, Uri.UnescapeDataString target))
+                |> Flow.map Some
+
+    let private linkPattern = Regex("(?:href|src)=['\"]([^'\"]+)['\"]", RegexOptions.Compiled ||| RegexOptions.IgnoreCase)
+    let private setLinkPattern = Regex("<a[^>]*href=['\"]([^'\"]+)['\"][^>]*data-docs-set-link=['\"]([^'\"]+)['\"]", RegexOptions.Compiled ||| RegexOptions.IgnoreCase)
+
+    /// Every file-system fact `verify` needs about one rendered site: which pages exist, their
+    /// full text, and where every local link and documentation-set entry point on those pages
+    /// resolves to. Gathered as one Flow so `verify` touches the file system exactly once, then
+    /// validates a pure, already-materialized snapshot -- no file-system call after this point.
+    type private VerificationFacts =
+        { Pages: string list
+          EntryPoints: (ReleaseHistoryEntry * string * bool * string) list
+          ResolvedLinks: (string * string * bool option) list
+          SetLinkTargets: (ReleaseHistoryEntry * string * string * (string * bool * string option) option) list }
+
+    let private gatherVerificationFacts (index: ReleaseHistoryIndex) (root: string) (entryPoint: string -> string) =
+        flow {
+            let! pageArray = FileSystem.enumerateFiles root "*.html" SearchOption.AllDirectories
+            let pages = pageArray |> Seq.toList
+            let! pageTexts = pages |> Flow.traverse (fun page -> FileSystem.readAllText page |> Flow.map (fun text -> page, text))
+            let pageTextByPath = pageTexts |> Map.ofList
+
+            let! entryPoints =
+                index.Entries
+                |> Flow.traverse (fun entry ->
+                    let path = entryPoint entry.Version
+                    FileSystem.fileExists path
+                    |> Flow.map (fun exists -> entry, path, exists, (if exists then pageTextByPath |> Map.tryFind path |> Option.defaultValue "" else "")))
+
+            // Pagefind owns its own `pagefind/` directory and runs as a separate index step; its
+            // assets are not FsLiveDocs-generated links for this check to resolve.
+            let linkReferences =
+                [ for page, text in pageTexts do
+                      let relativePage = Path.GetRelativePath(root, page)
+                      for found in linkPattern.Matches(text) do
+                          let href = found.Groups[1].Value
+                          if not (href.Contains "pagefind/") then yield relativePage, href ]
+            let! resolvedLinks =
+                linkReferences
+                |> Flow.traverse (fun (relativePage, href) ->
+                    flow {
+                        let! target = localTarget root relativePage href
+                        match target with
+                        | Some path ->
+                            let! exists = FileSystem.fileExists path
+                            return relativePage, href, Some exists
+                        | None -> return relativePage, href, None
+                    })
+
+            let setLinkReferences =
+                [ for entry, path, exists, text in entryPoints do
+                      if exists then
+                          let landingRelative = Path.GetRelativePath(root, path)
+                          for found in setLinkPattern.Matches(text) do
+                              yield entry, found.Groups[1].Value, found.Groups[2].Value, landingRelative ]
+            let! setLinkTargets =
+                setLinkReferences
+                |> Flow.traverse (fun (entry, href, setId, landingRelative) ->
+                    flow {
+                        let! target = localTarget root landingRelative href
+                        match target with
+                        | Some path ->
+                            let! exists = FileSystem.fileExists path
+                            let! text =
+                                match exists, pageTextByPath |> Map.tryFind path with
+                                | true, Some cached -> Flow.succeed (Some cached)
+                                | true, None -> FileSystem.readAllText path |> Flow.map Some
+                                | false, _ -> Flow.succeed None
+                            return entry, href, setId, Some(path, exists, text)
+                        | None -> return entry, href, setId, None
+                    })
+
+            return
+                { Pages = pages
+                  EntryPoints = entryPoints
+                  ResolvedLinks = resolvedLinks
+                  SetLinkTargets = setLinkTargets }
+        }
 
     let verify (indexPath: string) (output: string) =
         let index = ReleaseCapsule.loadHistoryIndex indexPath
@@ -197,39 +327,34 @@ module ReleaseHistoryCommands =
         let entryPoint version =
             if version = index.CurrentVersion then Path.Combine(root, "index.html")
             else Path.Combine(root, "history", version, "index.html")
-        for entry in index.Entries do
-            let path = entryPoint entry.Version
-            if not (File.Exists path) then invalidOp $"Missing version entry point: {path}"
-        let links = Regex("(?:href|src)=['\"]([^'\"]+)['\"]", RegexOptions.Compiled ||| RegexOptions.IgnoreCase)
-        let failures = ResizeArray<string>()
-        for page in Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories) do
-            let relativePage = Path.GetRelativePath(root, page)
-            for found in links.Matches(File.ReadAllText page) do
-                let href = found.Groups[1].Value
-                // Pagefind owns its own `pagefind/` directory and runs as a separate index step;
-                // its assets are not FsLiveDocs-generated links for this check to resolve.
-                if not (href.Contains "pagefind/") then
-                    match localTarget root relativePage href with
-                    | Some target when not (File.Exists target) -> failures.Add($"{relativePage} -> {href}")
-                    | _ -> ()
-        if failures.Count > 0 then
-            let detail = failures |> Seq.truncate 50 |> String.concat Environment.NewLine
+
+        let facts = runOrRaise $"Could not verify generated pages under {root}" (gatherVerificationFacts index root entryPoint)
+
+        for _, path, exists, _ in facts.EntryPoints do
+            if not exists then invalidOp $"Missing version entry point: {path}"
+
+        let failures =
+            facts.ResolvedLinks
+            |> List.choose (fun (relativePage, href, exists) -> if exists = Some false then Some $"{relativePage} -> {href}" else None)
+        if not failures.IsEmpty then
+            let detail = failures |> List.truncate 50 |> String.concat Environment.NewLine
             invalidOp $"Generated links do not resolve:{Environment.NewLine}{detail}"
-        let setLinks = Regex("<a[^>]*href=['\"]([^'\"]+)['\"][^>]*data-docs-set-link=['\"]([^'\"]+)['\"]", RegexOptions.Compiled ||| RegexOptions.IgnoreCase)
-        for entry in index.Entries do
-            let landingPath = entryPoint entry.Version
-            let landingRelative = Path.GetRelativePath(root, landingPath)
-            for found in setLinks.Matches(File.ReadAllText landingPath) do
-                let href = found.Groups[1].Value
-                let setId = found.Groups[2].Value
-                match localTarget root landingRelative href with
-                | Some target when File.Exists target ->
-                    let identity = $"data-docs-set-id=\"{setId}\""
-                    if not (File.ReadAllText(target).Contains(identity, StringComparison.Ordinal)) then
-                        invalidOp $"Documentation-set entry point for {setId} in {entry.Version} has the wrong set identity: {target}"
-                | _ -> invalidOp $"Documentation-set entry point for {setId} in {entry.Version} is missing: {href}"
-        let landing = File.ReadAllText(entryPoint index.CurrentVersion)
+
+        for entry, href, setId, resolution in facts.SetLinkTargets do
+            match resolution with
+            | Some(target, true, Some text) ->
+                let identity = $"data-docs-set-id=\"{setId}\""
+                if not (text.Contains(identity, StringComparison.Ordinal)) then
+                    invalidOp $"Documentation-set entry point for {setId} in {entry.Version} has the wrong set identity: {target}"
+            | _ -> invalidOp $"Documentation-set entry point for {setId} in {entry.Version} is missing: {href}"
+
+        let landing =
+            facts.EntryPoints
+            |> List.tryFind (fun (entry, _, _, _) -> entry.Version = index.CurrentVersion)
+            |> Option.map (fun (_, _, _, text) -> text)
+            |> Option.defaultValue ""
         let positions = index.Entries |> List.map (fun entry -> landing.IndexOf($">{entry.Version}<", StringComparison.Ordinal))
         if positions |> List.exists (fun position -> position < 0) || positions <> List.sort positions then
             invalidOp "Version switcher is missing versions or is not newest-first."
-        Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories) |> Seq.length
+
+        List.length facts.Pages

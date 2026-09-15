@@ -2,11 +2,20 @@ namespace FsLiveDocs.Cli
 
 open System
 open System.IO
+open Axial
+open Axial.FileSystem
+open Reified
 open FsLiveDocs.Core
 open FsLiveDocs.Runner
+open FsLiveDocs.Core.Effects
+open FsLiveDocs.Core.Schema
 
 /// Owns release extraction, verification, renderer-neutral assembly, and capsule persistence.
 module internal ReleaseCapture =
+
+    let private run description flow = Run.orRaise FileSystemError.describe description flow
+
+    let private reportCodec = Json.compile ReleaseSchema.releaseCapsuleReport
 
     type Request =
         {
@@ -30,17 +39,7 @@ module internal ReleaseCapture =
           PlannedOutputPath: string
           DryRun: bool }
 
-    let private currentRevision () =
-        let startInfo = Diagnostics.ProcessStartInfo("git", "rev-parse HEAD")
-        startInfo.RedirectStandardOutput <- true
-        startInfo.RedirectStandardError <- true
-        startInfo.UseShellExecute <- false
-        use gitProcess = Diagnostics.Process.Start(startInfo)
-        let revision = gitProcess.StandardOutput.ReadToEnd().Trim()
-        gitProcess.WaitForExit()
-        if gitProcess.ExitCode <> 0 || String.IsNullOrWhiteSpace revision then
-            invalidOp "Release capture requires a Git commit so the capsule can record source provenance."
-        revision
+    let private currentRevision () = Git.currentRevision (Directory.GetCurrentDirectory())
 
     let private verifyExplicitCases projectPaths (pages: DocAnalysis.Page list) references =
         for projectPath in projectPaths do
@@ -180,12 +179,20 @@ module internal ReleaseCapture =
         let plannedOutputPath = Path.GetFullPath outputPath
         let publicReport = { report with Path = plannedOutputPath }
         if request.DryRun then
-            File.Delete actualOutputPath
+            run $"Could not remove the dry-run capsule at {actualOutputPath}" (FileSystem.deleteFile actualOutputPath)
             { Report = publicReport; ReportPath = None; PlannedOutputPath = plannedOutputPath; DryRun = true }
         else
             let reportPath = outputPath + ".report.json"
-            File.WriteAllText(reportPath, Newtonsoft.Json.JsonConvert.SerializeObject(publicReport, Newtonsoft.Json.Formatting.Indented, Serialization.jsonSettings))
+            let reportJson = Json.serialize reportCodec publicReport
+            let sha256Path = outputPath + ".sha256"
             // A bare-checksum sidecar lets a CI publish step register the capsule with
-            // `history add --sha256-file` instead of parsing tool output.
-            File.WriteAllText(outputPath + ".sha256", publicReport.Sha256.ToLowerInvariant() + "\n")
+            // `history add --sha256-file` instead of parsing tool output. Both writes are one
+            // Flow, run once -- not two independently-run operations -- so they share one
+            // execution boundary the way a caller composing this into a larger workflow expects.
+            let writeArtifacts =
+                flow {
+                    do! FileSystem.writeAllText reportPath reportJson
+                    do! FileSystem.writeAllText sha256Path (publicReport.Sha256.ToLowerInvariant() + "\n")
+                }
+            run $"Could not write the release report and checksum sidecar for {outputPath}" writeArtifacts
             { Report = publicReport; ReportPath = Some(Path.GetFullPath reportPath); PlannedOutputPath = plannedOutputPath; DryRun = false }

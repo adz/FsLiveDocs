@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <Compile Include="ProjectResolver.fs" />
+    <Compile Include="CheckerPool.fs" />
+    <Compile Include="MsBuild.fs" />
     <Compile Include="DocumentationCompiler.fs" />
     <Compile Include="SemanticExtractor.fs" />
     <Compile Include="FsiTranscriptRunner.fs" />
@@ -26,7 +28,10 @@
 
   <ItemGroup>
     <PackageReference Include="FSharp.Compiler.Service" Version="43.12.201" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <!-- Axial/Axial.Process/Axial.Console/Axial.FileSystem/Axial.PlatformService come transitively
+         from FsLiveDocs.Core, which owns the shared FsLiveDocs.Core.Effects module. Axial.Layers
+         is the one Axial package genuinely local to this project (CheckerPool.fs's pool). -->
+    <PackageReference Include="Axial.Layers" Version="0.9.1" />
   </ItemGroup>
 
 </Project>

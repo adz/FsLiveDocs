@@ -13,6 +13,7 @@
   <ItemGroup>
     <Compile Include="Presentation.fs" />
     <Compile Include="View.fs" />
+    <Compile Include="Rendering/PageRenderer.fs" />
     <Compile Include="SiteBuilder.fs" />
     <Compile Include="Library.fs" />
   </ItemGroup>

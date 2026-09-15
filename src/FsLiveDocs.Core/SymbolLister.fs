@@ -9,6 +9,9 @@ open System.Text.RegularExpressions
 open System.Xml.Linq
 open System.Reflection
 open System.Text.Json
+open Axial
+open Axial.FileSystem
+open FsLiveDocs.Core.Effects
 
 /// <summary>Provides capabilities to scan F# projects and extract symbols using FSharp.Formatting.</summary>
 /// <example name="ExtractExamplesExample" data-livedocs="snapshot">
@@ -95,15 +98,22 @@ module SymbolLister =
             |> Option.map (fun element -> documentationNodes (element.Nodes()))
             |> Option.defaultValue []
 
-    let private ancestors directory =
-        let rec loop current =
-            seq {
-                if not (String.IsNullOrWhiteSpace current) then
-                    yield current
-                    let parent = Directory.GetParent(current)
-                    if not (isNull parent) then yield! loop parent.FullName
-            }
-        loop directory
+    /// <summary>
+    /// A directory and each of its ancestors, nearest first, composed as one Flow so callers
+    /// can fold it into their own composed file-system work rather than running it separately.
+    /// </summary>
+    let rec private ancestors directory : Flow<LiveEnvironment, FileSystemError, string list> =
+        flow {
+            if String.IsNullOrWhiteSpace directory then
+                return []
+            else
+                let! parent = FileSystem.getParent directory
+                match parent with
+                | Some parentDirectory ->
+                    let! rest = ancestors parentDirectory
+                    return directory :: rest
+                | None -> return [ directory ]
+        }
 
     let private rawXml (comment: ApiDocComment) =
         match comment.Xml with
@@ -519,41 +529,67 @@ module SymbolLister =
     let private getPackageReferenceDirectories (projectPath: string) =
         let projectDir = Path.GetDirectoryName(projectPath)
         let projectName = Path.GetFileNameWithoutExtension(projectPath)
-        let sharedAssets =
-            ancestors projectDir
-            |> Seq.map (fun root -> Path.Combine(root, "artifacts", "obj", projectName, "project.assets.json"))
-            |> Seq.tryFind File.Exists
-            |> Option.defaultValue ""
         let localAssets = Path.Combine(projectDir, "obj", "project.assets.json")
 
-        [ sharedAssets; localAssets ]
-        |> List.tryFind File.Exists
-        |> Option.map (fun assetsPath ->
-            use document = JsonDocument.Parse(File.ReadAllText(assetsPath))
-            let root = document.RootElement
-            let packageRoots =
-                root.GetProperty("packageFolders").EnumerateObject()
-                |> Seq.map (fun property -> property.Name)
-                |> Seq.toList
+        let resolution =
+            flow {
+                let! ancestorDirectories = ancestors projectDir
+                let candidateSharedPaths =
+                    ancestorDirectories
+                    |> List.map (fun root -> Path.Combine(root, "artifacts", "obj", projectName, "project.assets.json"))
 
-            root.GetProperty("targets").EnumerateObject()
-            |> Seq.collect (fun target -> target.Value.EnumerateObject())
-            |> Seq.collect (fun library ->
-                let parts = library.Name.Split('/')
-                let mutable compile = Unchecked.defaultof<JsonElement>
-                if parts.Length = 2 && library.Value.TryGetProperty("compile", &compile) then
-                    compile.EnumerateObject()
-                    |> Seq.collect (fun asset ->
-                        if asset.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) then
-                            packageRoots
-                            |> Seq.map (fun packageRoot ->
-                                Path.Combine(packageRoot, parts.[0].ToLowerInvariant(), parts.[1], Path.GetDirectoryName(asset.Name)))
-                        else Seq.empty)
-                else Seq.empty)
-            |> Seq.filter Directory.Exists
-            |> Seq.distinct
-            |> Seq.toList)
-        |> Option.defaultValue []
+                let! sharedExistence =
+                    candidateSharedPaths
+                    |> Flow.traverse (fun path -> FileSystem.fileExists path |> Flow.map (fun exists -> path, exists))
+                let sharedAssets = sharedExistence |> List.tryPick (fun (path, exists) -> if exists then Some path else None)
+
+                let! assetsPath =
+                    match sharedAssets with
+                    | Some path -> Flow.succeed (Some path)
+                    | None ->
+                        FileSystem.fileExists localAssets
+                        |> Flow.map (fun exists -> if exists then Some localAssets else None)
+
+                match assetsPath with
+                | None -> return []
+                | Some assetsPath ->
+                    let! text = FileSystem.readAllText assetsPath
+                    use document = JsonDocument.Parse(text)
+                    let root = document.RootElement
+                    let packageRoots =
+                        root.GetProperty("packageFolders").EnumerateObject()
+                        |> Seq.map (fun property -> property.Name)
+                        |> Seq.toList
+
+                    let candidateDirectories =
+                        root.GetProperty("targets").EnumerateObject()
+                        |> Seq.collect (fun target -> target.Value.EnumerateObject())
+                        |> Seq.collect (fun library ->
+                            let parts = library.Name.Split('/')
+                            let mutable compile = Unchecked.defaultof<JsonElement>
+                            if parts.Length = 2 && library.Value.TryGetProperty("compile", &compile) then
+                                compile.EnumerateObject()
+                                |> Seq.collect (fun asset ->
+                                    if asset.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) then
+                                        packageRoots
+                                        |> Seq.map (fun packageRoot ->
+                                            Path.Combine(packageRoot, parts.[0].ToLowerInvariant(), parts.[1], Path.GetDirectoryName(asset.Name)))
+                                    else Seq.empty)
+                            else Seq.empty)
+                        |> Seq.distinct
+                        |> Seq.toList
+
+                    let! existence =
+                        candidateDirectories
+                        |> Flow.traverse (fun dir -> FileSystem.directoryExists dir |> Flow.map (fun exists -> dir, exists))
+
+                    return
+                        existence
+                        |> List.filter snd
+                        |> List.map fst
+                        |> List.distinct
+            }
+        Run.orRaise FileSystemError.describe $"Could not resolve package reference directories for {projectPath}" resolution
 
     /// <summary>
     /// Loads an assembly by path, reusing an already-loaded assembly with the same simple name instead
@@ -683,31 +719,65 @@ module SymbolLister =
         let packageName = getPackageName projectPath
         let projDir = Path.GetDirectoryName(projectPath)
         
-        let searchPaths =
-            [ yield Path.Combine(projDir, "bin")
-              for root in ancestors projDir do
-                  yield Path.Combine(root, "artifacts", "bin", projName)
-                  yield Path.Combine(root, "artifacts", "bin") ]
-            |> List.distinct
+        let discovery =
+            flow {
+                let! ancestorDirectories = ancestors projDir
+                let searchPaths =
+                    [ yield Path.Combine(projDir, "bin")
+                      for root in ancestorDirectories do
+                          yield Path.Combine(root, "artifacts", "bin", projName)
+                          yield Path.Combine(root, "artifacts", "bin") ]
+                    |> List.distinct
 
-        let dllPath = 
-            searchPaths 
-            |> List.filter Directory.Exists
-            |> List.collect (fun path ->
-                Directory.GetFiles(path, $"{assemblyName}.dll", SearchOption.AllDirectories)
-                |> Array.filter (fun dll -> File.Exists(Path.ChangeExtension(dll, ".xml")))
-                |> Array.toList)
-            |> List.distinct
-            |> List.sortByDescending File.GetLastWriteTimeUtc
-            |> List.tryHead
-            |> Option.defaultValue ""
+                let! existingSearchPaths =
+                    searchPaths
+                    |> Flow.traverse (fun path ->
+                        FileSystem.directoryExists path
+                        |> Flow.map (fun exists -> if exists then Some path else None))
+                let existingSearchPaths = existingSearchPaths |> List.choose id
 
-        if String.IsNullOrEmpty dllPath || not (File.Exists dllPath) then
+                let! candidateLists =
+                    existingSearchPaths
+                    |> Flow.traverse (fun path -> FileSystem.getFiles path $"{assemblyName}.dll" SearchOption.AllDirectories)
+                let candidates = candidateLists |> List.collect Array.toList |> List.distinct
+
+                let! documentedCandidates =
+                    candidates
+                    |> Flow.traverse (fun dll ->
+                        FileSystem.fileExists (Path.ChangeExtension(dll, ".xml"))
+                        |> Flow.map (fun hasXml -> if hasXml then Some dll else None))
+                let documentedCandidates = documentedCandidates |> List.choose id
+
+                let! withTimestamps =
+                    documentedCandidates
+                    |> Flow.traverse (fun dll -> FileSystem.getFileLastWriteTimeUtc dll |> Flow.map (fun writtenAt -> dll, writtenAt))
+
+                let dllPath =
+                    withTimestamps
+                    |> List.sortByDescending snd
+                    |> List.tryHead
+                    |> Option.map fst
+                    |> Option.defaultValue ""
+
+                let! dllExists =
+                    if String.IsNullOrEmpty dllPath then Flow.succeed false else FileSystem.fileExists dllPath
+
+                let! xmlExists =
+                    if String.IsNullOrEmpty dllPath then Flow.succeed false
+                    else FileSystem.fileExists (Path.ChangeExtension(dllPath, ".xml"))
+
+                return dllPath, dllExists, xmlExists
+            }
+
+        let dllPath, dllExists, xmlExists =
+            Run.orRaise FileSystemError.describe $"Could not discover the built assembly for project {projName}" discovery
+
+        if String.IsNullOrEmpty dllPath || not dllExists then
             return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }, []
         else
             // FSharp.Formatting REQUIRES the .xml file to be next to the .dll
             let xmlPath = Path.ChangeExtension(dllPath, ".xml")
-            if not (File.Exists xmlPath) then
+            if not xmlExists then
                 printfn "Warning: Skipping project %s because associated XML file was not found at %s" projName xmlPath
                 return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }, []
             else

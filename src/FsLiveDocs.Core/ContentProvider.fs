@@ -9,6 +9,9 @@ open Markdig.Renderers.Html
 open Markdig.Extensions.CustomContainers
 open YamlDotNet.Serialization
 open YamlDotNet.Serialization.NamingConventions
+open Axial
+open Axial.FileSystem
+open FsLiveDocs.Core.Effects
 
 /// <summary>Provides capabilities to load, parse, and resolve Markdown documentation pages.</summary>
 /// <example name="ResolveSnippetExample" data-livedocs="snapshot">
@@ -65,33 +68,46 @@ module ContentProvider =
                 slug stem + ".html"
         String.concat "/" (directories @ [ fileName ])
 
+    /// <summary>Copies one file to its destination, creating the destination directory first if needed.</summary>
+    let private copyFileEnsuringDestination (source: string) (destination: string) =
+        flow {
+            let destinationDirectory = Path.GetDirectoryName(destination)
+            let! destinationDirectoryExists = FileSystem.directoryExists destinationDirectory
+            if not destinationDirectoryExists then
+                do! FileSystem.createDirectory destinationDirectory
+            do! FileSystem.copyFile source destination true
+        }
 
     /// <summary>Copies consumer-owned non-Markdown files from the docs tree into the generated site.</summary>
     let copyStaticFiles (docsDir: string) (outputDir: string) =
-        if Directory.Exists(docsDir) then
-            Directory.GetFiles(docsDir, "*", SearchOption.AllDirectories)
-            |> Array.filter (fun file -> not (Path.GetExtension(file).Equals(".md", System.StringComparison.OrdinalIgnoreCase)))
-            |> Array.iter (fun source ->
-                let relative = Path.GetRelativePath(docsDir, source)
-                let destination = Path.Combine(outputDir, relative)
-                let destinationDirectory = Path.GetDirectoryName(destination)
-                if not (Directory.Exists(destinationDirectory)) then Directory.CreateDirectory(destinationDirectory) |> ignore
-                File.Copy(source, destination, true))
+        let work =
+            flow {
+                let! docsDirExists = FileSystem.directoryExists docsDir
+                if docsDirExists then
+                    let! files = FileSystem.getFiles docsDir "*" SearchOption.AllDirectories
+                    let staticFiles =
+                        files
+                        |> Array.filter (fun file -> not (Path.GetExtension(file).Equals(".md", System.StringComparison.OrdinalIgnoreCase)))
+                    for source in staticFiles do
+                        let relative = Path.GetRelativePath(docsDir, source)
+                        let destination = Path.Combine(outputDir, relative)
+                        do! copyFileEnsuringDestination source destination
+            }
+        Run.orRaise FileSystemError.describe $"Could not copy static files from {docsDir}" work
 
     /// <summary>Copies the explicitly owned static files of one documentation set beneath its route.</summary>
     let copyStaticFilesForSet (sourceDir: string) (routePrefix: string) (files: string list) (outputDir: string) =
-        for source in files do
-            let relative = Path.GetRelativePath(sourceDir, source)
+        let work =
+            flow {
+                for source in files do
+                    let relative = Path.GetRelativePath(sourceDir, source)
 
-            let destination =
-                Path.Combine(outputDir, routePrefix.Replace('/', Path.DirectorySeparatorChar), relative)
+                    let destination =
+                        Path.Combine(outputDir, routePrefix.Replace('/', Path.DirectorySeparatorChar), relative)
 
-            let destinationDirectory = Path.GetDirectoryName(destination)
-
-            if not (Directory.Exists destinationDirectory) then
-                Directory.CreateDirectory(destinationDirectory) |> ignore
-
-            File.Copy(source, destination, true)
+                    do! copyFileEnsuringDestination source destination
+            }
+        Run.orRaise FileSystemError.describe $"Could not copy static files for route '{routePrefix}'" work
 
     let defaultTitle (filePath: string) =
         let stem = Path.GetFileNameWithoutExtension(filePath) |> stripOrderingPrefix
@@ -302,13 +318,20 @@ module ContentProvider =
     let entityIdsOf (entities: EntityModel list) = collectEntityIds entities
 
     let private markdownFilesIn (docsDir: string) =
-        if Directory.Exists(docsDir) then
-            Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
-            |> Array.filter (fun f ->
-                not (f.Contains($"{Path.DirectorySeparatorChar}api{Path.DirectorySeparatorChar}")))
-            |> Array.toList
-        else
-            []
+        let work =
+            flow {
+                let! exists = FileSystem.directoryExists docsDir
+                if exists then
+                    let! files = FileSystem.getFiles docsDir "*.md" SearchOption.AllDirectories
+                    return
+                        files
+                        |> Array.filter (fun f ->
+                            not (f.Contains($"{Path.DirectorySeparatorChar}api{Path.DirectorySeparatorChar}")))
+                        |> Array.toList
+                else
+                    return []
+            }
+        Run.orRaise FileSystemError.describe $"Could not list Markdown files under {docsDir}" work
 
     let private collectGuideOutputs (docsDir: string) =
         markdownFilesIn docsDir |> List.map (outputPathForFile docsDir)
@@ -318,10 +341,39 @@ module ContentProvider =
         let apiOutputs = collectEntityIds package.Entities |> List.map (fun id -> $"api/{id}.html")
         Set.ofList (guideOutputs @ apiOutputs @ [ "index.html"; "api.html" ])
 
+    /// <summary>
+    /// The content of every <c>&lt;snippet:*&gt;</c>-delimited region across a source tree's F# files,
+    /// scanned once so a page with several <c>{{&lt; snippet &gt;}}</c> shortcodes reads each file only once.
+    /// </summary>
+    let private loadSourceSnippetFiles (sourceDir: string) =
+        let work =
+            flow {
+                let! files = FileSystem.getFiles sourceDir "*.fs" SearchOption.AllDirectories
+                return!
+                    files
+                    |> Array.toList
+                    |> Flow.traverse (fun f -> FileSystem.readAllLines f |> Flow.map (fun lines -> f, lines))
+            }
+        Run.orRaise FileSystemError.describe $"Could not scan {sourceDir} for source snippets" work
+
+    let private findSourceSnippet (id: string) (files: (string * string array) list) =
+        files
+        |> List.tryPick (fun (_, lines) ->
+            let start = Array.tryFindIndex (fun (l: string) -> l.Contains($"<snippet:{id}>")) lines
+            let stop = Array.tryFindIndex (fun (l: string) -> l.Contains($"</snippet:{id}>")) lines
+            match start, stop with
+            | Some s, Some e -> Some(String.concat "\n" lines.[s + 1 .. e - 1])
+            | _ -> None)
+
     /// <summary>Expands source and XML-example transclusions while preserving semantic cross-references.</summary>
     let expandTransclusions (body: string) (sourceDir: string) (package: PackageModel) =
         let snippetPattern = @"{{<\s*snippet\s+(?<args>[^>]+)>}}"
         let examplePattern = exampleShortcodePattern
+
+        // Scanned once up front (only when the page actually transcludes a snippet) so the
+        // file-system work composes into a single Flow run rather than one run per shortcode match.
+        let sourceSnippetFiles =
+            if Regex.IsMatch(body, snippetPattern) then loadSourceSnippetFiles sourceDir else []
 
         withProtectedCodeSegments body "FSLIVEDOCS_CODE" (fun protectedBody ->
             // 1. Resolve {{< snippet id="X" >}}
@@ -333,16 +385,7 @@ module ContentProvider =
                         let found = Regex.Match(args, pattern)
                         if found.Success then Some found.Groups.["value"].Value else None
                     let id = attribute "id" |> Option.defaultWith (fun () -> invalidOp "A snippet shortcode requires id=\"...\".")
-                    let files = Directory.GetFiles(sourceDir, "*.fs", SearchOption.AllDirectories)
-                    let snippet =
-                        files |> Seq.tryPick (fun f ->
-                            let lines = File.ReadAllLines(f)
-                            let start = Array.tryFindIndex (fun (l: string) -> l.Contains($"<snippet:{id}>")) lines
-                            let stop = Array.tryFindIndex (fun (l: string) -> l.Contains($"</snippet:{id}>")) lines
-                            match start, stop with
-                            | Some s, Some e -> Some (String.concat "\n" lines.[s+1..e-1])
-                            | _ -> None
-                        )
+                    let snippet = findSourceSnippet id sourceSnippetFiles
                     match snippet with
                     | Some s ->
                         let mode = attribute "mode" |> Option.defaultValue ""
@@ -567,8 +610,7 @@ module ContentProvider =
         |> Seq.mapi (fun index html -> $"<!--fslivedocs-semantic-placeholder:{index}-->", html)
         |> Seq.fold (fun (current: string) (placeholder, html) -> current.Replace(placeholder, html)) rendered
 
-    let private loadMarkdownPage (context: MarkdownContext) (filePath: string) (outputPath: string) =
-        let raw = File.ReadAllText(filePath)
+    let private loadMarkdownPage (context: MarkdownContext) (filePath: string) (outputPath: string) (raw: string) =
         match parseFrontMatter raw with
         | Some (metadata, body) ->
             let contentHtml = resolveMarkdown context filePath body
@@ -600,6 +642,8 @@ module ContentProvider =
     /// <param name="allowedOutputs">The set of known output pages used to validate local links.</param>
     /// <returns>A processed content page ready for rendering.</returns>
     let loadPage (filePath: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (currentOutputPath: string) (allowedOutputs: Set<string>) =
+        let raw =
+            Run.orRaise FileSystemError.describe $"Could not read Markdown page {filePath}" (FileSystem.readAllText filePath)
         loadMarkdownPage
             { DocsDir = Path.GetDirectoryName(Path.GetFullPath(filePath))
               SourceDir = sourceDir
@@ -612,6 +656,7 @@ module ContentProvider =
               SemanticCode = SemanticCode.defaults }
             filePath
             currentOutputPath
+            raw
 
     /// <summary>Inputs for scanning one documentation set's Markdown into rendered pages.</summary>
     type DocsSetScan =
@@ -650,6 +695,14 @@ module ContentProvider =
         (semanticCode: SemanticCode.Options)
         (files: string list)
         =
+        // Every file's raw text is read up front as one composed Flow, run once, rather than once
+        // per file inside the map below.
+        let rawByFile =
+            let work =
+                files |> Flow.traverse (fun f -> FileSystem.readAllText f |> Flow.map (fun raw -> f, raw))
+            Run.orRaise FileSystemError.describe $"Could not read Markdown pages under {docsDir}" work
+            |> Map.ofList
+
         files
         |> List.toArray
         |> Array.map (fun f ->
@@ -670,6 +723,7 @@ module ContentProvider =
                       SemanticCode = semanticCode }
                     f
                     outputPath
+                    rawByFile.[f]
 
             { page with
                 SectionOrder = sectionOrderFor docsDir f })
@@ -684,14 +738,24 @@ module ContentProvider =
 
     /// <summary>Scans guides and semantically formats F# fences using the supplied assembly references.</summary>
     let scanDocsWithOptions (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (semanticCode: SemanticCode.Options) =
-        if Directory.Exists(docsDir) then
+        let work =
+            flow {
+                let! exists = FileSystem.directoryExists docsDir
+                if exists then
+                    let! files = FileSystem.getFiles docsDir "*.md" SearchOption.AllDirectories
+                    return
+                        files
+                        |> Array.filter (fun f -> not (f.Contains("/api/")))
+                        |> Array.toList
+                        |> Some
+                else
+                    return None
+            }
+        match Run.orRaise FileSystemError.describe $"Could not scan {docsDir} for guides" work with
+        | None -> []
+        | Some files ->
             let allowedOutputs = collectAllowedOutputs docsDir package
-            Directory.GetFiles(docsDir, "*.md", SearchOption.AllDirectories)
-            |> Array.filter (fun f -> not (f.Contains("/api/")))
-            |> Array.toList
-            |> scanFileList docsDir sourceDir package rootPath "" "" allowedOutputs Map.empty semanticCode
-        else
-            []
+            files |> scanFileList docsDir sourceDir package rootPath "" "" allowedOutputs Map.empty semanticCode
 
     /// <summary>Scans one documentation set's Markdown, honoring its route prefix and shared allowed outputs.</summary>
     let scanDocsSet (scan: DocsSetScan) =
@@ -729,22 +793,34 @@ module ContentProvider =
         (apiRoutes: Map<string, string>)
         (_semanticCode: SemanticCode.Options)
         =
-        if not (Directory.Exists(apiDocsDir)) then
-            package
-        else
+        let apiDocsWork =
+            flow {
+                let! exists = FileSystem.directoryExists apiDocsDir
+                if exists then
+                    let! files = FileSystem.getFiles apiDocsDir "*.md" SearchOption.TopDirectoryOnly
+                    let! withRaw =
+                        files
+                        |> Array.toList
+                        |> Flow.traverse (fun f -> FileSystem.readAllText f |> Flow.map (fun raw -> f, raw))
+                    return Some withRaw
+                else
+                    return None
+            }
+
+        match Run.orRaise FileSystemError.describe $"Could not read API documentation under {apiDocsDir}" apiDocsWork with
+        | None -> package
+        | Some docFiles ->
             let rec updateEntity (e: EntityModel) (docs: Map<string, DocumentationNode list>) =
                 let summary = docs |> Map.tryFind e.Id |> Option.defaultValue e.Summary
-                { e with 
+                { e with
                     Summary = summary
                     Entities = e.Entities |> List.map (fun child -> updateEntity child docs) }
 
-            let docFiles = Directory.GetFiles(apiDocsDir, "*.md")
-            let docsMap = 
-                docFiles 
-                |> Array.map (fun f -> 
+            let docsMap =
+                docFiles
+                |> List.map (fun (f, raw) ->
                     let id = Path.GetFileNameWithoutExtension(f)
                     let apiOutputPath = routePrefix + $"api/{id}.html"
-                    let raw = File.ReadAllText(f)
                     let body = parseFrontMatter raw |> Option.map snd |> Option.defaultValue raw
 
                     let apiDepth =
@@ -763,7 +839,7 @@ module ContentProvider =
                     let rewritten = rewriteLocalLinks apiOutputPath allowedOutputs expanded
                     validateLinks apiOutputPath allowedOutputs rewritten
                     id, [ Documentation.markdown rewritten ])
-                |> Map.ofArray
+                |> Map.ofList
             
             { package with Entities = package.Entities |> List.map (fun e -> updateEntity e docsMap) }
 
