@@ -8,6 +8,7 @@ open FSharp.Compiler.Symbols
 open System.Text.RegularExpressions
 open System.Xml.Linq
 open System.Reflection
+open System.Runtime.Loader
 open System.Text.Json
 open Axial
 open Axial.FileSystem
@@ -591,68 +592,69 @@ module SymbolLister =
             }
         Run.orRaise FileSystemError.describe $"Could not resolve package reference directories for {projectPath}" resolution
 
-    /// <summary>
-    /// Loads an assembly by path, reusing an already-loaded assembly with the same simple name instead
-    /// of loading it again.
-    /// </summary>
-    /// <remarks>
-    /// A dependency shared by several audited projects (each with its own copy in its own output
-    /// directory) can be present at a different version after a release build. The runtime's
-    /// default load context still refuses a second load with that simple name from a different path,
-    /// so scenario discovery must reuse the assembly already loaded into that context. Scenario
-    /// discovery reads only metadata and does not execute the target assembly.
-    /// </remarks>
-    let private loadAssemblyByIdentity (dllPath: string) =
-        let name = AssemblyName.GetAssemblyName(dllPath)
-        AppDomain.CurrentDomain.GetAssemblies()
-        |> Array.tryFind (fun loaded ->
-            not loaded.IsDynamic
-            && loaded.GetName().Name = name.Name)
-        |> Option.defaultWith (fun () -> Assembly.LoadFrom(dllPath))
+    /// Loads a documented assembly into an isolated collectible context. The tool itself uses
+    /// Reified, FSharp.Core, and other libraries that a documented project may reference at a
+    /// different version; loading that project into the default context incorrectly binds it to
+    /// the tool's copies before scenario metadata can be read.
+    type private ScenarioLoadContext(componentPath: string) =
+        inherit AssemblyLoadContext(isCollectible = true)
+        let resolver = AssemblyDependencyResolver(componentPath)
+        let directory = Path.GetDirectoryName(componentPath)
+
+        override this.Load(name: AssemblyName) =
+            match resolver.ResolveAssemblyToPath name with
+            | null ->
+                let candidate = Path.Combine(directory, name.Name + ".dll")
+                if File.Exists candidate then this.LoadFromAssemblyPath candidate else null
+            | path -> this.LoadFromAssemblyPath path
 
     let private extractScenariosFromAssembly (dllPath: string) =
         let scenarioAttributeName = "FsLiveDocs.DocScenarioAttribute"
-        let assembly = loadAssemblyByIdentity dllPath
-        let types =
-            try
-                assembly.GetTypes() |> Array.toList
-            with :? ReflectionTypeLoadException as ex ->
-                ex.Types |> Array.choose (fun t -> if isNull t then None else Some t) |> Array.toList
+        let context = ScenarioLoadContext(dllPath)
+        try
+            let assembly = context.LoadFromAssemblyPath(dllPath)
+            let types =
+                try
+                    assembly.GetTypes() |> Array.toList
+                with :? ReflectionTypeLoadException as ex ->
+                    ex.Types |> Array.choose (fun t -> if isNull t then None else Some t) |> Array.toList
 
-        types
-        |> List.collect (fun t ->
-            try
-                t.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static ||| BindingFlags.Instance ||| BindingFlags.DeclaredOnly)
-                |> Array.toList
-                |> List.choose (fun m ->
-                    try
-                        m.GetCustomAttributesData()
-                        |> Seq.tryFind (fun cad -> cad.AttributeType.FullName = scenarioAttributeName)
-                        |> Option.bind (fun cad ->
-                            let scenarioName =
-                                cad.ConstructorArguments
-                                |> Seq.tryHead
-                                |> Option.map (fun arg -> string arg.Value)
-                                |> Option.defaultValue ""
+            types
+            |> List.collect (fun t ->
+                try
+                    t.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static ||| BindingFlags.Instance ||| BindingFlags.DeclaredOnly)
+                    |> Array.toList
+                    |> List.choose (fun m ->
+                        try
+                            m.GetCustomAttributesData()
+                            |> Seq.tryFind (fun cad -> cad.AttributeType.FullName = scenarioAttributeName)
+                            |> Option.bind (fun cad ->
+                                let scenarioName =
+                                    cad.ConstructorArguments
+                                    |> Seq.tryHead
+                                    |> Option.map (fun arg -> string arg.Value)
+                                    |> Option.defaultValue ""
 
-                            if String.IsNullOrWhiteSpace scenarioName then None
-                            else
-                                let typeName =
-                                    if String.IsNullOrWhiteSpace t.FullName then t.Name else t.FullName
+                                if String.IsNullOrWhiteSpace scenarioName then None
+                                else
+                                    let typeName =
+                                        if String.IsNullOrWhiteSpace t.FullName then t.Name else t.FullName
 
-                                Some {
-                                    Name = scenarioName
-                                    MethodId = $"{typeName.Replace('+', '.')}.{m.Name}"
-                                })
-                    with
-                    | :? FileNotFoundException
-                    | :? FileLoadException
-                    | :? TypeLoadException -> None)
-            with
-            | :? FileNotFoundException
-            | :? FileLoadException
-            | :? TypeLoadException -> [])
-        |> List.distinctBy (fun s -> s.Name)
+                                    Some {
+                                        Name = scenarioName
+                                        MethodId = $"{typeName.Replace('+', '.')}.{m.Name}"
+                                    })
+                        with
+                        | :? FileNotFoundException
+                        | :? FileLoadException
+                        | :? TypeLoadException -> None)
+                with
+                | :? FileNotFoundException
+                | :? FileLoadException
+                | :? TypeLoadException -> [])
+            |> List.distinctBy (fun scenario -> scenario.Name)
+        finally
+            context.Unload()
 
     /// <summary>Groups flattened entities into a hierarchical tree based on their IDs.</summary>
     let reconstructHierarchy (entities: EntityModel list) =
