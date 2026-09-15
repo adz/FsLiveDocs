@@ -135,10 +135,7 @@ module FsiTranscriptRunner =
 
         output |> Seq.toList
 
-    let private runFsiTranscript setupCount (blocks: string list) =
-        let session, outStream, errStream = createSession ()
-        use session = session
-
+    let private evalTranscript session outStream errStream setupCount (blocks: string list) =
         blocks
         |> List.filter (fun block -> not (String.IsNullOrWhiteSpace block))
         |> List.mapi (fun index block ->
@@ -147,17 +144,29 @@ module FsiTranscriptRunner =
         |> List.collect id
         |> String.concat "\n"
 
-    let runExample (context: DocTestExecutionContext) =
+    let private script context =
         let transcript = ExampleTranscript.parse context.Example.Content
-        let scenarioCall =
-            context.Scenario
-            |> Option.map (fun s -> $"{s.MethodId}()")
-        let scriptBlocks =
-            [
-                buildLoadScript context.Project context.References []
-            ]
+        let scenarioCall = context.Scenario |> Option.map (fun scenario -> $"{scenario.MethodId}()")
+        let blocks =
+            [ buildLoadScript context.Project context.References [] ]
             @ (scenarioCall |> Option.toList)
             @ transcript.Interactions
+        transcript, scenarioCall, blocks
 
-        let output = runFsiTranscript (1 + (if scenarioCall.IsSome then 1 else 0)) scriptBlocks
+    let runExample (context: DocTestExecutionContext) =
+        let transcript, scenarioCall, blocks = script context
+        let session, outStream, errStream = createSession ()
+        use session = session
+        let output = evalTranscript session outStream errStream (1 + (if scenarioCall.IsSome then 1 else 0)) blocks
         output, transcript.ExpectedOutput, transcript.DisplayText
+
+    /// Runs a project's independent documentation examples in one compiler session. Definitions
+    /// from later FSI interactions shadow earlier ones, while output is sliced per example.
+    let runExamples (contexts: DocTestExecutionContext list) =
+        let session, outStream, errStream = createSession ()
+        use session = session
+        contexts
+        |> List.map (fun context ->
+            let transcript, scenarioCall, blocks = script context
+            let output = evalTranscript session outStream errStream (1 + (if scenarioCall.IsSome then 1 else 0)) blocks
+            output, transcript.ExpectedOutput, transcript.DisplayText)

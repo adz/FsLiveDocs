@@ -84,25 +84,26 @@ module DocTestRunner =
         else
             let examples = getSnapshotExamples package.Entities
 
-            let results =
+            let contexts =
                 examples
-                |> List.map (fun ex ->
+                |> List.map (fun example ->
                     let scenario =
-                        ex.Scenario
-                        |> Option.bind (fun sName -> package.Scenarios |> List.tryFind (fun s -> s.Name = sName))
+                        example.Scenario
+                        |> Option.bind (fun name -> package.Scenarios |> List.tryFind (fun candidate -> candidate.Name = name))
+                    ({
+                        Project = project
+                        References = references
+                        Scenario = scenario
+                        Example = example
+                    }: FsiTranscriptRunner.DocTestExecutionContext))
 
-                    let output, expected, source =
-                        FsiTranscriptRunner.runExample
-                            {
-                                Project = project
-                                References = references
-                                Scenario = scenario
-                                Example = ex
-                            }
+            let results =
+                (examples, FsiTranscriptRunner.runExamples contexts)
+                ||> List.map2 (fun example (output, expected, source) ->
                     let actual = output.Trim()
                     {
-                        Name = ex.Name
-                        Scenario = ex.Scenario
+                        Name = example.Name
+                        Scenario = example.Scenario
                         Source = source
                         ExpectedOutput = expected
                         ActualOutput = actual

@@ -206,10 +206,10 @@ module ReleaseCapsule =
     let private historyIndexCodec = Json.compile ReleaseSchema.releaseHistoryIndex
 
     let private serializeWith codec value =
-        Json.serialize codec value |> Encoding.UTF8.GetBytes
+        Json.serializeBytes codec value
 
     let private deserializeWith codec (bytes: byte array) =
-        Json.deserialize codec (Encoding.UTF8.GetString bytes)
+        Json.deserializeBytes codec bytes
 
     let private normalizedEntryPath (path: string) =
         let normalized = path.Replace('\\', '/').TrimStart('/')
@@ -283,19 +283,24 @@ module ReleaseCapsule =
 
     let private validateApi (api: ApiModelArtifact) =
         if String.IsNullOrWhiteSpace api.Package.Version then invalidOp "Release API artifact has no product version."
-        let rec collectIds (entities: EntityModel list) =
-            entities
-            |> List.fold (fun (entityIds, memberIds) (entity: EntityModel) ->
-                let nestedEntities, nestedMembers = collectIds entity.Entities
-                entity.Id :: (nestedEntities @ entityIds), (entity.Members |> List.map _.Id) @ nestedMembers @ memberIds) ([], [])
-        let entityIds, memberIds = collectIds api.Package.Entities
-        match entityIds @ memberIds |> List.tryFind String.IsNullOrWhiteSpace with
-        | Some _ -> invalidOp "Release API artifact contains an empty symbol ID."
-        | None -> ()
-        for kind, ids in [ "entity", entityIds; "member", memberIds ] do
-            match ids |> List.countBy id |> List.tryFind (fun (_, count) -> count > 1) with
-            | Some (id, _) -> invalidOp $"Release API artifact contains duplicate {kind} ID {id}."
-            | None -> ()
+
+        let entityIds = Collections.Generic.HashSet<string>(StringComparer.Ordinal)
+        let memberIds = Collections.Generic.HashSet<string>(StringComparer.Ordinal)
+
+        let addId kind (ids: Collections.Generic.HashSet<string>) id =
+            if String.IsNullOrWhiteSpace id then
+                invalidOp "Release API artifact contains an empty symbol ID."
+            if not (ids.Add id) then
+                invalidOp $"Release API artifact contains duplicate {kind} ID {id}."
+
+        let rec validateEntities (entities: EntityModel list) =
+            for entity in entities do
+                addId "entity" entityIds entity.Id
+                for member' in entity.Members do
+                    addId "member" memberIds member'.Id
+                validateEntities entity.Entities
+
+        validateEntities api.Package.Entities
 
     let private validateSemantic (semantic: SemanticDocumentationArtifact) =
         match semantic.Pages |> List.countBy _.SourcePath |> List.tryFind (fun (_, count) -> count > 1) with

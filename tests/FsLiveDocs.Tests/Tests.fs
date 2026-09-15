@@ -1139,6 +1139,19 @@ module DocTestRunnerTests =
                                         Scenario = None
                                         IsSnapshotTest = true; NoCheckReason = None
                                     }
+                                    {
+                                        Name = "SecondSnapshotExample"
+                                        Content =
+                                            """
+                                            > let x = 10;;
+                                            > x + 5;;
+                                            val x: int = 10
+                                            val it: int = 15
+                                            """
+                                        ExpectedOutput = Some "val x: int = 10\nval it: int = 15"
+                                        Scenario = None
+                                        IsSnapshotTest = true; NoCheckReason = None
+                                    }
                                 ]
                             Entities = []
                         }
@@ -1148,9 +1161,9 @@ module DocTestRunnerTests =
 
         let projectPath = Path.GetFullPath("src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj")
         let snapshot = DocTestRunner.collectSnapshots package projectPath [] |> Async.RunSynchronously
-        let example = Assert.Single(snapshot.Examples)
-        Assert.Equal(ExampleStatus.Verified, example.Status)
-        Assert.Equal(Some "val x: int = 1\nval it: int = 3", example.ExpectedOutput)
+        Assert.Equal(2, snapshot.Examples.Length)
+        Assert.All(snapshot.Examples, fun example -> Assert.Equal(ExampleStatus.Verified, example.Status))
+        Assert.Equal(Some "val x: int = 1\nval it: int = 3", snapshot.Examples.Head.ExpectedOutput)
 
 module ViewTests =
 

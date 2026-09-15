@@ -41,17 +41,21 @@ module internal ReleaseCapture =
 
     let private currentRevision () = Git.currentRevision (Directory.GetCurrentDirectory())
 
-    let private verifyExplicitCases projectPaths (pages: DocAnalysis.Page list) references =
-        for projectPath in projectPaths do
-            let projectPackage = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
-            for name in DocTestRunner.snapshotExampleNames projectPackage do
-                let snapshot = DocTestRunner.collectSnapshotByName projectPackage projectPath references name |> Async.RunSynchronously
-                match snapshot.Status with
-                | ExampleStatus.Verified | ExampleStatus.FirstCut -> ()
-                | ExampleStatus.Mismatch ->
-                    invalidOp $"XML example {name} output did not match its expected release output."
-                | ExampleStatus.Error ->
-                    invalidOp $"XML example {name} failed during release capture: {snapshot.ActualOutput}"
+    let private verifyExplicitCases projectPaths (package: PackageModel) (pages: DocAnalysis.Page list) references =
+        // Most projects have no snapshot examples. Do not reload every documented assembly after
+        // extraction merely to rediscover that fact: assembly load contexts retain substantial
+        // compiler metadata for the lifetime of capture.
+        if not (DocTestRunner.snapshotExampleNames package).IsEmpty then
+            for projectPath in projectPaths do
+                let projectPackage = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
+                let snapshots = DocTestRunner.collectSnapshots projectPackage projectPath references |> Async.RunSynchronously
+                for snapshot in snapshots.Examples do
+                    match snapshot.Status with
+                    | ExampleStatus.Verified | ExampleStatus.FirstCut -> ()
+                    | ExampleStatus.Mismatch ->
+                        invalidOp $"XML example {snapshot.Name} output did not match its expected release output."
+                    | ExampleStatus.Error ->
+                        invalidOp $"XML example {snapshot.Name} failed during release capture: {snapshot.ActualOutput}"
 
         for page in pages do
             let externallyExecuted =
@@ -123,7 +127,7 @@ module internal ReleaseCapture =
             |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
             |> List.filter (String.IsNullOrWhiteSpace >> not)
             |> List.distinct
-        verifyExplicitCases request.ProjectPaths pages references
+        verifyExplicitCases request.ProjectPaths package pages references
 
         let semantic = DocAnalysis.semanticArtifact analysis
         let prepared = DocumentationSets.prepareCurrent request.DocsSets.IsSome resolvedSets package semantic ""
