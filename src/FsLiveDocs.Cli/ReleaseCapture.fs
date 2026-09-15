@@ -110,6 +110,10 @@ module internal ReleaseCapture =
         if request.WarnAsError && not apiDiagnostics.IsEmpty then
             invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
 
+        // Materialize compiler-derived meaning before snapshot execution so the large check-result
+        // graph is no longer live while FSI verifies examples.
+        let semantic = DocAnalysis.semanticArtifact analysis
+
         let resolvedSets =
             request.DocsSets
             |> Option.defaultValue
@@ -129,7 +133,6 @@ module internal ReleaseCapture =
             |> List.distinct
         verifyExplicitCases request.ProjectPaths package pages references
 
-        let semantic = DocAnalysis.semanticArtifact analysis
         let prepared = DocumentationSets.prepareCurrent request.DocsSets.IsSome resolvedSets package semantic ""
 
         let api: ApiModelArtifact =

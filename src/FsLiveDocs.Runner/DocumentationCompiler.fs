@@ -178,7 +178,9 @@ module DocumentationCompiler =
             EndColumn = diagnostic.EndColumn
         }
 
-    let private checkerCount = min 4 (max 1 Environment.ProcessorCount)
+    // FSharpChecker is concurrency-safe and retains substantial syntax and symbol graphs. Share
+    // one checker so parallel documentation checks reuse its caches instead of multiplying them.
+    let private checkerCount = 1
     let private checkerPool = CheckerPool.create checkerCount
     let private optionChecker = CheckerPool.anyOne checkerPool
 
