@@ -2391,6 +2391,9 @@ module DocumentationSetTests =
 
         SiteBuilder.buildDocsSetsHistory current.Version [ current; old; oldest ] site "light" output
 
+        let homepage = File.ReadAllText(Path.Combine(output, "index.html"))
+        Assert.Contains("<h1>Home</h1>", homepage)
+
         let guide = File.ReadAllText(Path.Combine(output, "handbook", "guide.html"))
         Assert.Contains("href=\"../history/1.0.0/handbook/guide.html\"", guide)
         Assert.Contains("href=\"../history/0.9.0/handbook/index.html\"", guide)
@@ -2512,6 +2515,15 @@ module DocumentationSetTests =
         Assert.Equal("handbook", content.DocsSets.Head.Source)
         Assert.Equal("handbook", content.Pages.Head.SetId)
         Assert.Equal(Some "open System", content.DocsSets.Head.FSharpPrelude)
+
+        let materialized = Path.Combine(root, "materialized")
+        let capturedPackage, capturedSemantic, capturedContent =
+            ReleaseCapsule.materializeContentWithSets capsule materialized
+        let prepared =
+            DocumentationSets.prepareCaptured materialized capturedContent capturedPackage capturedSemantic ""
+        let capturedHome = prepared.Sites.Head.Pages |> List.tryFind (fun candidate -> candidate.OutputPath = "index.html")
+        Assert.True(capturedHome.IsSome, "The authored docs-set homepage must survive capsule materialization.")
+        Assert.Contains("Home", capturedHome.Value.ContentHtml)
 
     /// Writes a capsule whose content component is the given legacy payload, byte for byte.
     let private writeLegacyContentCapsule (contentSchema: int) (contentBytes: byte array) =

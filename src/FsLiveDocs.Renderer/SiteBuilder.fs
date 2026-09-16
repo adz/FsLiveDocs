@@ -809,7 +809,12 @@ module SiteBuilder =
                     [], None
 
             let indexPath = Path.Combine(destination, setRootOutput set)
-            let indexAlreadyExists = Run.orFallback (FileSystem.fileExists indexPath) false
+            let indexFullPath = Path.GetFullPath indexPath
+            let authoredIndexPending =
+                pageWrites
+                |> List.exists (fun (path, _) -> Path.GetFullPath(path).Equals(indexFullPath, StringComparison.Ordinal))
+            let indexAlreadyExists =
+                authoredIndexPending || Run.orFallback (FileSystem.fileExists indexPath) false
 
             let indexWrites =
                 if not indexAlreadyExists then
