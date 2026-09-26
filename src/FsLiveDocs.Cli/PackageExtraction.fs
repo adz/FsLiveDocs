@@ -226,64 +226,93 @@ module internal PackageExtraction =
         Run.orRaise FileSystemError.describe $"Could not write cache {path}" work
 
     let extractCachedWithProgress reportProgress prelude (projectPaths: string list) =
-        let inputHash = inputFingerprint projectPaths
         let cacheDirectory = Path.GetFullPath(Path.Combine(".livedocs", "cache"))
-        // The key covers every assembly whose code shapes what is cached. Keying on Core alone
-        // silently replayed stale diagnostics whenever the Runner or the CLI changed, which is
-        // indistinguishable from a fix having no effect.
+        let writeArtifact path value =
+            let work =
+                flow {
+                    do! FileSystem.createDirectory cacheDirectory
+                    do! FileSystem.writeAllText path value
+                }
+            Run.orRaise FileSystemError.describe $"Could not write cache {path}" work
         let extractorVersions =
             [ typeof<PackageModel>.Assembly
               typeof<FsiTranscriptRunner.DocTestExecutionContext>.Assembly
               Reflection.Assembly.GetExecutingAssembly() ]
             |> List.map (fun assembly -> string assembly.ManifestModule.ModuleVersionId)
             |> String.concat ","
+        let extractorContext = $"api-schema:{History.ApiModelSchemaVersion}|extractor:{extractorVersions}"
+
+        let tryRead packagePath diagnosticsPath =
+            let work =
+                flow {
+                    let! packageExists = FileSystem.fileExists packagePath
+                    let! diagnosticsExist = FileSystem.fileExists diagnosticsPath
+                    if packageExists && diagnosticsExist then
+                        let! packageText = FileSystem.readAllText packagePath
+                        let! diagnosticsText = FileSystem.readAllText diagnosticsPath
+                        return Some(Json.deserialize packageCodec packageText, Json.deserialize diagnosticsCodec diagnosticsText)
+                    else
+                        return None
+                }
+            Run.orRaise FileSystemError.describe $"Could not read project extraction cache {packagePath}" work
+
+        // Symbol extraction belongs to a project, not to the documentation tree. Persist each
+        // project independently so a guide edit cannot reload assemblies or re-walk symbols.
+        let projects =
+            projectPaths
+            |> List.indexed
+            |> List.map (fun (index, projectPath) ->
+                let inputHash = inputFingerprint [ projectPath ]
+                let key = AnalysisCache.projectKey extractorContext inputHash
+                let packagePath = Path.Combine(cacheDirectory, key + ".project-package.json")
+                let diagnosticsPath = Path.Combine(cacheDirectory, key + ".project-diagnostics.json")
+                let package, diagnostics =
+                    match tryRead packagePath diagnosticsPath with
+                    | Some cached -> cached
+                    | None ->
+                        let package, diagnostics =
+                            SymbolLister.extractFromProjectWithDiagnostics projectPath |> Async.RunSynchronously
+                        writeArtifact packagePath (Json.serialize packageCodec package)
+                        writeArtifact diagnosticsPath (Json.serialize diagnosticsCodec diagnostics)
+                        package, diagnostics
+                reportProgress "Extracting API documentation" (index + 1) projectPaths.Length
+                projectPath, key, package, diagnostics)
 
         let docsHash = documentationFingerprint projectPaths
+        let projectKeys = projects |> List.map (fun (_, key, _, _) -> key)
+        let verificationKey = AnalysisCache.verificationKey extractorContext docsHash prelude projectKeys
+        let verificationPath = Path.Combine(cacheDirectory, verificationKey + ".verification-diagnostics.json")
+        let verificationDiagnostics =
+            let work =
+                flow {
+                    let! exists = FileSystem.fileExists verificationPath
+                    if exists then
+                        let! text = FileSystem.readAllText verificationPath
+                        return Some(Json.deserialize diagnosticsCodec text)
+                    else return None
+                }
+            match Run.orRaise FileSystemError.describe $"Could not read verification cache {verificationPath}" work with
+            | Some diagnostics -> diagnostics
+            | None ->
+                let covered = transcludedExamples projectPaths
+                let builtAssemblies =
+                    projectPaths
+                    |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+                    |> List.filter (String.IsNullOrWhiteSpace >> not)
+                    |> List.distinct
+                let diagnostics =
+                    projects
+                    |> List.collect (fun (projectPath, _, package, _) ->
+                        GeneratedVerification.compileUncoveredExamples projectPath prelude builtAssemblies covered package
+                        |> Async.RunSynchronously)
+                writeArtifact verificationPath (Json.serialize diagnosticsCodec diagnostics)
+                diagnostics
 
-        let cacheKey =
-            sha256Text
-                $"api-schema:{History.ApiModelSchemaVersion}|extractor:{extractorVersions}|projects:{inputHash}|documentation:{docsHash}|prelude:{prelude}"
-
-        let cachePath = Path.Combine(cacheDirectory, cacheKey + ".package.json")
-        // Diagnostics describe the run, not the snapshot, so they live beside the cached package
-        // rather than inside it — otherwise a warning would be reported once and never again.
-        let diagnosticsPath = Path.Combine(cacheDirectory, cacheKey + ".diagnostics.json")
-
-        // Gather the cache-existence checks and reads into one Flow and run it once; the
-        // deserialization and cache-miss branch below stay pure/imperative as before.
-        let cacheWork =
-            flow {
-                let! cacheExists = FileSystem.fileExists cachePath
-
-                if cacheExists then
-                    let! packageText = FileSystem.readAllText cachePath
-                    let! diagnosticsExists = FileSystem.fileExists diagnosticsPath
-
-                    let! diagnosticsText =
-                        if diagnosticsExists then
-                            FileSystem.readAllText diagnosticsPath |> Flow.map Some
-                        else
-                            Flow.succeed None
-
-                    return Some(packageText, diagnosticsText)
-                else
-                    return None
-            }
-
-        match Run.orRaise FileSystemError.describe $"Could not read cached package {cachePath}" cacheWork with
-        | Some(packageText, diagnosticsText) ->
-            reportProgress "Extracting API documentation" projectPaths.Length projectPaths.Length
-            let package = Json.deserialize packageCodec packageText
-            let diagnostics =
-                match diagnosticsText with
-                | Some text -> Json.deserialize diagnosticsCodec text
-                | None -> []
-            package, diagnostics, inputHash
-        | None ->
-            let package, diagnostics = extractWithProgress reportProgress prelude projectPaths |> Async.RunSynchronously
-            writeCurrentCache cachePath "*.package.json" (Json.serialize packageCodec package)
-            writeCurrentCache diagnosticsPath "*.diagnostics.json" (Json.serialize diagnosticsCodec diagnostics)
-            package, diagnostics, inputHash
+        let package = projects |> List.map (fun (_, _, package, _) -> package) |> SymbolLister.merge
+        let diagnostics =
+            (projects |> List.collect (fun (_, _, _, diagnostics) -> diagnostics)) @ verificationDiagnostics
+        let inputHash = projectKeys |> String.concat "|" |> sha256Text
+        package, diagnostics, inputHash
 
     let extractCached prelude projectPaths =
         extractCachedWithProgress (fun _ _ _ -> ()) prelude projectPaths

@@ -34,6 +34,16 @@ module AnalysisCacheTests =
         Assert.False(String.Equals(first, changedFirst, StringComparison.Ordinal))
         Assert.Equal<string>(second, unchangedSecond)
 
+    [<Fact>]
+    let ``documentation changes preserve project extraction identity but invalidate verification`` () =
+        let projectBefore = AnalysisCache.projectKey "schema|extractor" "project-source-hash"
+        let projectAfter = AnalysisCache.projectKey "schema|extractor" "project-source-hash"
+        let verificationBefore = AnalysisCache.verificationKey "extractor" "docs-a" "prelude" [ projectBefore ]
+        let verificationAfter = AnalysisCache.verificationKey "extractor" "docs-b" "prelude" [ projectAfter ]
+
+        Assert.Equal<string>(projectBefore, projectAfter)
+        Assert.False(String.Equals(verificationBefore, verificationAfter, StringComparison.Ordinal))
+
 module BuildStateTests =
 
     let private withTempDirectory action =
