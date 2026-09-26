@@ -260,7 +260,9 @@ module DocumentationCompiler =
     }
 
     /// Checks several pages as files in one generated project. Each file is enclosed in a unique
-    /// module so declarations cannot leak into another documentation page.
+    /// module so declarations cannot leak into another documentation page. The module is public:
+    /// examples are written as public API, and declaring their types in an internal module changes
+    /// how inline member constraints resolve (Reified's `field _.Nested` stops resolving `Nested.Schema`).
     let checkPagesWithProject
         (project: EvaluatedProject)
         (pages: (string * string * DocumentationBlock list) list)
@@ -312,7 +314,7 @@ module DocumentationCompiler =
                     let moduleName = $"FsLiveDocsGeneratedPage{index}_{batchIdentity.Substring(0, 12)}"
                     let wrapped =
                         { unit with
-                            Prelude = $"module internal {moduleName}\n" + unit.Prelude }
+                            Prelude = $"module {moduleName}\n" + unit.Prelude }
                     let source, ranges = syntheticSource wrapped
                     let fileName = Path.Combine(batchDirectory, $"Page{index:D4}.fs")
                     key, unit, source, ranges, fileName)

@@ -67,6 +67,21 @@ module IntegrationTests =
     }
 
     [<Fact>]
+    let ``batched documentation pages are wrapped in public modules`` () = async {
+        let evaluated = DocumentationCompiler.evaluateProject coreProject
+        let page =
+            DocumentationDiscovery.discoverMarkdown "public.md" (Some coreProject) "```fsharp\ntype Shape = { Sides: int }\n```"
+        let other =
+            DocumentationDiscovery.discoverMarkdown "other.md" (Some coreProject) "```fsharp\nlet other = 1\n```"
+
+        let! batched = DocumentationCompiler.checkPagesWithProject evaluated [ "public", "", page; "other", "", other ]
+
+        let source = batched |> Map.find "public" |> List.head |> _.SyntheticSource
+        Assert.Contains("module FsLiveDocsGeneratedPage", source)
+        Assert.DoesNotContain("module internal", source)
+    }
+
+    [<Fact>]
     let ``batched documentation project keeps entry points in standalone final files`` () = async {
         let evaluated = DocumentationCompiler.evaluateProject coreProject
         let entryPoint =
