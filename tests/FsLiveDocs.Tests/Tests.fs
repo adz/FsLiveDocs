@@ -82,6 +82,22 @@ module BuildStateTests =
             File.AppendAllText(page, " changed")
             Assert.False(BuildState.isCurrent root "build|light"))
 
+    [<Fact>]
+    let ``content hashes detect edits hidden behind unchanged metadata`` () =
+        withTempDirectory (fun root ->
+            Directory.CreateDirectory(Path.Combine(root, "docs")) |> ignore
+            let page = Path.Combine(root, "docs", "index.md")
+            File.WriteAllText(page, "AAAA")
+            Directory.CreateDirectory(Path.Combine(root, "output")) |> ignore
+            File.WriteAllText(Path.Combine(root, "output", "index.html"), "built")
+            BuildState.capture root "build|light" |> BuildState.save root
+            let timestamp = File.GetLastWriteTimeUtc page
+
+            File.WriteAllText(page, "BBBB")
+            File.SetLastWriteTimeUtc(page, timestamp)
+
+            Assert.False(BuildState.isCurrent root "build|light"))
+
 module DocumentationSourceTests =
 
     let rec private repositoryRoot directory =

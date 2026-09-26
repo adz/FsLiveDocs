@@ -3,6 +3,7 @@ namespace FsLiveDocs.Cli
 open System
 open System.IO
 open System.Text
+open System.Security.Cryptography
 
 /// Durable, cheap-to-validate state for a completed local site build.
 module internal BuildState =
@@ -11,7 +12,8 @@ module internal BuildState =
     type FileStamp =
         { Path: string
           Length: int64
-          LastWriteUtcTicks: int64 }
+          LastWriteUtcTicks: int64
+          Sha256: string }
 
     [<CLIMutable>]
     type Snapshot =
@@ -48,12 +50,14 @@ module internal BuildState =
             inputFiles fullRoot
             |> Seq.map (fun path ->
                 let info = FileInfo path
+                use stream = File.OpenRead path
                 { Path = Path.GetRelativePath(fullRoot, path).Replace('\\', '/')
                   Length = info.Length
-                  LastWriteUtcTicks = info.LastWriteTimeUtc.Ticks })
+                  LastWriteUtcTicks = info.LastWriteTimeUtc.Ticks
+                  Sha256 = SHA256.HashData(stream) |> Convert.ToHexString |> _.ToLowerInvariant() })
             |> Seq.sortBy _.Path
             |> Seq.toArray
-        { FormatVersion = 1; Invocation = invocation; Files = files }
+        { FormatVersion = 2; Invocation = invocation; Files = files }
 
     let private encode (value: string) = Convert.ToBase64String(Encoding.UTF8.GetBytes value)
     let private decode (value: string) = Encoding.UTF8.GetString(Convert.FromBase64String value)
@@ -66,7 +70,7 @@ module internal BuildState =
             [ yield string snapshot.FormatVersion
               yield encode snapshot.Invocation
               for file in snapshot.Files do
-                  yield $"{encode file.Path}\t{file.Length}\t{file.LastWriteUtcTicks}" ]
+                  yield $"{encode file.Path}\t{file.Length}\t{file.LastWriteUtcTicks}\t{file.Sha256}" ]
         File.WriteAllLines(temporary, lines)
         File.Move(temporary, path, true)
 
@@ -78,10 +82,11 @@ module internal BuildState =
             |> Array.skip 2
             |> Array.map (fun line ->
                 match line.Split('\t') with
-                | [| path; length; ticks |] ->
+                | [| path; length; ticks; sha256 |] ->
                     { Path = decode path
                       Length = Int64.Parse length
-                      LastWriteUtcTicks = Int64.Parse ticks }
+                      LastWriteUtcTicks = Int64.Parse ticks
+                      Sha256 = sha256 }
                 | _ -> invalidOp "Build state contains an invalid file stamp.")
         { FormatVersion = Int32.Parse lines.[0]
           Invocation = decode lines.[1]
@@ -97,7 +102,7 @@ module internal BuildState =
             try
                 let saved = load path
                 let current = capture fullRoot invocation
-                saved.FormatVersion = 1
+                saved.FormatVersion = 2
                 && saved.Invocation = invocation
                 && Array.length saved.Files = Array.length current.Files
                 && Array.forall2 (=) saved.Files current.Files
