@@ -34,6 +34,44 @@ module AnalysisCacheTests =
         Assert.False(String.Equals(first, changedFirst, StringComparison.Ordinal))
         Assert.Equal<string>(second, unchangedSecond)
 
+module BuildStateTests =
+
+    let private withTempDirectory action =
+        let root = Path.Combine(Path.GetTempPath(), "fslivedocs-build-state-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        try action root
+        finally Directory.Delete(root, true)
+
+    [<Fact>]
+    let ``saved build state makes an unchanged restart a no-op`` () =
+        withTempDirectory (fun root ->
+            Directory.CreateDirectory(Path.Combine(root, "docs")) |> ignore
+            File.WriteAllText(Path.Combine(root, "docs", "index.md"), "# Home")
+            Directory.CreateDirectory(Path.Combine(root, "output")) |> ignore
+            File.WriteAllText(Path.Combine(root, "output", "index.html"), "built")
+
+            let state = BuildState.capture root "build|light"
+            BuildState.save root state
+
+            Assert.True(BuildState.isCurrent root "build|light"))
+
+    [<Fact>]
+    let ``source change invalidates saved build state but cache writes do not`` () =
+        withTempDirectory (fun root ->
+            Directory.CreateDirectory(Path.Combine(root, "docs")) |> ignore
+            let page = Path.Combine(root, "docs", "index.md")
+            File.WriteAllText(page, "# Home")
+            Directory.CreateDirectory(Path.Combine(root, "output")) |> ignore
+            File.WriteAllText(Path.Combine(root, "output", "index.html"), "built")
+            BuildState.capture root "build|light" |> BuildState.save root
+
+            Directory.CreateDirectory(Path.Combine(root, ".livedocs", "cache")) |> ignore
+            File.WriteAllText(Path.Combine(root, ".livedocs", "cache", "new.json"), "cache")
+            Assert.True(BuildState.isCurrent root "build|light")
+
+            File.AppendAllText(page, " changed")
+            Assert.False(BuildState.isCurrent root "build|light"))
+
 module DocumentationSourceTests =
 
     let rec private repositoryRoot directory =

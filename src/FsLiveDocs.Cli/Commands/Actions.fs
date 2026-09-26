@@ -385,198 +385,215 @@ module Actions =
 
     /// <summary>Orchestrates the build process for one or more projects.</summary>
     let buildAction (warnAsError: bool) (includeDrafts: bool) (projectPaths: string list) (theme: string) (version: string option) =
-        let mutable deferredApiDiagnostics: ApiDiagnostic list = []
-        let pipeline reportStage reportProgress reportNote =
-            reportStage "Extracting API documentation"
-            let extracted, apiDiagnostics, projectFingerprint = getUnifiedPackageCachedWithProgress reportProgress projectPaths
-            let packageRaw = { extracted with Version = version |> Option.defaultValue extracted.Version }
-            reportStage "Checking documentation examples"
-            let semanticArtifact, prelude =
-                prepareBuildDocumentation reportProgress reportNote projectPaths projectFingerprint packageRaw
-            if warnAsError then
-                if printApiDiagnostics true apiDiagnostics <> 0 then
-                    invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
-            else
-                deferredApiDiagnostics <- apiDiagnostics
-            reportStage "Rendering documentation site"
-            let sourceDir = Run.orRaise FileSystemError.describe "Could not determine the current directory" FileSystem.getCurrentDirectory
-            let semanticCode =
-                { SemanticCode.defaults with
-                    Artifact = Some semanticArtifact
-                    Prelude = prelude }
+        let root = Directory.GetCurrentDirectory()
+        let requestedVersion = version |> Option.defaultValue "<project>"
+        let invocation =
+            [ yield $"tool:{Reflection.Assembly.GetExecutingAssembly().ManifestModule.ModuleVersionId}"
+              yield $"warn-as-error:{warnAsError}"
+              yield $"drafts:{includeDrafts}"
+              yield $"theme:{theme}"
+              yield $"version:{requestedVersion}"
+              for project in projectPaths do yield "project:" + Path.GetFullPath project ]
+            |> String.concat "|"
 
-            let config = Workspace.loadSiteConfig ()
-
-            let historyDir = ".livedocs/history"
-            Run.orRaise FileSystemError.describe $"Could not create directory {historyDir}" (FileSystem.createDirectory historyDir)
-
-            match configuredDocsSets projectPaths with
-            | Some sets ->
-                let prepared = DocumentationSets.prepareCurrent true sets packageRaw semanticArtifact ""
-
-                let prepared =
-                    { prepared with
-                        Sites =
-                            prepared.Sites
-                            |> List.map (fun site ->
-                                { site with Pages = site.Pages |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft) }) }
-
-                prepared.Sites |> List.collect _.Pages |> reportBlogDiagnostics warnAsError reportNote
-
-                let current: SiteBuilder.DocsSetVersionSite =
-                    { Version = packageRaw.Version
-                      Package = packageRaw
-                      Sets = prepared.Sites
-                      StaticRoot = None
-                      UsesDocumentationSets = true }
-
-                let historyWork =
-                    flow {
-                        let! files = FileSystem.getFiles historyDir "*.json" SearchOption.TopDirectoryOnly
-                        return!
-                            files
-                            |> Array.toList
-                            |> Flow.traverse (fun path -> FileSystem.readAllText path |> Flow.map (fun text -> path, text))
-                    }
-                let historyFiles = Run.orRaise FileSystemError.describe $"Could not scan history directory {historyDir}" historyWork
-
-                let historical =
-                    historyFiles
-                    |> List.map (fun (path, text) ->
-                        let historicalPackage = Json.deserialize packageCodec text
-
-                        let historicalPrepared =
-                            DocumentationSets.prepareCurrent true sets historicalPackage semanticArtifact ""
-
-                        let historicalPrepared =
-                            { historicalPrepared with
-                                Sites =
-                                    historicalPrepared.Sites
-                                    |> List.map (fun site ->
-                                        { site with Pages = site.Pages |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft) }) }
-
-                        ({ Version = Path.GetFileNameWithoutExtension path
-                           Package = historicalPackage
-                           Sets = historicalPrepared.Sites
-                           StaticRoot = None
-                           UsesDocumentationSets = true }
-                        : SiteBuilder.DocsSetVersionSite))
-
-                SiteBuilder.buildDocsSetsHistory packageRaw.Version (current :: historical) config theme "output"
-
-                for source, prefix, files in prepared.StaticFiles do
-                    ContentProvider.copyStaticFilesForSet source prefix files "output"
-            | None ->
-                let package =
-                    ContentProvider.applyApiDocsWithOptions "docs" sourceDir packageRaw semanticCode
-
-                let pages =
-                    ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
-                    |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft)
-
-                reportBlogDiagnostics warnAsError reportNote pages
-
-                SiteBuilder.buildAll historyDir package pages config theme "output"
-                ContentProvider.copyStaticFiles "docs" "output"
-
-            reportStage "Building search index"
-            let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
-            psi.RedirectStandardOutput <- true
-            psi.RedirectStandardError <- true
-            psi.UseShellExecute <- false
-            let proc = System.Diagnostics.Process.Start(psi)
-            proc.WaitForExit()
-        if ConsoleOutput.interactive then
-            // Wrapper scripts commonly run the preview server as a background job so they can
-            // monitor a stop file. Spectre classifies that process as non-interactive even though
-            // stdout is still a terminal. An explicit --interactive true must override detection.
-            let settings = AnsiConsoleSettings()
-            settings.Interactive <- InteractionSupport.Yes
-            let interactiveConsole = AnsiConsole.Create(settings)
-            if ConsoleOutput.banner then
-                let started = Diagnostics.Stopwatch.StartNew()
-                let syncRoot = obj ()
-                let completed = ResizeArray<string * float * bool * string list>()
-                let mutable currentName: string option = None
-                let mutable currentText = "Starting documentation build"
-                let mutable currentStarted = 0.0
-                let currentNotes = ResizeArray<string>()
-                let finishCurrent succeeded =
-                    match currentName with
-                    | Some name ->
-                        completed.Add(name, started.Elapsed.TotalSeconds - currentStarted, succeeded, List.ofSeq currentNotes)
-                        currentNotes.Clear()
-                        currentName <- None
-                    | None -> ()
-                let startStage name =
-                    lock syncRoot (fun () ->
-                        if currentName <> Some name then
-                            finishCurrent true
-                            currentName <- Some name
-                            currentText <- name
-                            currentStarted <- started.Elapsed.TotalSeconds)
-                let reportProgress name current total =
-                    lock syncRoot (fun () ->
-                        if currentName <> Some name then
-                            finishCurrent true
-                            currentName <- Some name
-                            currentStarted <- started.Elapsed.TotalSeconds
-                        currentText <- $"{name} ({current}/{total})")
-                let reportNote note = lock syncRoot (fun () -> currentNotes.Add note)
-                let render () =
-                    let elapsed = started.Elapsed.TotalMilliseconds
-                    let activityFrames = Spinner.Known.DotsCircle.Frames
-                    let activity = activityFrames.[int (elapsed / 80.0) % activityFrames.Count]
-                    let status =
-                        lock syncRoot (fun () ->
-                            [ for name, duration, succeeded, notes in completed do
-                                  let mark = if succeeded then "[green]✓[/]" else "[red]✗[/]"
-                                  let formattedDuration = duration.ToString("0.0")
-                                  yield $"{mark} {Markup.Escape(name)} [grey]({formattedDuration}s)[/]"
-                                  for note in notes do yield $"  [grey]{Markup.Escape(note)}[/]"
-                              match currentName with
-                              | Some _ ->
-                                  let duration = started.Elapsed.TotalSeconds - currentStarted
-                                  let formattedDuration = duration.ToString("0.0")
-                                  yield $"[bold blue]{Markup.Escape(activity)} {Markup.Escape(currentText)}[/] [grey]({formattedDuration}s)[/]"
-                                  for note in currentNotes do yield $"  [grey]{Markup.Escape(note)}[/]"
-                              | None -> () ]
-                            |> String.concat "\n")
-                    LiveDocsBanner.render elapsed status
-                interactiveConsole.Live(render ())
-                    .AutoClear(false)
-                    .Start(fun context ->
-                        use stopAnimation = new Threading.CancellationTokenSource()
-                        let animation =
-                            Threading.Tasks.Task.Run(fun () ->
-                                while not stopAnimation.IsCancellationRequested do
-                                    context.UpdateTarget(render ())
-                                    Threading.Thread.Sleep(80))
-                        try
-                            try
-                                pipeline startStage reportProgress reportNote
-                                lock syncRoot (fun () -> finishCurrent true)
-                            with error ->
-                                lock syncRoot (fun () -> finishCurrent false)
-                                reraise ()
-                        finally
-                            stopAnimation.Cancel()
-                            animation.Wait())
-            else
-                interactiveConsole.Status()
-                    .Spinner(Spinner.Known.DotsCircle)
-                    .SpinnerStyle(Style.Parse("bold blue"))
-                    .Start("[bold blue]Starting documentation build[/]", fun context ->
-                        let update text = context.Status($"[bold blue]{Markup.Escape(text)}[/]") |> ignore
-                        pipeline update (fun name current total -> update $"{name} ({current}/{total})") (fun note -> AnsiConsole.MarkupLine($"  [grey]{Markup.Escape(note)}[/]")))
+        if BuildState.isCurrent root invocation then
+            AnsiConsole.MarkupLine("[green]✔ Build current:[/] no inputs changed; reused output/ and search index.")
         else
-            let reportStage stage = if ConsoleOutput.isInfo () then AnsiConsole.MarkupLine($"{Markup.Escape(stage)}...")
-            let reportProgress stage current total =
-                if ConsoleOutput.isInfo () then AnsiConsole.MarkupLine($"{Markup.Escape(stage)} ({current}/{total})")
-            let reportNote note = AnsiConsole.MarkupLine($"  [grey]{Markup.Escape(note)}[/]")
-            pipeline reportStage reportProgress reportNote
-        printApiDiagnostics false deferredApiDiagnostics |> ignore
-        AnsiConsole.MarkupLine("[green]✔ Build complete:[/] output/")
+            let mutable deferredApiDiagnostics: ApiDiagnostic list = []
+            let pipeline reportStage reportProgress reportNote =
+                reportStage "Extracting API documentation"
+                let extracted, apiDiagnostics, projectFingerprint = getUnifiedPackageCachedWithProgress reportProgress projectPaths
+                let packageRaw = { extracted with Version = version |> Option.defaultValue extracted.Version }
+                reportStage "Checking documentation examples"
+                let semanticArtifact, prelude =
+                    prepareBuildDocumentation reportProgress reportNote projectPaths projectFingerprint packageRaw
+                if warnAsError then
+                    if printApiDiagnostics true apiDiagnostics <> 0 then
+                        invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
+                else
+                    deferredApiDiagnostics <- apiDiagnostics
+                reportStage "Rendering documentation site"
+                let sourceDir = Run.orRaise FileSystemError.describe "Could not determine the current directory" FileSystem.getCurrentDirectory
+                let semanticCode =
+                    { SemanticCode.defaults with
+                        Artifact = Some semanticArtifact
+                        Prelude = prelude }
+
+                let config = Workspace.loadSiteConfig ()
+
+                let historyDir = ".livedocs/history"
+                Run.orRaise FileSystemError.describe $"Could not create directory {historyDir}" (FileSystem.createDirectory historyDir)
+
+                match configuredDocsSets projectPaths with
+                | Some sets ->
+                    let prepared = DocumentationSets.prepareCurrent true sets packageRaw semanticArtifact ""
+
+                    let prepared =
+                        { prepared with
+                            Sites =
+                                prepared.Sites
+                                |> List.map (fun site ->
+                                    { site with Pages = site.Pages |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft) }) }
+
+                    prepared.Sites |> List.collect _.Pages |> reportBlogDiagnostics warnAsError reportNote
+
+                    let current: SiteBuilder.DocsSetVersionSite =
+                        { Version = packageRaw.Version
+                          Package = packageRaw
+                          Sets = prepared.Sites
+                          StaticRoot = None
+                          UsesDocumentationSets = true }
+
+                    let historyWork =
+                        flow {
+                            let! files = FileSystem.getFiles historyDir "*.json" SearchOption.TopDirectoryOnly
+                            return!
+                                files
+                                |> Array.toList
+                                |> Flow.traverse (fun path -> FileSystem.readAllText path |> Flow.map (fun text -> path, text))
+                        }
+                    let historyFiles = Run.orRaise FileSystemError.describe $"Could not scan history directory {historyDir}" historyWork
+
+                    let historical =
+                        historyFiles
+                        |> List.map (fun (path, text) ->
+                            let historicalPackage = Json.deserialize packageCodec text
+
+                            let historicalPrepared =
+                                DocumentationSets.prepareCurrent true sets historicalPackage semanticArtifact ""
+
+                            let historicalPrepared =
+                                { historicalPrepared with
+                                    Sites =
+                                        historicalPrepared.Sites
+                                        |> List.map (fun site ->
+                                            { site with Pages = site.Pages |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft) }) }
+
+                            ({ Version = Path.GetFileNameWithoutExtension path
+                               Package = historicalPackage
+                               Sets = historicalPrepared.Sites
+                               StaticRoot = None
+                               UsesDocumentationSets = true }
+                            : SiteBuilder.DocsSetVersionSite))
+
+                    SiteBuilder.buildDocsSetsHistory packageRaw.Version (current :: historical) config theme "output"
+
+                    for source, prefix, files in prepared.StaticFiles do
+                        ContentProvider.copyStaticFilesForSet source prefix files "output"
+                | None ->
+                    let package =
+                        ContentProvider.applyApiDocsWithOptions "docs" sourceDir packageRaw semanticCode
+
+                    let pages =
+                        ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
+                        |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft)
+
+                    reportBlogDiagnostics warnAsError reportNote pages
+
+                    SiteBuilder.buildAll historyDir package pages config theme "output"
+                    ContentProvider.copyStaticFiles "docs" "output"
+
+                reportStage "Building search index"
+                let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
+                psi.RedirectStandardOutput <- true
+                psi.RedirectStandardError <- true
+                psi.UseShellExecute <- false
+                let proc = System.Diagnostics.Process.Start(psi)
+                proc.WaitForExit()
+                if proc.ExitCode <> 0 then
+                    invalidOp $"Pagefind failed with exit code {proc.ExitCode}: {proc.StandardError.ReadToEnd()}"
+            if ConsoleOutput.interactive then
+                // Wrapper scripts commonly run the preview server as a background job so they can
+                // monitor a stop file. Spectre classifies that process as non-interactive even though
+                // stdout is still a terminal. An explicit --interactive true must override detection.
+                let settings = AnsiConsoleSettings()
+                settings.Interactive <- InteractionSupport.Yes
+                let interactiveConsole = AnsiConsole.Create(settings)
+                if ConsoleOutput.banner then
+                    let started = Diagnostics.Stopwatch.StartNew()
+                    let syncRoot = obj ()
+                    let completed = ResizeArray<string * float * bool * string list>()
+                    let mutable currentName: string option = None
+                    let mutable currentText = "Starting documentation build"
+                    let mutable currentStarted = 0.0
+                    let currentNotes = ResizeArray<string>()
+                    let finishCurrent succeeded =
+                        match currentName with
+                        | Some name ->
+                            completed.Add(name, started.Elapsed.TotalSeconds - currentStarted, succeeded, List.ofSeq currentNotes)
+                            currentNotes.Clear()
+                            currentName <- None
+                        | None -> ()
+                    let startStage name =
+                        lock syncRoot (fun () ->
+                            if currentName <> Some name then
+                                finishCurrent true
+                                currentName <- Some name
+                                currentText <- name
+                                currentStarted <- started.Elapsed.TotalSeconds)
+                    let reportProgress name current total =
+                        lock syncRoot (fun () ->
+                            if currentName <> Some name then
+                                finishCurrent true
+                                currentName <- Some name
+                                currentStarted <- started.Elapsed.TotalSeconds
+                            currentText <- $"{name} ({current}/{total})")
+                    let reportNote note = lock syncRoot (fun () -> currentNotes.Add note)
+                    let render () =
+                        let elapsed = started.Elapsed.TotalMilliseconds
+                        let activityFrames = Spinner.Known.DotsCircle.Frames
+                        let activity = activityFrames.[int (elapsed / 80.0) % activityFrames.Count]
+                        let status =
+                            lock syncRoot (fun () ->
+                                [ for name, duration, succeeded, notes in completed do
+                                      let mark = if succeeded then "[green]✓[/]" else "[red]✗[/]"
+                                      let formattedDuration = duration.ToString("0.0")
+                                      yield $"{mark} {Markup.Escape(name)} [grey]({formattedDuration}s)[/]"
+                                      for note in notes do yield $"  [grey]{Markup.Escape(note)}[/]"
+                                  match currentName with
+                                  | Some _ ->
+                                      let duration = started.Elapsed.TotalSeconds - currentStarted
+                                      let formattedDuration = duration.ToString("0.0")
+                                      yield $"[bold blue]{Markup.Escape(activity)} {Markup.Escape(currentText)}[/] [grey]({formattedDuration}s)[/]"
+                                      for note in currentNotes do yield $"  [grey]{Markup.Escape(note)}[/]"
+                                  | None -> () ]
+                                |> String.concat "\n")
+                        LiveDocsBanner.render elapsed status
+                    interactiveConsole.Live(render ())
+                        .AutoClear(false)
+                        .Start(fun context ->
+                            use stopAnimation = new Threading.CancellationTokenSource()
+                            let animation =
+                                Threading.Tasks.Task.Run(fun () ->
+                                    while not stopAnimation.IsCancellationRequested do
+                                        context.UpdateTarget(render ())
+                                        Threading.Thread.Sleep(80))
+                            try
+                                try
+                                    pipeline startStage reportProgress reportNote
+                                    lock syncRoot (fun () -> finishCurrent true)
+                                with error ->
+                                    lock syncRoot (fun () -> finishCurrent false)
+                                    reraise ()
+                            finally
+                                stopAnimation.Cancel()
+                                animation.Wait())
+                else
+                    interactiveConsole.Status()
+                        .Spinner(Spinner.Known.DotsCircle)
+                        .SpinnerStyle(Style.Parse("bold blue"))
+                        .Start("[bold blue]Starting documentation build[/]", fun context ->
+                            let update text = context.Status($"[bold blue]{Markup.Escape(text)}[/]") |> ignore
+                            pipeline update (fun name current total -> update $"{name} ({current}/{total})") (fun note -> AnsiConsole.MarkupLine($"  [grey]{Markup.Escape(note)}[/]")))
+            else
+                let reportStage stage = if ConsoleOutput.isInfo () then AnsiConsole.MarkupLine($"{Markup.Escape(stage)}...")
+                let reportProgress stage current total =
+                    if ConsoleOutput.isInfo () then AnsiConsole.MarkupLine($"{Markup.Escape(stage)} ({current}/{total})")
+                let reportNote note = AnsiConsole.MarkupLine($"  [grey]{Markup.Escape(note)}[/]")
+                pipeline reportStage reportProgress reportNote
+            printApiDiagnostics false deferredApiDiagnostics |> ignore
+            AnsiConsole.MarkupLine("[green]✔ Build complete:[/] output/")
+            BuildState.capture root invocation |> BuildState.save root
 
     /// Renders every version in a manifest into <paramref name="outputDir"/>. Shared by
     /// `build-history` (which then indexes the site) and `history check` (which verifies it).
