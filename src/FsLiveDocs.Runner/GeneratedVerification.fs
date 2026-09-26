@@ -140,24 +140,25 @@ module GeneratedVerification =
             // alone yields its dependencies but never its own output.
             let evaluated = DocumentationCompiler.evaluateProject projectPath
             let project = { evaluated with References = List.distinct (evaluated.References @ references) }
-            let! results = DocumentationCompiler.checkBlocksWithProject project prelude blocks
+            let! compilerDiagnostics = DocumentationCompiler.checkBlocksForDiagnosticsWithProject project prelude blocks
             let locations =
                 examples
                 |> List.map (fun (owner, location, example) -> $"{owner}#example-{example.Name}", (owner, location))
                 |> Map.ofList
 
             return
-                results
-                |> List.collect (fun result ->
-                    result.Diagnostics
-                    |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
+                compilerDiagnostics
+                |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
+                |> List.groupBy (fun diagnostic -> diagnostic.BlockId |> Option.defaultValue diagnostic.SourcePath)
+                |> List.collect (fun (blockId, diagnostics) ->
+                    diagnostics
                     |> List.truncate 1
                     |> List.map (fun diagnostic ->
                         let owner, location =
-                            locations |> Map.tryFind result.Unit.Id |> Option.defaultValue (result.Unit.Id, { File = ""; Line = 0 })
+                            locations |> Map.tryFind blockId |> Option.defaultValue (blockId, { File = ""; Line = 0 })
                         {
                             Code = "example-does-not-compile"
-                            Symbol = result.Unit.Id
+                            Symbol = blockId
                             Location = location
                             Message = $"This example does not compile: {diagnostic.Message}"
                             Remedy = $"Fix the example, transclude it into a page, or exclude it with data-livedocs=\"no-check\" reason=\"...\" ({owner})."

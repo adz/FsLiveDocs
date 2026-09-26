@@ -225,15 +225,36 @@ module DocumentationCompiler =
         return { Unit = unit; SyntheticSource = source; Diagnostics = diagnostics; BlockRanges = ranges; CheckResults = checkResults }
     }
 
+    let private checkSequentially project units = async {
+        // A check result retains typed syntax and symbol graphs. Starting every isolated example
+        // concurrently creates all of those graphs before a caller can project or discard any of
+        // them. Keep one page internally sequential; DocAnalysis provides bounded page-level
+        // concurrency where semantic results are consumed immediately.
+        let results = ResizeArray<CheckedCompilationUnit>()
+        for unit in units do
+            let! result = checkUnit project unit
+            results.Add result
+        return List.ofSeq results
+    }
+
     let checkBlocks projectPath prelude blocks = async {
         let project = evaluateProject projectPath
         let units = DocumentationDiscovery.compilationUnits project.ProjectPath prelude blocks
-        let! results = units |> List.map (checkUnit project) |> Async.Parallel
-        return results |> Array.toList
+        return! checkSequentially project units
     }
 
     let checkBlocksWithProject project prelude blocks = async {
         let units = DocumentationDiscovery.compilationUnits project.ProjectPath prelude blocks
-        let! results = units |> List.map (checkUnit project) |> Async.Parallel
-        return results |> Array.toList
+        return! checkSequentially project units
+    }
+
+    /// Checks compilation units and projects only diagnostics, allowing each compiler result graph
+    /// to become unreachable before the next isolated unit starts.
+    let checkBlocksForDiagnosticsWithProject project prelude blocks = async {
+        let units = DocumentationDiscovery.compilationUnits project.ProjectPath prelude blocks
+        let diagnostics = ResizeArray<MappedCompilerDiagnostic>()
+        for unit in units do
+            let! result = checkUnit project unit
+            diagnostics.AddRange result.Diagnostics
+        return List.ofSeq diagnostics
     }

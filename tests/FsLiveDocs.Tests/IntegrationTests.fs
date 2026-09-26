@@ -56,6 +56,17 @@ module IntegrationTests =
     }
 
     [<Fact>]
+    let ``diagnostic-only checking streams isolated blocks without retaining check results`` () = async {
+        let projectPath = coreProject
+        let evaluated = DocumentationCompiler.evaluateProject projectPath
+        let markdown = "```fsharp isolated\nlet value = 1\n```\n\n```fsharp isolated\nlet broken: int = \"wrong\"\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "streamed.md" (Some projectPath) markdown
+
+        let! diagnostics = DocumentationCompiler.checkBlocksForDiagnosticsWithProject evaluated "" blocks
+
+        Assert.Single(diagnostics |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error)) |> ignore
+    }
+
     let ``checkBlocksWithProject checks blocks using a pre-evaluated project`` () = async {
         let evaluated = DocumentationCompiler.evaluateProject coreProject
         let blocks =
