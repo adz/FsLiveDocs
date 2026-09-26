@@ -86,11 +86,16 @@ module internal DocumentationSets =
         |> List.rev
         |> Map.ofList
 
-    let private guideFiles sourceDir files =
+    /// Markdown pages of a set outside its `api/` folder. Images, `.txt` files and other assets are static
+    /// files, not guides: treating them as pages made same-named `logo.png`/`logo.svg` collide on `logo.html`
+    /// and sent hand-written `llms.txt` files through the F# fence formatter.
+    let internal guideFiles sourceDir files =
         files
         |> List.filter (fun path ->
             let relative = Path.GetRelativePath(sourceDir, path).Replace('\\', '/')
-            not (relative.StartsWith("api/", StringComparison.OrdinalIgnoreCase)))
+
+            Path.GetExtension(path).Equals(".md", StringComparison.OrdinalIgnoreCase)
+            && not (relative.StartsWith("api/", StringComparison.OrdinalIgnoreCase)))
 
     let prepareCurrent
         (usesDocumentationSets: bool)

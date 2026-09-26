@@ -2195,6 +2195,18 @@ module DocumentationSetTests =
         Assert.Contains("unsafe", unsafe.Message)
 
     [<Fact>]
+    let ``set guides are Markdown pages outside api, never images or text assets`` () =
+        let root = Path.Combine("docs", "set")
+
+        let files =
+            [ "index.md"; "guide/Page.MD"; "api/Thing.md"; "content/img/logo.png"; "content/img/logo.svg"; "llms.txt" ]
+            |> List.map (fun name -> Path.Combine(root, name.Replace('/', Path.DirectorySeparatorChar)))
+
+        let guides = DocumentationSets.guideFiles root files |> List.map (fun path -> Path.GetRelativePath(root, path).Replace('\\', '/'))
+
+        Assert.Equal<string list>([ "index.md"; "guide/Page.MD" ], guides)
+
+    [<Fact>]
     let ``cross-set guide links validate against the global output inventory`` () =
         let root =
             Path.Combine(Path.GetTempPath(), "fslivedocs-links-" + Guid.NewGuid().ToString("N"))
