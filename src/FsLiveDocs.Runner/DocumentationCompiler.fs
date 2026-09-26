@@ -258,3 +258,79 @@ module DocumentationCompiler =
             diagnostics.AddRange result.Diagnostics
         return List.ofSeq diagnostics
     }
+
+    /// Checks several pages as files in one generated project. Each file is enclosed in a unique
+    /// module so declarations cannot leak into another documentation page.
+    let checkPagesWithProject
+        (project: EvaluatedProject)
+        (pages: (string * string * DocumentationBlock list) list)
+        = async {
+        let requestedUnits =
+            pages
+            |> List.collect (fun (key, prelude, blocks) ->
+                DocumentationDiscovery.compilationUnits project.ProjectPath prelude blocks
+                |> List.map (fun unit -> key, unit))
+
+        if requestedUnits.IsEmpty then return Map.empty
+        else
+            let otherFlags =
+                [ yield! project.OtherOptions
+                  for reference in project.References -> $"-r:{reference}" ]
+                |> List.toArray
+            let template, optionDiagnostics = projectOptionsTemplate project otherFlags
+            let batchIdentity =
+                requestedUnits
+                |> List.map (fun (key, unit) -> key + "|" + unit.Id)
+                |> String.concat "\n"
+                |> Text.Encoding.UTF8.GetBytes
+                |> Security.Cryptography.SHA256.HashData
+                |> Convert.ToHexString
+            let batchDirectory = Path.Combine(Path.GetTempPath(), "fslivedocs", "batch-" + batchIdentity)
+            Directory.CreateDirectory(batchDirectory) |> ignore
+
+            let prepared =
+                requestedUnits
+                |> List.mapi (fun index (key, unit) ->
+                    let moduleName = $"FsLiveDocsGeneratedPage{index}_{batchIdentity.Substring(0, 12)}"
+                    let wrapped =
+                        { unit with
+                            Prelude = $"module internal {moduleName}\n" + unit.Prelude }
+                    let source, ranges = syntheticSource wrapped
+                    let fileName = Path.Combine(batchDirectory, $"Page{index:D4}.fs")
+                    key, unit, source, ranges, fileName)
+            // FCS may request earlier files from its file-system adapter while checking a later
+            // file, even though the target file's SourceText is supplied directly.
+            for _, _, source, _, fileName in prepared do
+                File.WriteAllText(fileName, source)
+            let sourceFiles = prepared |> List.map (fun (_, _, _, _, fileName) -> fileName) |> List.toArray
+            let options =
+                { template with
+                    ProjectFileName = Path.Combine(batchDirectory, "FsLiveDocs.Generated.fsproj")
+                    SourceFiles = sourceFiles }
+            let checker = CheckerPool.next checkerPool
+            let results = ResizeArray<string * CheckedCompilationUnit>()
+
+            for key, unit, source, ranges, fileName in prepared do
+                let! _, answer = checker.ParseAndCheckFileInProject(fileName, 0, SourceText.ofString source, options)
+                let checkResults, checkDiagnostics =
+                    match answer with
+                    | FSharpCheckFileAnswer.Succeeded result -> Some result, result.Diagnostics
+                    | FSharpCheckFileAnswer.Aborted -> None, [||]
+                let diagnostics =
+                    List.append optionDiagnostics (Array.toList checkDiagnostics)
+                    |> List.distinctBy (fun diagnostic -> diagnostic.ErrorNumber, diagnostic.StartLine, diagnostic.StartColumn, diagnostic.Message)
+                    |> List.map (mapDiagnostic (unit.Blocks |> List.tryHead |> Option.map _.SourcePath |> Option.defaultValue unit.Id) ranges)
+                results.Add(
+                    key,
+                    { Unit = unit
+                      SyntheticSource = source
+                      Diagnostics = diagnostics
+                      BlockRanges = ranges
+                      CheckResults = checkResults })
+
+            return
+                results
+                |> Seq.groupBy fst
+                |> Seq.map (fun (key, values) -> key, values |> Seq.map snd |> Seq.toList)
+                |> Map.ofSeq
+    }

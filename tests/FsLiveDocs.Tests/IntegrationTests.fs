@@ -36,6 +36,37 @@ module IntegrationTests =
     }
 
     [<Fact>]
+    let ``batched documentation project preserves page isolation and semantic meaning`` () = async {
+        let evaluated = DocumentationCompiler.evaluateProject coreProject
+        let first =
+            DocumentationDiscovery.discoverMarkdown
+                "first.md"
+                (Some coreProject)
+                "```fsharp\nlet pagePrivateValue = 42\n```"
+        let second =
+            DocumentationDiscovery.discoverMarkdown
+                "second.md"
+                (Some coreProject)
+                "```fsharp\nlet illegalLeak: int = pagePrivateValue\n```"
+        let standaloneFirst = DocumentationCompiler.checkBlocksWithProject evaluated "" first
+        let! standalone = standaloneFirst
+        let! batched =
+            DocumentationCompiler.checkPagesWithProject
+                evaluated
+                [ "first", "", first
+                  "second", "", second ]
+
+        let firstBatch = batched |> Map.find "first"
+        let secondBatch = batched |> Map.find "second"
+        let standaloneArtifact = SemanticExtractor.artifact standalone
+        let batchedArtifact = SemanticExtractor.artifact firstBatch
+
+        Assert.Equal<SemanticPage list>(standaloneArtifact.Pages, batchedArtifact.Pages)
+        Assert.Empty(firstBatch |> List.collect _.Diagnostics |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error))
+        Assert.NotEmpty(secondBatch |> List.collect _.Diagnostics |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error))
+    }
+
+    [<Fact>]
     let ``documentation compiler checks blocks correctly when compilation units exceed the checker pool size`` () = async {
         let markdown =
             [ 1 .. 8 ]

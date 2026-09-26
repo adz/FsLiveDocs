@@ -363,49 +363,49 @@ module internal DocAnalysis =
                         }
                     Run.orRaise FileSystemError.describe $"Could not write semantic page cache {path}" work
 
-                let checkAndExtract page = async {
-                    let selectedEvaluation =
-                        match page.TargetFramework with
-                        | None -> evaluatedProjects.[page.SelectedProject]
-                        | Some _ ->
-                            let selected = DocumentationCompiler.evaluateProjectFor page.TargetFramework page.SelectedProject
-                            let references =
-                                selected.References @ aggregateReferences
-                                |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
-                            { selected with References = references }
+                let evaluationFor (selectedProject, targetFramework) =
+                    match targetFramework with
+                    | None -> evaluatedProjects.[selectedProject]
+                    | Some _ ->
+                        let selected = DocumentationCompiler.evaluateProjectFor targetFramework selectedProject
+                        let references =
+                            selected.References @ aggregateReferences
+                            |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
+                        { selected with References = references }
 
-                    let! checkedUnits = DocumentationCompiler.checkBlocksWithProject selectedEvaluation page.Prelude page.Blocks
-                    let errors =
-                        checkedUnits
-                        |> List.collect _.Diagnostics
-                        |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error)
-                        |> List.choose (fun item -> item.BlockId |> Option.map (fun id -> id, (item.StartLine, item.StartColumn, item.Message)))
-                    let semantic =
-                        if errors.IsEmpty then
-                            let artifact = SemanticExtractor.artifact checkedUnits
-                            writePageCache page artifact
-                            Some artifact
-                        else None
-                    let current = Threading.Interlocked.Increment(&completed)
-                    reportProgress "Checking documentation pages" current pages.Length
-                    return errors, semantic
-                }
-
-                // Two pages at a time bounds retained FCS graphs. Semantic records are projected
-                // and persisted before the next batch starts.
-                let checkedPages =
+                let projectGroups =
                     missingPages
-                    |> List.chunkBySize 2
-                    |> FlowStream.fromSeq
-                    |> FlowStream.mapFlow (fun batch ->
-                        async {
-                            let! pageResults = batch |> List.map checkAndExtract |> Async.Parallel
-                            return Array.toList pageResults
-                        }
-                        |> Flow.fromAsync)
-                    |> FlowStream.runFold (fun accumulated batch -> List.rev batch @ accumulated) []
-                    |> Run.orRaise _.Message "Could not check documentation pages"
-                    |> List.rev
+                    |> List.groupBy (fun page -> page.SelectedProject, page.TargetFramework)
+
+                // One generated F# project amortizes reference imports and lets FCS reuse its
+                // project graph. Shards bound the check-result graph retained before semantic
+                // records are projected and persisted page by page.
+                let checkedPages =
+                    [ for projectKey, projectPages in projectGroups do
+                          let selectedEvaluation = evaluationFor projectKey
+                          for shard in projectPages |> List.chunkBySize 32 do
+                              let requests =
+                                  shard |> List.map (fun page -> page.Relative, page.Prelude, page.Blocks)
+                              let checkedByPage =
+                                  DocumentationCompiler.checkPagesWithProject selectedEvaluation requests
+                                  |> Async.RunSynchronously
+
+                              for page in shard do
+                                  let checkedUnits = checkedByPage |> Map.tryFind page.Relative |> Option.defaultValue []
+                                  let errors =
+                                      checkedUnits
+                                      |> List.collect _.Diagnostics
+                                      |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error)
+                                      |> List.choose (fun item -> item.BlockId |> Option.map (fun id -> id, (item.StartLine, item.StartColumn, item.Message)))
+                                  let semantic =
+                                      if errors.IsEmpty then
+                                          let artifact = SemanticExtractor.artifact checkedUnits
+                                          writePageCache page artifact
+                                          Some artifact
+                                      else None
+                                  completed <- completed + 1
+                                  reportProgress "Checking documentation pages" completed pages.Length
+                                  yield errors, semantic ]
 
                 let errors = checkedPages |> List.collect fst
                 let artifacts = cachedPages @ (checkedPages |> List.choose snd)
