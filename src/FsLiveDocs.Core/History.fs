@@ -9,8 +9,12 @@ open FsLiveDocs.Core.Schema
 /// <summary>Loads and verifies immutable inputs for a multi-version documentation build.</summary>
 module History =
 
+    /// Schema 4 adds the optional package `Description`. Schema 3 is read by explicit migration.
     [<Literal>]
-    let ApiModelSchemaVersion = 3
+    let ApiModelSchemaVersion = 4
+
+    /// API schema versions this renderer reads. Older versions are migrated; unknown versions are rejected.
+    let supportedApiModelSchemaVersions = set [ 3; 4 ]
 
     [<Literal>]
     let SemanticSchemaVersion = 2
@@ -24,6 +28,41 @@ module History =
 
     let private deserializeWith codec path = Json.deserialize codec (File.ReadAllText path)
 
+    /// The API artifact exactly as schema 3 persisted it, kept for migration only.
+    module private LegacyApi =
+
+        /// Schema 3 packages predate `Description`. Write it explicitly as null so the strict
+        /// schema-4 codec decodes the artifact without relying on absent-field defaults.
+        let migrateV3 (root: System.Text.Json.Nodes.JsonObject) =
+            match root["Package"] with
+            | :? System.Text.Json.Nodes.JsonObject as package ->
+                match package["Packages"] with
+                | :? System.Text.Json.Nodes.JsonArray as packages ->
+                    for info in packages do
+                        match info with
+                        | :? System.Text.Json.Nodes.JsonObject as fields ->
+                            if not (fields.ContainsKey "Description") then fields["Description"] <- null
+                        | _ -> invalidOp "API schema 3 package entry must be an object."
+                | _ -> invalidOp "API schema 3 Package.Packages must be an array."
+            | _ -> invalidOp "API schema 3 payload is missing Package."
+            root["SchemaVersion"] <- System.Text.Json.Nodes.JsonValue.Create(4)
+
+    /// <summary>Reads an API artifact of any supported schema version, migrating older versions to the current one.</summary>
+    let readApiArtifact (json: string) : ApiModelArtifact =
+        let root =
+            match System.Text.Json.Nodes.JsonNode.Parse json with
+            | :? System.Text.Json.Nodes.JsonObject as value -> value
+            | _ -> invalidOp "API model payload must be an object."
+        let declared = match root["SchemaVersion"] with | null -> 0 | value -> value.GetValue<int>()
+        if not (supportedApiModelSchemaVersions.Contains declared) then
+            let supported = supportedApiModelSchemaVersions |> Set.toList |> List.map string |> String.concat ", "
+            invalidOp $"Unsupported API model schema {declared}; supported versions are {supported}."
+        if declared = 3 then
+            LegacyApi.migrateV3 root
+            Json.deserialize apiCodec (root.ToJsonString())
+        else
+            Json.deserialize apiCodec json
+
     /// <summary>Computes the lowercase SHA-256 digest of a file.</summary>
     let sha256 path =
         use stream = File.OpenRead(path)
@@ -35,9 +74,7 @@ module History =
         let actualSha256 = sha256 path
         if not (actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase)) then
             invalidOp $"History API model checksum mismatch for {expectedVersion}: expected {expectedSha256}, got {actualSha256}."
-        let artifact = deserializeWith apiCodec path
-        if artifact.SchemaVersion <> ApiModelSchemaVersion then
-            invalidOp $"Unsupported API model schema {artifact.SchemaVersion} in {path}; expected {ApiModelSchemaVersion}."
+        let artifact = readApiArtifact (File.ReadAllText path)
         if artifact.Package.Version <> expectedVersion then
             invalidOp $"History API model version mismatch in {path}: expected {expectedVersion}, got {artifact.Package.Version}."
         artifact.Package

@@ -180,11 +180,31 @@ module HistoryTests =
         File.WriteAllText(path, """{"SchemaVersion":1,"Package":{"Version":"1.2.3","Entities":[],"Scenarios":[],"Packages":[]}}""")
 
         let older = Assert.Throws<InvalidOperationException>(fun () -> History.loadArtifact "1.2.3" (History.sha256 path) path |> ignore)
-        Assert.Contains("expected", older.Message)
+        Assert.Contains("supported versions are 3, 4", older.Message)
 
         File.WriteAllText(path, """{"SchemaVersion":999,"Package":{"Version":"1.2.3","Entities":[],"Scenarios":[],"Packages":[]}}""")
         let error = Assert.Throws<InvalidOperationException>(fun () -> History.loadArtifact "1.2.3" (History.sha256 path) path |> ignore)
-        Assert.Contains("expected", error.Message)
+        Assert.Contains("supported versions are 3, 4", error.Message)
+
+    [<Fact>]
+    let ``schema 3 API artifacts migrate to schema 4 with no package description`` () =
+        let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
+        File.WriteAllText(path, """{"SchemaVersion":3,"Package":{"Version":"1.2.3","Entities":[],"Scenarios":[],"Packages":[{"Name":"Pkg","EntityIds":["Pkg.A"]}]}}""")
+
+        let loaded = History.loadArtifact "1.2.3" (History.sha256 path) path
+
+        Assert.Equal<PackageInfo list>([ { Name = "Pkg"; EntityIds = [ "Pkg.A" ]; Description = None } ], loaded.Packages)
+
+    [<Fact>]
+    let ``schema 4 API artifacts round-trip the package description`` () =
+        let package : PackageModel =
+            { Version = "1.2.3"; Entities = []; Scenarios = []
+              Packages = [ { Name = "Pkg"; EntityIds = []; Description = Some "What it does." } ] }
+        let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
+
+        let loaded = History.readApiArtifact (Json.serialize Codecs.apiModelArtifact artifact)
+
+        Assert.Equal<PackageInfo list>(package.Packages, loaded.Package.Packages)
 
     [<Fact>]
     let ``API artifact stores structured documentation without HTML fields`` () =
@@ -602,7 +622,7 @@ module SymbolListerTests =
     let ``merge removes empty synthetic Default namespace`` () =
         let child = { Id = "Default.Sample"; Name = "Sample"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] }
         let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = EntityKind.Namespace; Summary = []; Members = []; Examples = []; Entities = [ child ] }
-        let package = SymbolLister.merge [ { Version = "1.0"; Entities = [ defaultNamespace; child ]; Scenarios = []; Packages = [ { Name = "Example.Package"; EntityIds = [ child.Id ] } ] } ]
+        let package = SymbolLister.merge [ { Version = "1.0"; Entities = [ defaultNamespace; child ]; Scenarios = []; Packages = [ { Name = "Example.Package"; EntityIds = [ child.Id ]; Description = None } ] } ]
 
         let onlyEntity = Assert.Single(package.Entities)
         Assert.Equal("Default.Sample", onlyEntity.Id)
@@ -616,7 +636,7 @@ module SymbolListerTests =
         let coreRoot = { Id = "Example"; Name = "Example"; Kind = EntityKind.Namespace; Summary = []; Members = []; Examples = []; Entities = [ coreChild ] }
         let satelliteRoot = { Id = "Example"; Name = "Example"; Kind = EntityKind.Namespace; Summary = []; Members = []; Examples = []; Entities = [ satelliteChild ] }
         let model name root child =
-            { Version = "1.0"; Entities = [ root; child ]; Scenarios = []; Packages = [ { Name = name; EntityIds = [ root.Id; child.Id ] } ] }
+            { Version = "1.0"; Entities = [ root; child ]; Scenarios = []; Packages = [ { Name = name; EntityIds = [ root.Id; child.Id ]; Description = None } ] }
 
         let merged = SymbolLister.merge [ model "Example.Core" coreRoot coreChild; model "Example.Http" satelliteRoot satelliteChild ]
         let root = Assert.Single(merged.Entities)
@@ -1394,7 +1414,7 @@ module ViewTests =
                 Entities = []
             }
 
-        let package : PackageModel = { Version = "1.0"; Entities = [ recordEntity ]; Scenarios = []; Packages = [ { Name = "FsLiveDocs.Core"; EntityIds = [ recordEntity.Id ] } ] }
+        let package : PackageModel = { Version = "1.0"; Entities = [ recordEntity ]; Scenarios = []; Packages = [ { Name = "FsLiveDocs.Core"; EntityIds = [ recordEntity.Id ]; Description = None } ] }
         let context : SiteBuilder.SiteRenderContext =
             {
                 AllPages = []
@@ -1726,8 +1746,8 @@ module SiteBuilderTests =
             Entities = [ shared ]
             Scenarios = []
             Packages = [
-                { Name = "Second.Project"; EntityIds = [ "Shared"; second.Id ] }
-                { Name = "First.Project"; EntityIds = [ "Shared"; first.Id ] }
+                { Name = "Second.Project"; EntityIds = [ "Shared"; second.Id ]; Description = None }
+                { Name = "First.Project"; EntityIds = [ "Shared"; first.Id ]; Description = None }
             ]
         }
 
@@ -1780,8 +1800,8 @@ module SiteBuilderTests =
             Entities = [ shared ]
             Scenarios = []
             Packages = [
-                { Name = "Second.Project"; EntityIds = [ "Shared"; second.Id ] }
-                { Name = "First.Project"; EntityIds = [ "Shared"; first.Id ] }
+                { Name = "Second.Project"; EntityIds = [ "Shared"; second.Id ]; Description = None }
+                { Name = "First.Project"; EntityIds = [ "Shared"; first.Id ]; Description = None }
             ]
         }
 
@@ -1832,8 +1852,8 @@ module SiteBuilderTests =
             Entities = [ owned; shared ]
             Scenarios = []
             Packages = [
-                { Name = "Axial.Layers"; EntityIds = [ owned.Id; shared.Id ] }
-                { Name = "Axial.PlatformService"; EntityIds = [ shared.Id ] }
+                { Name = "Axial.Layers"; EntityIds = [ owned.Id; shared.Id ]; Description = None }
+                { Name = "Axial.PlatformService"; EntityIds = [ shared.Id ]; Description = None }
             ]
         }
 
@@ -1899,7 +1919,7 @@ module SiteBuilderTests =
             Entities = [ axial ]
             Scenarios = []
             Packages = [
-                { Name = "Axial.Layers"; EntityIds = [ builders.Id; layer.Id ] }
+                { Name = "Axial.Layers"; EntityIds = [ builders.Id; layer.Id ]; Description = None }
             ]
         }
 
@@ -1970,7 +1990,7 @@ module SiteBuilderTests =
             Entities = [ reified ]
             Scenarios = []
             Packages = [
-                { Name = "Reified.Schema"; EntityIds = [ schemaModule.Id; schemaType.Id; inspectModule.Id ] }
+                { Name = "Reified.Schema"; EntityIds = [ schemaModule.Id; schemaType.Id; inspectModule.Id ]; Description = None }
             ]
         }
 
@@ -1992,6 +2012,61 @@ module SiteBuilderTests =
         Assert.DoesNotContain(">Reified<", groupBody)
         Assert.Contains("Reified.Schema`1.html", schemaPage)
         Assert.Contains("Reified.Inspect.html", schemaPage)
+
+    let private renderPackagePage (entities: EntityModel list) (info: PackageInfo) =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let package : PackageModel = { Version = "1.0"; Entities = entities; Scenarios = []; Packages = [ info ] }
+
+        SiteBuilder.build {
+            Pages = []
+            Package = package
+            Config = defaultSiteConfig
+            Versions = []
+            Theme = "light"
+            RootPath = ""
+            SiteRootPath = ""
+            OutputDir = outputDir
+        }
+
+        File.ReadAllText(Path.Combine(outputDir, "api", "packages", info.Name + ".html"))
+
+    let private summarized id name summary : EntityModel =
+        { Id = id
+          Name = name
+          Kind = EntityKind.Module
+          Summary = (if summary = "" then [] else [ Documentation.text summary ])
+          Members = []
+          Examples = []
+          Entities = [] }
+
+    [<Fact>]
+    let ``package page introduces the package with its description, not the first entity's summary`` () =
+        let catalogue = summarized "Pkg.Catalogue" "Catalogue" "The built-in message catalogue."
+        let other = summarized "Pkg.Other" "Other" ""
+        let page =
+            renderPackagePage
+                [ catalogue; other ]
+                { Name = "Pkg"; EntityIds = [ catalogue.Id; other.Id ]; Description = Some "Reusable <value> constraints." }
+
+        Assert.Contains("Reusable &lt;value&gt; constraints.", page)
+        Assert.DoesNotContain("built-in message catalogue", page)
+
+    [<Fact>]
+    let ``package page prefers an entity named like the package over the description`` () =
+        let root = summarized "Pkg" "Pkg" "Root module summary."
+        let page =
+            renderPackagePage [ root ] { Name = "Pkg"; EntityIds = [ root.Id ]; Description = Some "Project description." }
+
+        Assert.Contains("Root module summary.", page)
+        Assert.DoesNotContain("Project description.", page)
+
+    [<Fact>]
+    let ``package page has no introduction without a description or a same-named entity`` () =
+        let catalogue = summarized "Pkg.Catalogue" "Catalogue" "The built-in message catalogue."
+        let page =
+            renderPackagePage [ catalogue ] { Name = "Pkg"; EntityIds = [ catalogue.Id ]; Description = None }
+
+        Assert.DoesNotContain("built-in message catalogue", page)
 
     [<Fact>]
     let ``entity page Contents omits another project's own root namespace`` () =
@@ -2028,8 +2103,8 @@ module SiteBuilderTests =
             Entities = [ axial ]
             Scenarios = []
             Packages = [
-                { Name = "Axial"; EntityIds = [ app.Id ] }
-                { Name = "Axial.Layers"; EntityIds = [] }
+                { Name = "Axial"; EntityIds = [ app.Id ]; Description = None }
+                { Name = "Axial.Layers"; EntityIds = []; Description = None }
             ]
         }
 
@@ -2092,8 +2167,8 @@ module SiteBuilderTests =
             Entities = [ axial ]
             Scenarios = []
             Packages = [
-                { Name = "Axial"; EntityIds = [ attribute.Id ] }
-                { Name = "Axial.Telemetry"; EntityIds = [ fiberTelemetry.Id ] }
+                { Name = "Axial"; EntityIds = [ attribute.Id ]; Description = None }
+                { Name = "Axial.Telemetry"; EntityIds = [ fiberTelemetry.Id ]; Description = None }
             ]
         }
 
@@ -2353,9 +2428,11 @@ module DocumentationSetTests =
               Scenarios = []
               Packages =
                 [ { Name = "Public"
-                    EntityIds = [ publicEntity.Id ] }
+                    EntityIds = [ publicEntity.Id ]
+                    Description = None }
                   { Name = "Internal"
-                    EntityIds = [ internalEntity.Id ] } ] }
+                    EntityIds = [ internalEntity.Id ]
+                    Description = None } ] }
 
         let metadata title = ContentMetadata.empty title
 

@@ -87,7 +87,8 @@ module ApiSchema =
         schema<PackageInfo> {
             fieldAs "Name" (fun (p: PackageInfo) -> p.Name) { withSchema Schema.text }
             fieldAs "EntityIds" (fun (p: PackageInfo) -> p.EntityIds) { withSchema (Schema.listWith Schema.text) }
-            construct (fun name entityIds -> { Name = name; EntityIds = entityIds })
+            fieldAs "Description" (fun (p: PackageInfo) -> p.Description) { withSchema (Schema.option Schema.text) }
+            construct (fun name entityIds description -> { Name = name; EntityIds = entityIds; Description = description })
         }
 
     let packageModel : Schema<PackageModel> =

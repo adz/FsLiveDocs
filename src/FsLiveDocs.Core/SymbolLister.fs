@@ -555,6 +555,10 @@ module SymbolLister =
     /// select the API surface of its own projects from the shared package model.</summary>
     let packageName (projectPath: string) = getPackageName projectPath
 
+    /// <summary>The plain-text package description a project declares, preferring `Description`.</summary>
+    let private getPackageDescription (projectPath: string) =
+        projectProperty projectPath "Description" |> Option.orElseWith (fun () -> projectProperty projectPath "PackageDescription")
+
     let private getPackageReferenceDirectories (projectPath: string) =
         let projectDir = Path.GetDirectoryName(projectPath)
         let projectName = Path.GetFileNameWithoutExtension(projectPath)
@@ -868,7 +872,7 @@ module SymbolLister =
                     // nested under them, so listing them here would make every project appear to "own" shared
                     // ancestor namespaces. Only concrete entities (modules, types, ...) reflect real per-project
                     // ownership; ancestor namespace nodes are still retained in rendered trees via prefix matching.
-                    Packages = [ { Name = packageName; EntityIds = entities |> List.collect allEntityIds |> List.distinct } ]
+                    Packages = [ { Name = packageName; EntityIds = entities |> List.collect allEntityIds |> List.distinct; Description = getPackageDescription projectPath } ]
                 }, diagnostics
     }
 

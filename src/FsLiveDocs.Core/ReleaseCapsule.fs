@@ -584,7 +584,7 @@ module ReleaseCapsule =
         let manifest = required "manifest.json" entries |> deserializeWith manifestCodec
         if manifest.SchemaVersion <> ManifestSchemaVersion then
             invalidOp $"Unsupported release capsule manifest schema {manifest.SchemaVersion}; expected {ManifestSchemaVersion}."
-        let api = verifyComponent manifest.Api entries |> deserializeWith apiCodec
+        let api = verifyComponent manifest.Api entries |> Encoding.UTF8.GetString |> History.readApiArtifact
 
         let semantic =
             verifyComponent manifest.Semantic entries

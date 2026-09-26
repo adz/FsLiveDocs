@@ -215,7 +215,11 @@ module SiteBuilder =
             }
         Run.orRaise FileSystemError.describe $"Could not reset output directory {outputDir}" work
 
-    let private packageIntroduction packageName entities =
+    /// The package page's introduction: the summary of the entity named exactly like the package, else the
+    /// project's declared description. Never another entity's summary, which describes that entity and not
+    /// the package.
+    let private packageIntroduction (package: PackageModel) (packageInfo: PackageInfo) entities =
+        let packageName = packageInfo.Name
         let rec findExact = function
             | [] -> None
             | entity :: rest ->
@@ -225,13 +229,9 @@ module SiteBuilder =
                 else
                     findExact entity.Entities |> Option.orElseWith (fun () -> findExact rest)
 
-        let rec findFirst = function
-            | [] -> None
-            | entity :: rest ->
-                if not (Documentation.isEmpty entity.Summary) then Some entity.Summary
-                else findFirst entity.Entities |> Option.orElseWith (fun () -> findFirst rest)
-
-        findExact entities |> Option.orElseWith (fun () -> findFirst entities)
+        findExact entities
+        |> Option.map (fun summary -> Presentation.renderDocumentationHtml package summary)
+        |> Option.orElseWith (fun () -> packageInfo.Description |> Option.map (fun text -> $"<p>{System.Net.WebUtility.HtmlEncode text}</p>"))
 
     let private shiftApiHtmlIntoPackageDirectory html =
         Regex.Replace(
@@ -372,8 +372,8 @@ module SiteBuilder =
 
                     if not ownedEntities.IsEmpty then
                         let introduction =
-                            packageIntroduction packageInfo.Name contributedEntities
-                            |> Option.map (Presentation.renderDocumentationHtml context.Package >> shiftApiHtmlIntoPackageDirectory)
+                            packageIntroduction context.Package packageInfo contributedEntities
+                            |> Option.map shiftApiHtmlIntoPackageDirectory
 
                         let packageContent = [
                             div [ _class "flex items-center gap-3 mb-8" ] [

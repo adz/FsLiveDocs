@@ -118,6 +118,9 @@ type PackageInfo = {
     Name: string
     /// <summary>Entity ids contributed by the package before hierarchy reconstruction.</summary>
     EntityIds: string list
+    /// <summary>The project's `Description` (or `PackageDescription`) property, plain text. The package page
+    /// introduces the package with it when no entity is named exactly like the package.</summary>
+    Description: string option
 }
 
 /// <summary>The root model representing a documented package or solution.</summary>
