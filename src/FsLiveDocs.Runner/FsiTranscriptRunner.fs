@@ -3,9 +3,9 @@ namespace FsLiveDocs.Runner
 open System
 open System.IO
 open FsLiveDocs.Core
-open FSharp.Compiler.Interactive.Shell
+open FsLiveDocs.TranscriptHost
 
-/// <summary>Runs FSI transcripts and formats the resulting output.</summary>
+/// <summary>Builds FSI transcript sessions and runs them in the isolated transcript worker.</summary>
 module FsiTranscriptRunner =
     type DocTestExecutionContext = {
         Project: ResolvedProject
@@ -13,32 +13,6 @@ module FsiTranscriptRunner =
         Scenario: ScenarioModel option
         Example: ExampleModel
     }
-
-    let rec private formatTypeName (valueType: Type) =
-        if valueType = typeof<unit> then "unit"
-        elif valueType = typeof<int> then "int"
-        elif valueType = typeof<int64> then "int64"
-        elif valueType = typeof<int16> then "int16"
-        elif valueType = typeof<byte> then "byte"
-        elif valueType = typeof<double> then "float"
-        elif valueType = typeof<single> then "float32"
-        elif valueType = typeof<decimal> then "decimal"
-        elif valueType = typeof<string> then "string"
-        elif valueType = typeof<bool> then "bool"
-        elif valueType = typeof<char> then "char"
-        elif valueType.IsGenericType && valueType.GetGenericTypeDefinition() = typedefof<option<_>> then
-            $"{formatTypeName (valueType.GetGenericArguments().[0])} option"
-        elif valueType.IsGenericType && valueType.GetGenericTypeDefinition() = typedefof<list<_>> then
-            $"{formatTypeName (valueType.GetGenericArguments().[0])} list"
-        elif valueType.IsGenericType && valueType.GetGenericTypeDefinition() = typedefof<Map<_, _>> then
-            let args = valueType.GetGenericArguments()
-            $"Map<{formatTypeName args.[0]},{formatTypeName args.[1]}>"
-        elif valueType.IsGenericType then
-            let name = valueType.Name.Split('`').[0]
-            let args = valueType.GetGenericArguments() |> Array.map formatTypeName |> String.concat ","
-            $"{name}<{args}>"
-        else
-            valueType.Name
 
     let private buildLoadScript (project: ResolvedProject) (references: string list) (extraOpens: string list) =
         let projectDependencies =
@@ -72,78 +46,6 @@ module FsiTranscriptRunner =
 
         String.concat "\n" (refs @ opens)
 
-    let private createSession () =
-        let inStream = new StringReader("")
-        let outStream = new StringWriter()
-        let errStream = new StringWriter()
-        let argv = [| "fsi.exe"; "--noninteractive"; "--quiet" |]
-        let config = FsiEvaluationSession.GetDefaultConfiguration()
-
-        FsiEvaluationSession.Create(config, argv, inStream, errStream, outStream), outStream, errStream
-
-    let private appendLines (target: ResizeArray<string>) (text: string) =
-        text
-        |> fun value -> value.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
-        |> Array.map (fun line -> line.TrimEnd())
-        |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line))
-        |> Array.iter target.Add
-
-    let private evalBlock (session: FsiEvaluationSession) (outStream: StringWriter) (errStream: StringWriter) (block: string) =
-        let output = ResizeArray<string>()
-        let outBuilder = outStream.GetStringBuilder()
-        let errBuilder = errStream.GetStringBuilder()
-        let outStart = outBuilder.Length
-        let errStart = errBuilder.Length
-
-        let normalized = block.Replace("\r\n", "\n").Replace("\r", "\n").Trim()
-
-        let boundOutputs = ResizeArray<string>()
-
-        use subscription =
-            session.ValueBound.Subscribe(fun (valueObj, valueType, name) ->
-                let name = if String.IsNullOrWhiteSpace name then "it" else name
-                let typeName = formatTypeName valueType
-                let valueText =
-                    if valueType = typeof<decimal> then (unbox<decimal> valueObj).ToString(System.Globalization.CultureInfo.InvariantCulture) + "M"
-                    else session.FormatValue(valueObj, valueType)
-                boundOutputs.Add($"val {name}: {typeName} = {valueText}")
-            )
-
-        try
-            if normalized.StartsWith("#", StringComparison.Ordinal) then
-                normalized.Split('\n')
-                |> Array.map (fun line -> line.Trim())
-                |> Array.filter (fun line -> not (String.IsNullOrWhiteSpace line))
-                |> Array.iter (fun line -> session.EvalInteraction(line) |> ignore)
-            else
-                // A run block may contain page setup (`open`, declarations, then an
-                // expression), so it is an FSI interaction rather than one expression.
-                session.EvalInteraction(normalized) |> ignore
-        with ex ->
-            output.Add(ex.Message)
-
-        boundOutputs |> Seq.iter output.Add
-
-        let outText = outBuilder.ToString(outStart, outBuilder.Length - outStart)
-        let errText = errBuilder.ToString(errStart, errBuilder.Length - errStart)
-
-        if not (String.IsNullOrWhiteSpace outText) then
-            appendLines output outText
-
-        if not (String.IsNullOrWhiteSpace errText) then
-            appendLines output errText
-
-        output |> Seq.toList
-
-    let private evalTranscript session outStream errStream setupCount (blocks: string list) =
-        blocks
-        |> List.filter (fun block -> not (String.IsNullOrWhiteSpace block))
-        |> List.mapi (fun index block ->
-            let output = evalBlock session outStream errStream block
-            if index < setupCount && not (output |> List.exists (fun line -> line.Contains("error FS", StringComparison.OrdinalIgnoreCase))) then [] else output)
-        |> List.collect id
-        |> String.concat "\n"
-
     let private script context =
         let transcript = ExampleTranscript.parse context.Example.Content
         let scenarioCall = context.Scenario |> Option.map (fun scenario -> $"{scenario.MethodId}()")
@@ -153,20 +55,21 @@ module FsiTranscriptRunner =
             @ transcript.Interactions
         transcript, scenarioCall, blocks
 
+    let private request context : TranscriptExample =
+        let _, scenarioCall, blocks = script context
+        { Blocks = List.toArray blocks; SetupCount = 1 + (if scenarioCall.IsSome then 1 else 0) }
+
+    /// Runs one example in its own transcript worker session.
     let runExample (context: DocTestExecutionContext) =
-        let transcript, scenarioCall, blocks = script context
-        let session, outStream, errStream = createSession ()
-        use session = session
-        let output = evalTranscript session outStream errStream (1 + (if scenarioCall.IsSome then 1 else 0)) blocks
+        let transcript, _, _ = script context
+        let output = TranscriptHostClient.run [ request context ] |> List.exactlyOne
         output, transcript.ExpectedOutput, transcript.DisplayText
 
-    /// Runs a project's independent documentation examples in one compiler session. Definitions
+    /// Runs a project's independent documentation examples in one worker session. Definitions
     /// from later FSI interactions shadow earlier ones, while output is sliced per example.
     let runExamples (contexts: DocTestExecutionContext list) =
-        let session, outStream, errStream = createSession ()
-        use session = session
-        contexts
-        |> List.map (fun context ->
-            let transcript, scenarioCall, blocks = script context
-            let output = evalTranscript session outStream errStream (1 + (if scenarioCall.IsSome then 1 else 0)) blocks
+        let outputs = TranscriptHostClient.run (contexts |> List.map request)
+        (contexts, outputs)
+        ||> List.map2 (fun context output ->
+            let transcript, _, _ = script context
             output, transcript.ExpectedOutput, transcript.DisplayText)

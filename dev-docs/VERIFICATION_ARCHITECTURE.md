@@ -27,3 +27,25 @@ XML snapshot examples remain owned by their named Verify cases and do not execut
 ## Detect stale generated tests
 
 The runner reconstructs canonical cases before running an embedded case. If its ID or action no longer exists, the test tells you to regenerate the project.
+
+## Execute examples in an isolated worker
+
+Transcripts, `run` blocks, and snapshot examples execute in `FsLiveDocs.TranscriptHost`, a separate process, never in
+`livedocs` or a generated test process. FsLiveDocs depends on libraries (Axial among them) that a documented project may
+use at another version, and one process binds one copy of an assembly identity: the tool's. The worker loads only the
+documented project's graph.
+
+- The worker references only FSharp.Core and FSharp.Compiler.Service. Never add FsLiveDocs.Core, FsLiveDocs.Runner,
+  Axial, or another shared library to it; a test asserts its `deps.json` stays free of them.
+- `FsLiveDocs.Runner` references the worker for its protocol types, which also copies the worker, its `deps.json`, and
+  its `runtimeconfig.json` beside the Runner in every consumer. Generated snapshot projects, which reference the Runner by
+  `HintPath`, copy those three files explicitly. `TranscriptHostClient` resolves the worker beside the assembly that
+  declares the protocol, or from `FSLIVEDOCS_TRANSCRIPT_HOST`.
+- The request travels as JSON on the worker's stdin and the response on its stdout; both carry
+  `Protocol.Version`, and a mismatch is rejected. Evaluated code's stdout is redirected to the worker's stderr so
+  printing cannot corrupt the response. That output is not part of the compared transcript, as before the move.
+- One request is one fresh FSI session. `runExamples` sends a project's snapshot examples in one request, preserving
+  the shared-session shadowing they had in process.
+- Each worker runs under `Process.timeout` (10 minutes, or `FSLIVEDOCS_TRANSCRIPT_TIMEOUT_SECONDS`), which terminates the
+  process tree. Isolation is for dependency identity and cleanup; it is not a security sandbox, and examples remain
+  trusted code.

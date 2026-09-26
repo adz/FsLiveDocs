@@ -117,7 +117,7 @@ module CustomerExamples =
     let price subtotal = subtotal * (1M - discount)
 ```
 
-FsLiveDocs starts a fresh FSI session, loads the project, runs scenario setup, and then evaluates the example. Setup output is not included in the expected transcript.
+FsLiveDocs starts a fresh FSI session in a separate worker process, loads the project, runs scenario setup, and then evaluates the example. Setup output is not included in the expected transcript. Because the worker loads only your project's dependencies, your project can use a different version of a library that FsLiveDocs also uses.
 
 Scenario names must be unique across the build. The XML `scenario` value must match the `DocScenario` name exactly.
 

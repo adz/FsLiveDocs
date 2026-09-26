@@ -451,3 +451,81 @@ type IWriter =
         Assert.Contains("File1", moduleNames)
         Assert.Contains("File2", moduleNames)
     }
+
+    let private annotationsContext content : FsiTranscriptRunner.DocTestExecutionContext =
+        { Project =
+            { ProjectPath = coreProject
+              AssemblyPath = typeof<FsLiveDocs.DocScenarioAttribute>.Assembly.Location
+              ProjectNamespace = "FsLiveDocs" }
+          References = []
+          Scenario = None
+          Example =
+            { Name = "isolation"
+              Content = content
+              ExpectedOutput = None
+              Scenario = None
+              IsSnapshotTest = false
+              NoCheckReason = None } }
+
+    [<Fact>]
+    let ``transcripts run in a worker process, not the process running FsLiveDocs`` () =
+        let output, _, _ =
+            FsiTranscriptRunner.runExample (annotationsContext $"> System.Environment.ProcessId = {Environment.ProcessId};;")
+
+        Assert.Equal("val it: bool = false", output)
+
+    [<Fact>]
+    let ``the transcript worker's dependency graph excludes the tool's own libraries`` () =
+        // The worker exists so a documented project's dependencies are never unified with the tool's. If it gained a
+        // reference to FsLiveDocs.Core or Axial, the tool's copies would load before the documented project's again.
+        let runnerDirectory = Path.GetDirectoryName(typeof<FsiTranscriptRunner.DocTestExecutionContext>.Assembly.Location)
+        let manifest = File.ReadAllText(Path.Combine(runnerDirectory, "FsLiveDocs.TranscriptHost.deps.json"))
+        Assert.DoesNotContain("Axial", manifest)
+        Assert.DoesNotContain("FsLiveDocs.Core", manifest)
+        Assert.DoesNotContain("FsLiveDocs.Runner", manifest)
+
+    [<Fact>]
+    let ``multiple examples share one worker session and keep their own output`` () =
+        let first = annotationsContext "> let shared = 20;;\nval shared: int = 20"
+        let second = annotationsContext "> shared + 22;;\nval it: int = 42"
+        let outputs = FsiTranscriptRunner.runExamples [ first; second ] |> List.map (fun (output, _, _) -> output)
+        Assert.Equal<string list>([ "val shared: int = 20"; "val it: int = 42" ], outputs)
+
+    [<Fact>]
+    let ``a transcript that outlives its time limit stops the worker`` () =
+        let stopwatch = Diagnostics.Stopwatch.StartNew()
+        let error =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                TranscriptHostClient.runWithin
+                    (TimeSpan.FromSeconds 3.0)
+                    [ { Blocks = [| "System.Threading.Thread.Sleep 60000" |]; SetupCount = 0 } ]
+                |> ignore)
+        Assert.Contains("timed out", error.Message)
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds 30.0, $"The worker was not stopped promptly: {stopwatch.Elapsed}")
+
+    let private runWorker (input: string) =
+        let runnerDirectory = Path.GetDirectoryName(typeof<FsiTranscriptRunner.DocTestExecutionContext>.Assembly.Location)
+        let start =
+            Diagnostics.ProcessStartInfo(
+                "dotnet",
+                $"exec \"{Path.Combine(runnerDirectory, FsLiveDocs.TranscriptHost.Protocol.WorkerFileName)}\"",
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true)
+        use worker = Diagnostics.Process.Start start
+        worker.StandardInput.Write input
+        worker.StandardInput.Close()
+        let output = worker.StandardOutput.ReadToEnd()
+        worker.StandardError.ReadToEnd() |> ignore
+        worker.WaitForExit()
+        worker.ExitCode, FsLiveDocs.TranscriptHost.Protocol.deserializeResponse output
+
+    [<Fact>]
+    let ``the transcript worker rejects malformed input and unknown protocol versions`` () =
+        let malformedExit, malformed = runWorker "not json"
+        Assert.Equal(1, malformedExit)
+        Assert.NotNull(malformed.Error)
+
+        let versionExit, unknownVersion = runWorker """{"ProtocolVersion":999,"Examples":[]}"""
+        Assert.Equal(1, versionExit)
+        Assert.Contains("Unsupported transcript protocol version 999", unknownVersion.Error)

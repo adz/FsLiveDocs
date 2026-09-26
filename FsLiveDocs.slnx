@@ -14,6 +14,7 @@
     <Project Path="src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj" />
     <Project Path="src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj" />
     <Project Path="src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj" />
+    <Project Path="src/FsLiveDocs.TranscriptHost/FsLiveDocs.TranscriptHost.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FsLiveDocs.SnapshotTests/FsLiveDocs.SnapshotTests.fsproj" />

@@ -6,4 +6,5 @@ Documents here may record measured findings, constraints, and implementation opt
 
 Current proposals:
 
-- [`ISOLATED_TRANSCRIPT_HOST.md`](ISOLATED_TRANSCRIPT_HOST.md) — execute FSI transcripts in an Axial-free worker process so documented projects can use dependency versions incompatible with the tool's own graph.
+- None.
+

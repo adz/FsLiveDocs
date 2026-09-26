@@ -16,6 +16,7 @@
     <Compile Include="MsBuild.fs" />
     <Compile Include="DocumentationCompiler.fs" />
     <Compile Include="SemanticExtractor.fs" />
+    <Compile Include="TranscriptHostClient.fs" />
     <Compile Include="FsiTranscriptRunner.fs" />
     <Compile Include="GeneratedVerification.fs" />
     <Compile Include="DocTestRunner.fs" />
@@ -24,6 +25,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FsLiveDocs.Core\FsLiveDocs.Core.fsproj" />
+    <!-- The worker is referenced for its protocol types and so it is copied beside this assembly in every consumer's
+         output. It must stay free of FsLiveDocs.Core and Axial; the reference only ever points this way. -->
+    <ProjectReference Include="..\FsLiveDocs.TranscriptHost\FsLiveDocs.TranscriptHost.fsproj" />
   </ItemGroup>
 
   <ItemGroup>

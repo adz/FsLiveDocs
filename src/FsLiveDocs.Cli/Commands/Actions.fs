@@ -294,6 +294,16 @@ module Actions =
                 [ "FsLiveDocs.Core", typeof<PackageModel>.Assembly.Location
                   "FsLiveDocs.Runner", typeof<FsiTranscriptRunner.DocTestExecutionContext>.Assembly.Location ]
                 |> List.map (fun (name, path) -> $"    <Reference Include=\"{name}\"><HintPath>{System.Security.SecurityElement.Escape(path)}</HintPath></Reference>")
+                |> fun references ->
+                    // A HintPath reference copies only the Runner assembly. Transcripts run in the worker that ships
+                    // beside it, so the generated project copies the worker and its runtime files too.
+                    let runnerDirectory = Path.GetDirectoryName(typeof<FsiTranscriptRunner.DocTestExecutionContext>.Assembly.Location)
+                    let worker =
+                        [ "dll"; "deps.json"; "runtimeconfig.json" ]
+                        |> List.map (fun extension ->
+                            let path = Path.Combine(runnerDirectory, $"FsLiveDocs.TranscriptHost.{extension}")
+                            $"    <None Include=\"{System.Security.SecurityElement.Escape(path)}\" CopyToOutputDirectory=\"PreserveNewest\" Visible=\"false\" />")
+                    references @ worker
                 |> String.concat eol
 
             let allAssemblyPaths =
