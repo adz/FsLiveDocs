@@ -271,7 +271,25 @@ module DocumentationCompiler =
                 DocumentationDiscovery.compilationUnits project.ProjectPath prelude blocks
                 |> List.map (fun unit -> key, unit))
 
-        if requestedUnits.IsEmpty then return Map.empty
+        let requiresStandalone (_, unit: CompilationUnit) =
+            unit.Blocks
+            |> List.exists (fun block ->
+                block.ExpandedSource.Contains("EntryPoint", StringComparison.Ordinal))
+        let standaloneUnits, batchedUnits = requestedUnits |> List.partition requiresStandalone
+        let results = ResizeArray<string * CheckedCompilationUnit>()
+        let toMap () =
+            results
+            |> Seq.groupBy fst
+            |> Seq.map (fun (key, values) -> key, values |> Seq.map snd |> Seq.toList)
+            |> Map.ofSeq
+
+        // EntryPoint is legal only in the final file of a compilation. Keeping such examples in
+        // their historical one-file project preserves authored semantics when other pages follow.
+        for key, unit in standaloneUnits do
+            let! result = checkUnit project unit
+            results.Add(key, result)
+
+        if batchedUnits.IsEmpty then return toMap ()
         else
             let otherFlags =
                 [ yield! project.OtherOptions
@@ -279,7 +297,7 @@ module DocumentationCompiler =
                 |> List.toArray
             let template, optionDiagnostics = projectOptionsTemplate project otherFlags
             let batchIdentity =
-                requestedUnits
+                batchedUnits
                 |> List.map (fun (key, unit) -> key + "|" + unit.Id)
                 |> String.concat "\n"
                 |> Text.Encoding.UTF8.GetBytes
@@ -289,7 +307,7 @@ module DocumentationCompiler =
             Directory.CreateDirectory(batchDirectory) |> ignore
 
             let prepared =
-                requestedUnits
+                batchedUnits
                 |> List.mapi (fun index (key, unit) ->
                     let moduleName = $"FsLiveDocsGeneratedPage{index}_{batchIdentity.Substring(0, 12)}"
                     let wrapped =
@@ -308,7 +326,6 @@ module DocumentationCompiler =
                     ProjectFileName = Path.Combine(batchDirectory, "FsLiveDocs.Generated.fsproj")
                     SourceFiles = sourceFiles }
             let checker = CheckerPool.next checkerPool
-            let results = ResizeArray<string * CheckedCompilationUnit>()
 
             for key, unit, source, ranges, fileName in prepared do
                 let! _, answer = checker.ParseAndCheckFileInProject(fileName, 0, SourceText.ofString source, options)
@@ -328,9 +345,5 @@ module DocumentationCompiler =
                       BlockRanges = ranges
                       CheckResults = checkResults })
 
-            return
-                results
-                |> Seq.groupBy fst
-                |> Seq.map (fun (key, values) -> key, values |> Seq.map snd |> Seq.toList)
-                |> Map.ofSeq
+            return toMap ()
     }

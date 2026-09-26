@@ -67,6 +67,29 @@ module IntegrationTests =
     }
 
     [<Fact>]
+    let ``batched documentation project keeps entry points in standalone final files`` () = async {
+        let evaluated = DocumentationCompiler.evaluateProject coreProject
+        let entryPoint =
+            DocumentationDiscovery.discoverMarkdown
+                "entrypoint.md"
+                (Some coreProject)
+                "```fsharp\n[<EntryPoint>]\nlet main _ = 0\n```"
+        let ordinary =
+            DocumentationDiscovery.discoverMarkdown
+                "ordinary.md"
+                (Some coreProject)
+                "```fsharp\nlet ordinary = 1\n```"
+
+        let! checkedPages =
+            DocumentationCompiler.checkPagesWithProject
+                evaluated
+                [ "entrypoint", "", entryPoint
+                  "ordinary", "", ordinary ]
+
+        Assert.Empty(checkedPages |> Map.toList |> List.collect (snd >> List.collect _.Diagnostics) |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error))
+    }
+
+    [<Fact>]
     let ``documentation compiler checks blocks correctly when compilation units exceed the checker pool size`` () = async {
         let markdown =
             [ 1 .. 8 ]
