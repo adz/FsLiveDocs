@@ -21,6 +21,19 @@ module private Codecs =
     let historyManifest = Json.compile HistorySchema.historyManifest
     let releaseCapsuleManifest = Json.compile ReleaseSchema.releaseCapsuleManifest
 
+module AnalysisCacheTests =
+
+    [<Fact>]
+    let ``changing one page preserves another page semantic cache identity`` () =
+        let common = "compiler|project|package"
+        let first = AnalysisCache.pageKey common "docs/first.md" "net10.0" "open Example" [ "first#0|aaa" ]
+        let second = AnalysisCache.pageKey common "docs/second.md" "net10.0" "open Example" [ "second#0|bbb" ]
+        let changedFirst = AnalysisCache.pageKey common "docs/first.md" "net10.0" "open Example" [ "first#0|changed" ]
+        let unchangedSecond = AnalysisCache.pageKey common "docs/second.md" "net10.0" "open Example" [ "second#0|bbb" ]
+
+        Assert.False(String.Equals(first, changedFirst, StringComparison.Ordinal))
+        Assert.Equal<string>(second, unchangedSecond)
+
 module DocumentationSourceTests =
 
     let rec private repositoryRoot directory =

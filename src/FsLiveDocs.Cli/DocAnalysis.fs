@@ -295,11 +295,52 @@ module internal DocAnalysis =
                 reportProgress "Checking documentation pages" pages.Length pages.Length
                 [], Some artifact
             | None ->
-                // Only page-selected projects need compiler evaluation. Evaluating every project
-                // leaks solution composition into documentation checking and can make an unrelated
-                // project-reference graph fail capture. Other documented projects contribute their
-                // already-built assemblies to the aggregate reference context.
-                let selectedProjects = pages |> List.map _.SelectedProject |> List.distinct
+                // The complete artifact above is the fastest no-change path. On an incremental
+                // miss, retain locality by loading each page independently: an edit to one guide
+                // must not make every other guide cross the compiler seam again.
+                let pageCommonContext =
+                    [ $"semantic-schema:{History.SemanticSchemaVersion}"
+                      $"compiler-mvid:{typeof<EvaluatedProject>.Assembly.ManifestModule.ModuleVersionId}"
+                      $"project-inputs:{projectFingerprint}"
+                      packageFingerprint ]
+                    |> String.concat "\n"
+
+                let pageCachePath page =
+                    let framework = page.TargetFramework |> Option.defaultValue "<default>"
+                    let blockIdentities =
+                        page.Blocks |> List.map (fun block -> $"{block.Id}|{block.SourceHash}")
+                    let key =
+                        AnalysisCache.pageKey
+                            pageCommonContext
+                            page.Relative
+                            framework
+                            page.Prelude
+                            blockIdentities
+                    Path.Combine(cacheDirectory, key + ".semantic-page.json") |> Path.GetFullPath
+
+                let tryReadPage page =
+                    let path = pageCachePath page
+                    let work =
+                        flow {
+                            let! exists = FileSystem.fileExists path
+                            if exists then
+                                let! text = FileSystem.readAllText path
+                                let artifact = Json.deserialize semanticArtifactCodec text
+                                return if artifact.SchemaVersion = History.SemanticSchemaVersion then Some artifact else None
+                            else
+                                return None
+                        }
+                    Run.orRaise FileSystemError.describe $"Could not read semantic page cache {path}" work
+
+                let pageStates = pages |> List.map (fun page -> page, tryReadPage page)
+                let cachedPages = pageStates |> List.choose snd
+                let missingPages = pageStates |> List.choose (fun (page, cached) -> if cached.IsNone then Some page else None)
+                let mutable completed = cachedPages.Length
+                reportProgress "Checking documentation pages" completed pages.Length
+
+                // Only projects selected by cache misses need compiler evaluation. This is the
+                // key incremental property: unchanged pages do not even require an FCS project.
+                let selectedProjects = missingPages |> List.map _.SelectedProject |> List.distinct
                 let evaluated = selectedProjects |> List.map (fun path -> path, DocumentationCompiler.evaluateProject path)
                 let builtAssemblies =
                     resolvedProjects
@@ -308,8 +349,19 @@ module internal DocAnalysis =
                 let aggregateReferences =
                     (evaluated |> List.collect (snd >> _.References)) @ builtAssemblies
                     |> List.distinct
-                let evaluatedProjects = evaluated |> List.map (fun (path, project) -> path, { project with References = aggregateReferences }) |> Map.ofList
-                let mutable completed = 0
+                let evaluatedProjects =
+                    evaluated
+                    |> List.map (fun (path, project) -> path, { project with References = aggregateReferences })
+                    |> Map.ofList
+
+                let writePageCache page artifact =
+                    let path = pageCachePath page
+                    let work =
+                        flow {
+                            do! FileSystem.createDirectory (Path.GetDirectoryName path)
+                            do! FileSystem.writeAllText path (Json.serialize semanticArtifactCodec artifact)
+                        }
+                    Run.orRaise FileSystemError.describe $"Could not write semantic page cache {path}" work
 
                 let checkAndExtract page = async {
                     let selectedEvaluation =
@@ -328,14 +380,21 @@ module internal DocAnalysis =
                         |> List.collect _.Diagnostics
                         |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error)
                         |> List.choose (fun item -> item.BlockId |> Option.map (fun id -> id, (item.StartLine, item.StartColumn, item.Message)))
-                    let semantic = if errors.IsEmpty then Some(SemanticExtractor.artifact checkedUnits) else None
+                    let semantic =
+                        if errors.IsEmpty then
+                            let artifact = SemanticExtractor.artifact checkedUnits
+                            writePageCache page artifact
+                            Some artifact
+                        else None
                     let current = Threading.Interlocked.Increment(&completed)
                     reportProgress "Checking documentation pages" current pages.Length
                     return errors, semantic
                 }
 
+                // Two pages at a time bounds retained FCS graphs. Semantic records are projected
+                // and persisted before the next batch starts.
                 let checkedPages =
-                    pages
+                    missingPages
                     |> List.chunkBySize 2
                     |> FlowStream.fromSeq
                     |> FlowStream.mapFlow (fun batch ->
@@ -349,7 +408,7 @@ module internal DocAnalysis =
                     |> List.rev
 
                 let errors = checkedPages |> List.collect fst
-                let artifacts = checkedPages |> List.choose snd
+                let artifacts = cachedPages @ (checkedPages |> List.choose snd)
                 let artifact =
                     if not errors.IsEmpty then None
                     else
