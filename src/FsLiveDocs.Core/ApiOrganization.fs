@@ -66,6 +66,13 @@ module ApiOrganizationModel =
                           { SymbolId = memberInfo.Id
                             SectionId = Some sectionId
                             Facets = facet CompilerDerived "kind" "member" :: shapeFacets memberInfo.Signature } ]
+            // Constructors and generated members can share the entity's compiler ID. Organization
+            // has one placement per stable symbol ID; merge objective facets instead of emitting an
+            // invalid duplicate placement in migrated historical capsules.
+            |> List.groupBy _.SymbolId
+            |> List.map (fun (_, items) ->
+                let first = items.Head
+                { first with Facets = items |> List.collect _.Facets |> List.distinctBy (fun item -> item.Dimension, item.Value) })
         { Id = baseId canonical
           Name = canonical.Name
           EntityIds = entities |> List.map _.Id

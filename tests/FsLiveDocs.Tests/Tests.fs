@@ -3141,3 +3141,12 @@ module ApiOrganizationTests =
         Assert.DoesNotContain("../Example.Order`1.html", packageHtml)
         Assert.Contains("data-api-package-section=\"domain\"", apiHtml)
         Assert.DoesNotContain("api/Example.Order`1.html", apiHtml)
+
+    [<Fact>]
+    let ``default organization merges a member placement that shares its entity ID`` () =
+        let constructor = memberInfo "Example.Widget" ".ctor" "unit -> Widget"
+        let widget = entity "Example.Widget" "Widget" EntityKind.Type [ constructor ]
+
+        let family = ApiOrganizationModel.derive [ widget ] |> _.Families |> Assert.Single
+
+        Assert.Single(family.Placements |> List.filter (fun placement -> placement.SymbolId = widget.Id)) |> ignore
