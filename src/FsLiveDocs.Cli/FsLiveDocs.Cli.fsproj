@@ -15,6 +15,14 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- Release and CI fetch the checksum-pinned native Pagefind executables before build. -->
+    <Content Include="../../artifacts/pagefind/**/*"
+             Link="pagefind/%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             Pack="false" />
+    <None Include="../../artifacts/pagefind/**/*"
+          Pack="true"
+          PackagePath="tools/$(TargetFramework)/any/pagefind/%(RecursiveDir)" />
   </ItemGroup>
 
 

@@ -135,7 +135,26 @@ module PageRenderer =
     /// <summary>Renders a single API entity page (Module or Type).</summary>
     /// <param name="e">The entity to render.</param>
     /// <returns>The rendered HTML document as a string.</returns>
-    let internal renderEntityPageCore chrome (e: EntityModel) (context: SiteRenderContext) =
+    let internal renderEntityPageCore chrome (requestedEntity: EntityModel) (context: SiteRenderContext) =
+        let family = ApiOrganizationModel.familyForEntity context.Package.Organization requestedEntity.Id
+        let allEntities = Presentation.flattenEntities context.Package.Entities
+        let familyEntities =
+            family
+            |> Option.map (fun value -> value.EntityIds |> List.choose (fun id -> allEntities |> List.tryFind (fun entity -> entity.Id = id)))
+            |> Option.defaultValue [ requestedEntity ]
+        let e =
+            match family with
+            | Some value when familyEntities.Length > 1 ->
+                let summary = familyEntities |> List.tryPick (fun entity -> if Documentation.isEmpty entity.Summary then None else Some entity.Summary) |> Option.defaultValue []
+                { requestedEntity with
+                    Id = value.Id
+                    Name = value.Name
+                    Summary = summary
+                    Members = familyEntities |> List.collect _.Members |> List.distinctBy _.Id
+                    Examples = familyEntities |> List.collect _.Examples |> List.distinctBy _.Name
+                    Entities = familyEntities |> List.collect _.Entities |> List.distinctBy _.Id }
+            | _ -> requestedEntity
+
         let entityTargets =
             match chrome with
             | Some(value: View.SiteChrome) ->
@@ -352,6 +371,28 @@ module PageRenderer =
                                                      [ rawText (Presentation.highlightSignatureHtml m.Signature) ] ])) ] ]
 
                   if not ent.Members.IsEmpty then
+                      let summaryRow (m: MemberModel) =
+                          tr [] [
+                              td [ attr "style" "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
+                                  a [ _href ("#" + m.Id); _class "font-bold text-primary hover:underline" ] [ str m.Name ]
+                              ]
+                              td [ attr "style" "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
+                                  span [ _class "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ] [ rawText m.Signature ]
+                              ]
+                              td [ _class "text-sm opacity-80 leading-relaxed"; attr "style" "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ] [
+                                  str (Presentation.synopsis m.Summary)
+                              ]
+                          ]
+                      let summaryRows =
+                          match family with
+                          | Some apiFamily ->
+                              let byId = ent.Members |> List.map (fun memberInfo -> memberInfo.Id, memberInfo) |> Map.ofList
+                              [ for sectionInfo in apiFamily.Sections |> List.sortBy (fun item -> item.Order, item.Title) do
+                                    let members = apiFamily.Placements |> List.filter (fun placement -> placement.SectionId = Some sectionInfo.Id) |> List.choose (fun placement -> byId |> Map.tryFind placement.SymbolId)
+                                    if not members.IsEmpty then
+                                        yield tr [ attr "data-api-summary-section" sectionInfo.Id; _class "bg-base-200/70" ] [ td [ attr "colspan" "3"; _class "font-black uppercase tracking-widest text-xs" ] [ str sectionInfo.Title ] ]
+                                        yield! members |> List.map summaryRow ]
+                          | None -> ent.Members |> List.map summaryRow
                       div
                           [ _class "mb-16 not-prose" ]
                           [ View.h2WithAnchor
@@ -381,43 +422,50 @@ module PageRenderer =
                                                               "style"
                                                               "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important;" ]
                                                         [ str "Synopsis" ] ] ]
-                                        tbody
-                                            []
-                                            (ent.Members
-                                             |> List.map (fun m ->
-                                                 tr
-                                                     []
-                                                     [ td
-                                                           [ attr
-                                                                 "style"
-                                                                 "padding-left: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
-                                                           [ a
-                                                                 [ _href ("#" + m.Id)
-                                                                   _class "font-bold text-primary hover:underline" ]
-                                                                 [ str m.Name ] ]
-                                                       td
-                                                           [ attr
-                                                                 "style"
-                                                                 "padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
-                                                           [ span
-                                                                 [ _class
-                                                                       "font-mono text-xs text-secondary bg-secondary/5 px-2 py-0.5 rounded" ]
-                                                                 [ rawText m.Signature ] ]
-                                                       td
-                                                           [ _class "text-sm opacity-80 leading-relaxed"
-                                                             attr
-                                                                 "style"
-                                                                 "padding-right: 1.5rem !important; padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; vertical-align: top !important;" ]
-                                                           [ str (Presentation.synopsis m.Summary) ] ])) ] ] ]
+                                        tbody [] summaryRows ] ] ]
 
-                  div
-                      [ _class "space-y-12" ]
-                      (ent.Members
-                       |> List.map (fun memberModel ->
-                           if entityTargets.IsEmpty then
-                               View.apiCard context.Package context.Config.RepoUrl memberModel
-                           else
-                               View.apiCardWithTargets context.Package entityTargets context.Config.RepoUrl memberModel))
+                  let renderMember memberModel =
+                      let card =
+                          if entityTargets.IsEmpty then
+                              View.apiCard context.Package context.Config.RepoUrl memberModel
+                          else
+                              View.apiCardWithTargets context.Package entityTargets context.Config.RepoUrl memberModel
+                      let facets =
+                          family
+                          |> Option.bind (fun value -> value.Placements |> List.tryFind (fun placement -> placement.SymbolId = memberModel.Id))
+                          |> Option.map _.Facets
+                          |> Option.defaultValue []
+                      if facets.IsEmpty then card
+                      else
+                          div [ attr "data-api-symbol" memberModel.Id ] [
+                              div [ _class "not-prose flex flex-wrap gap-2 mb-3" ] [
+                                  for facet in facets do
+                                      span [ _class "badge badge-outline badge-sm font-mono"; attr "data-api-facet" (facet.Dimension + ":" + facet.Value) ] [ str (facet.Dimension + ":" + facet.Value) ]
+                              ]
+                              card
+                          ]
+
+                  match family with
+                  | Some apiFamily when not apiFamily.Sections.IsEmpty ->
+                      let memberById = ent.Members |> List.map (fun memberInfo -> memberInfo.Id, memberInfo) |> Map.ofList
+                      let placementBySection =
+                          apiFamily.Placements
+                          |> List.choose (fun placement -> placement.SectionId |> Option.map (fun sectionId -> sectionId, placement))
+                          |> List.groupBy fst
+                          |> Map.ofList
+                      div [ _class "space-y-16" ] [
+                          for sectionInfo in apiFamily.Sections |> List.sortBy (fun sectionInfo -> sectionInfo.Order, sectionInfo.Title) do
+                              let placements = placementBySection |> Map.tryFind sectionInfo.Id |> Option.defaultValue [] |> List.map snd
+                              let members = placements |> List.choose (fun placement -> memberById |> Map.tryFind placement.SymbolId)
+                              if not members.IsEmpty then
+                                  section [ _id (apiFamily.Id + "-section-" + sectionInfo.Id); attr "data-api-section" sectionInfo.Id ] [
+                                      View.h2WithAnchor (apiFamily.Id + "-section-" + sectionInfo.Id) sectionInfo.Title "text-3xl font-black mb-4 tracking-tight"
+                                      if not (Documentation.isEmpty sectionInfo.Summary) then
+                                          div [ _class "prose max-w-none mb-8" ] [ rawText (renderDocumentation sectionInfo.Summary) ]
+                                      div [ _class "space-y-12" ] (members |> List.map renderMember)
+                                  ]
+                      ]
+                  | _ -> div [ _class "space-y-12" ] (ent.Members |> List.map renderMember)
 
                   let examples = Presentation.entityExamples ent
 

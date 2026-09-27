@@ -153,6 +153,18 @@ module SymbolLister =
             | Some reason when not (String.IsNullOrWhiteSpace reason) -> Some reason
             | _ -> invalidOp $"Example '{name}' uses data-livedocs=\"no-check\" without a non-empty reason=\"...\"."
 
+    let private organizationHint (xmlDoc: string) =
+        let groupMatch = Regex.Match(xmlDoc, "<group(?:\\s+ref=\"(?<ref>[^\"]+)\"|>(?<text>[^<]+)</group>)", RegexOptions.IgnoreCase)
+        let sectionId =
+            if not groupMatch.Success then None
+            elif groupMatch.Groups.["ref"].Success then Some groupMatch.Groups.["ref"].Value
+            else Some(Regex.Replace(groupMatch.Groups.["text"].Value.Trim().ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-'))
+        let facets =
+            Regex.Matches(xmlDoc, "<facet\\s+name=\"(?<name>[^\"]+)\"\\s+value=\"(?<value>[^\"]+)\"\\s*/?>", RegexOptions.IgnoreCase)
+            |> Seq.map (fun matched -> ApiOrganizationModel.authoredFacet matched.Groups.["name"].Value matched.Groups.["value"].Value)
+            |> Seq.toList
+        sectionId, facets
+
     /// <summary>Extracts &lt;example&gt; tags from XML documentation for verification and transclusion.</summary>
     let extractExamples (xmlDoc: string) =
         let pattern = @"<(?<tag>example|code)(?<attrs>[^>]*)>(?<code>.*?)</\k<tag>>"
@@ -807,13 +819,13 @@ module SymbolLister =
             Run.orRaise FileSystemError.describe $"Could not discover the built assembly for project {projName}" discovery
 
         if String.IsNullOrEmpty dllPath || not dllExists then
-            return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }, []
+            return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty }, []
         else
             // FSharp.Formatting REQUIRES the .xml file to be next to the .dll
             let xmlPath = Path.ChangeExtension(dllPath, ".xml")
             if not xmlExists then
                 printfn "Warning: Skipping project %s because associated XML file was not found at %s" projName xmlPath
-                return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }, []
+                return { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty }, []
             else
                 let input = ApiDocInput.FromFile(dllPath)
                 let libDirs = 
@@ -855,6 +867,23 @@ module SymbolLister =
 
                 let entities = rootProjectEntities |> List.map mapEntity
 
+                let rec organizationHints (source: ApiDocEntity) (mapped: EntityModel) =
+                    let entitySection, entityFacets = source.Comment |> rawXml |> organizationHint
+                    let own =
+                        [ if entitySection.IsSome || not entityFacets.IsEmpty then
+                              yield mapped.Id, entitySection, entityFacets
+                          let mappedMembers = mapped.Members |> List.map (fun memberInfo -> memberInfo.Name, memberInfo) |> Map.ofList
+                          for sourceMember in source.AllMembers do
+                              match mappedMembers |> Map.tryFind sourceMember.Name with
+                              | Some memberInfo ->
+                                  let section, facets = sourceMember.Comment |> rawXml |> organizationHint
+                                  if section.IsSome || not facets.IsEmpty then yield memberInfo.Id, section, facets
+                              | None -> () ]
+                    own @ (List.map2 organizationHints source.NestedEntities mapped.Entities |> List.collect id)
+
+                let authoredHints =
+                    List.map2 organizationHints rootProjectEntities entities |> List.collect id
+
                 // `entities` nests every descendant exactly once (see above), so package ownership
                 // needs its own recursive walk rather than reading the top-level list directly —
                 // reading only the roots would silently drop every nested module and type from
@@ -873,6 +902,7 @@ module SymbolLister =
                     // ancestor namespaces. Only concrete entities (modules, types, ...) reflect real per-project
                     // ownership; ancestor namespace nodes are still retained in rendered trees via prefix matching.
                     Packages = [ { Name = packageName; EntityIds = entities |> List.collect allEntityIds |> List.distinct; Description = getPackageDescription projectPath } ]
+                    Organization = ApiOrganizationModel.derive entities |> ApiOrganizationModel.applyAuthoredHints authoredHints
                 }, diagnostics
     }
 
@@ -885,7 +915,7 @@ module SymbolLister =
     /// <summary>Merges multiple PackageModels into a single unified documentation model and reconstructs hierarchy.</summary>
     let merge (packages: PackageModel list) =
         if packages.IsEmpty then 
-            { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = [] }
+            { Version = "0.1.0"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty }
         else
             let allFlatEntities = packages |> List.collect (fun p -> p.Entities) |> List.distinctBy (fun e -> e.Id)
             let allScenarios = packages |> List.collect (fun p -> p.Scenarios) |> List.distinctBy (fun s -> s.Name)
@@ -894,7 +924,12 @@ module SymbolLister =
                 |> List.collect (fun p -> if isNull (box p.Packages) then [] else p.Packages)
                 |> List.distinctBy (fun p -> p.Name)
             let hierarchical = reconstructHierarchy allFlatEntities |> pruneSyntheticDefaults
+            let authoredOrganization =
+                packages
+                |> List.map _.Organization
+                |> List.fold ApiOrganizationModel.merge ApiOrganizationModel.empty
             { Version = (packages |> List.head).Version
               Entities = hierarchical
               Scenarios = allScenarios
-              Packages = packageInfo }
+              Packages = packageInfo
+              Organization = ApiOrganizationModel.merge (ApiOrganizationModel.derive hierarchical) authoredOrganization }

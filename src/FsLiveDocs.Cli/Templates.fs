@@ -77,9 +77,6 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - run: dotnet tool restore
       - run: dotnet build --nologo
 

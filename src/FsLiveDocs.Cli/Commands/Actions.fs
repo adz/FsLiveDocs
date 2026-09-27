@@ -27,6 +27,47 @@ module Actions =
     let private apiModelArtifactCodec = Json.compile ApiSchema.apiModelArtifact
     let private semanticArtifactCodec = Json.compile SemanticSchema.semanticDocumentationArtifact
 
+    let private pagefindRid () =
+        let architecture =
+            match Runtime.InteropServices.RuntimeInformation.ProcessArchitecture with
+            | Runtime.InteropServices.Architecture.X64 -> "x64"
+            | Runtime.InteropServices.Architecture.Arm64 -> "arm64"
+            | other -> invalidOp $"Pagefind is not bundled for architecture {other}."
+        let os =
+            if Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.Windows) then "win"
+            elif Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.OSX) then "osx"
+            elif Runtime.InteropServices.RuntimeInformation.IsOSPlatform(Runtime.InteropServices.OSPlatform.Linux) then "linux"
+            else invalidOp "Pagefind is not bundled for this operating system."
+        $"{os}-{architecture}"
+
+    let private pagefindExecutable () =
+        let name = if OperatingSystem.IsWindows() then "pagefind.exe" else "pagefind"
+        let rid = pagefindRid ()
+        let candidates =
+            [ Environment.GetEnvironmentVariable "FSLIVEDOCS_PAGEFIND"
+              Path.Combine(AppContext.BaseDirectory, "pagefind", rid, name)
+              Path.GetFullPath(Path.Combine("artifacts", "pagefind", rid, name)) ]
+            |> List.filter (String.IsNullOrWhiteSpace >> not)
+        candidates
+        |> List.tryFind File.Exists
+        |> Option.defaultWith (fun () ->
+            invalidOp $"Bundled Pagefind executable for {rid} is missing. Reinstall FsLiveDocs, or set FSLIVEDOCS_PAGEFIND to a Pagefind executable.")
+
+    let private runPagefind (siteDir: string) =
+        let psi = Diagnostics.ProcessStartInfo(pagefindExecutable ())
+        psi.ArgumentList.Add "--site"
+        psi.ArgumentList.Add siteDir
+        psi.RedirectStandardOutput <- true
+        psi.RedirectStandardError <- true
+        psi.UseShellExecute <- false
+        use proc = Diagnostics.Process.Start(psi)
+        let output = proc.StandardOutput.ReadToEndAsync()
+        let error = proc.StandardError.ReadToEndAsync()
+        proc.WaitForExit()
+        if proc.ExitCode <> 0 then
+            invalidOp $"Pagefind failed with exit code {proc.ExitCode}: {error.Result}"
+        output.Result
+
     let private configuredDocsSets projectPaths =
         Workspace.loadDocsSetConfigs ()
         |> Option.map (fun configured ->
@@ -494,14 +535,7 @@ module Actions =
                     ContentProvider.copyStaticFiles "docs" "output"
 
                 reportStage "Building search index"
-                let psi = System.Diagnostics.ProcessStartInfo("npx", "-y pagefind --site output")
-                psi.RedirectStandardOutput <- true
-                psi.RedirectStandardError <- true
-                psi.UseShellExecute <- false
-                let proc = System.Diagnostics.Process.Start(psi)
-                proc.WaitForExit()
-                if proc.ExitCode <> 0 then
-                    invalidOp $"Pagefind failed with exit code {proc.ExitCode}: {proc.StandardError.ReadToEnd()}"
+                runPagefind "output" |> ignore
             if ConsoleOutput.interactive then
                 // Wrapper scripts commonly run the preview server as a background job so they can
                 // monitor a stop file. Spectre classifies that process as non-interactive even though
@@ -702,16 +736,9 @@ module Actions =
 
             SiteBuilder.buildHistory manifest.CurrentVersion sites config theme outputDir
 
-    let private runPagefind (siteDir: string) =
-        let psi = System.Diagnostics.ProcessStartInfo("npx", $"-y pagefind --site {siteDir}")
-        psi.UseShellExecute <- false
-        use proc = System.Diagnostics.Process.Start(psi)
-        proc.WaitForExit()
-        if proc.ExitCode <> 0 then invalidOp $"Pagefind failed with exit code {proc.ExitCode}."
-
     let buildHistoryAction manifestPath theme retryAttempts =
         renderHistoryInto manifestPath theme retryAttempts "output"
-        runPagefind "output"
+        runPagefind "output" |> ignore
         AnsiConsole.MarkupLine("[green]✔ History build complete:[/] output/")
 
     /// Renders the committed history — optionally with a local candidate capsule spliced in as

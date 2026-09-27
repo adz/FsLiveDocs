@@ -91,14 +91,78 @@ module ApiSchema =
             construct (fun name entityIds description -> { Name = name; EntityIds = entityIds; Description = description })
         }
 
+    let facetOrigin : Schema<FacetOrigin> =
+        Schema.enum [
+            EnumCase.create "Authored" FacetOrigin.Authored
+            EnumCase.create "SectionDefault" FacetOrigin.SectionDefault
+            EnumCase.create "CompilerDerived" FacetOrigin.CompilerDerived
+            EnumCase.create "HistoryDerived" FacetOrigin.HistoryDerived
+        ]
+
+    let apiFacet : Schema<ApiFacet> =
+        schema<ApiFacet> {
+            fieldAs "Dimension" (fun (f: ApiFacet) -> f.Dimension) { withSchema Schema.text }
+            fieldAs "Value" (fun (f: ApiFacet) -> f.Value) { withSchema Schema.text }
+            fieldAs "Origin" (fun (f: ApiFacet) -> f.Origin) { withSchema facetOrigin }
+            construct (fun dimension value origin -> { Dimension = dimension; Value = value; Origin = origin })
+        }
+
+    let apiPlacement : Schema<ApiPlacement> =
+        schema<ApiPlacement> {
+            fieldAs "SymbolId" (fun (p: ApiPlacement) -> p.SymbolId) { withSchema Schema.text }
+            fieldAs "SectionId" (fun (p: ApiPlacement) -> p.SectionId) { withSchema (Schema.option Schema.text) }
+            fieldAs "Facets" (fun (p: ApiPlacement) -> p.Facets) { withSchema (Schema.listWith apiFacet) }
+            construct (fun symbolId sectionId facets -> { SymbolId = symbolId; SectionId = sectionId; Facets = facets })
+        }
+
+    let apiSection : Schema<ApiSection> =
+        schema<ApiSection> {
+            fieldAs "Id" (fun (s: ApiSection) -> s.Id) { withSchema Schema.text }
+            fieldAs "Title" (fun (s: ApiSection) -> s.Title) { withSchema Schema.text }
+            fieldAs "Summary" (fun (s: ApiSection) -> s.Summary) { withSchema documentationNodes }
+            fieldAs "Order" (fun (s: ApiSection) -> s.Order) { withSchema Schema.int }
+            construct (fun id title summary order -> { Id = id; Title = title; Summary = summary; Order = order })
+        }
+
+    let apiFamily : Schema<ApiFamily> =
+        schema<ApiFamily> {
+            fieldAs "Id" (fun (f: ApiFamily) -> f.Id) { withSchema Schema.text }
+            fieldAs "Name" (fun (f: ApiFamily) -> f.Name) { withSchema Schema.text }
+            fieldAs "EntityIds" (fun (f: ApiFamily) -> f.EntityIds) { withSchema (Schema.listWith Schema.text) }
+            fieldAs "Sections" (fun (f: ApiFamily) -> f.Sections) { withSchema (Schema.listWith apiSection) }
+            fieldAs "Placements" (fun (f: ApiFamily) -> f.Placements) { withSchema (Schema.listWith apiPlacement) }
+            construct (fun id name entityIds sections placements ->
+                { Id = id; Name = name; EntityIds = entityIds; Sections = sections; Placements = placements })
+        }
+
+    let apiPackageSection : Schema<ApiPackageSection> =
+        schema<ApiPackageSection> {
+            fieldAs "PackageName" (fun (s: ApiPackageSection) -> s.PackageName) { withSchema Schema.text }
+            fieldAs "Id" (fun (s: ApiPackageSection) -> s.Id) { withSchema Schema.text }
+            fieldAs "Title" (fun (s: ApiPackageSection) -> s.Title) { withSchema Schema.text }
+            fieldAs "Summary" (fun (s: ApiPackageSection) -> s.Summary) { withSchema documentationNodes }
+            fieldAs "Order" (fun (s: ApiPackageSection) -> s.Order) { withSchema Schema.int }
+            fieldAs "EntityIds" (fun (s: ApiPackageSection) -> s.EntityIds) { withSchema (Schema.listWith Schema.text) }
+            construct (fun packageName id title summary order entityIds ->
+                { PackageName = packageName; Id = id; Title = title; Summary = summary; Order = order; EntityIds = entityIds })
+        }
+
+    let apiOrganization : Schema<ApiOrganization> =
+        schema<ApiOrganization> {
+            fieldAs "Families" (fun (o: ApiOrganization) -> o.Families) { withSchema (Schema.listWith apiFamily) }
+            fieldAs "PackageSections" (fun (o: ApiOrganization) -> o.PackageSections) { withSchema (Schema.listWith apiPackageSection) }
+            construct (fun families packageSections -> { Families = families; PackageSections = packageSections })
+        }
+
     let packageModel : Schema<PackageModel> =
         schema<PackageModel> {
             fieldAs "Version" (fun (p: PackageModel) -> p.Version) { withSchema Schema.text }
             fieldAs "Entities" (fun (p: PackageModel) -> p.Entities) { withSchema (Schema.listWith entityModel) }
             fieldAs "Scenarios" (fun (p: PackageModel) -> p.Scenarios) { withSchema (Schema.listWith scenarioModel) }
             fieldAs "Packages" (fun (p: PackageModel) -> p.Packages) { withSchema (Schema.listWith packageInfo) }
-            construct (fun version entities scenarios packages ->
-                { Version = version; Entities = entities; Scenarios = scenarios; Packages = packages })
+            fieldAs "Organization" (fun (p: PackageModel) -> p.Organization) { withSchema apiOrganization }
+            construct (fun version entities scenarios packages organization ->
+                { Version = version; Entities = entities; Scenarios = scenarios; Packages = packages; Organization = organization })
         }
 
     let apiModelArtifact : Schema<ApiModelArtifact> =

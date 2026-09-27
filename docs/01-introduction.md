@@ -11,7 +11,7 @@ This guide takes an existing F# repository from no docs setup to a live local pr
 
 You need the .NET SDK used by the repository. The project should already build.
 
-Node.js is also needed when FsLiveDocs builds the search index.
+FsLiveDocs includes the native Pagefind search indexer. Node.js and npm are not required.
 
 ## Install FsLiveDocs
 

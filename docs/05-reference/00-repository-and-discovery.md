@@ -67,6 +67,16 @@ The project must be part of the page's documentation set. The target framework m
 
 `platform: dotnet` enables compiler verification. Fable verification is not available; every F# block on a `fable` page needs a specific `no-check` reason.
 
+## Search indexing
+
+After rendering, `build` and `build-history` invoke Pagefind against the output directory. FsLiveDocs bundles Pagefind 1.5.2 as a checksum-pinned native executable.
+
+The tool package contains binaries for Linux, macOS, and Windows on x64 and Arm64. Runtime selection uses the current operating system and process architecture.
+
+Set `FSLIVEDOCS_PAGEFIND` to an executable path only when testing or overriding the bundled binary. A missing binary or non-zero Pagefind exit stops the build.
+
+Pagefind owns `output/pagefind/`. Output verification recognizes those generated search assets separately from rendered documentation files.
+
 ## Stable block identity
 
 A block ID combines the normalized documentation path with its F# fence ordinal:

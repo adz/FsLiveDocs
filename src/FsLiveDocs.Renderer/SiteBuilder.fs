@@ -218,11 +218,12 @@ module SiteBuilder =
     /// The package page's introduction: the summary of the entity named exactly like the package, else the
     /// project's declared description. Never another entity's summary, which describes that entity and not
     /// the package.
-    let private packageIntroduction (package: PackageModel) (packageInfo: PackageInfo) entities =
+    let private packageIntroduction (package: PackageModel) (packageInfo: PackageInfo) (entities: EntityModel list) =
         let packageName = packageInfo.Name
-        let rec findExact = function
+        let rec findExact (items: EntityModel list) =
+            match items with
             | [] -> None
-            | entity :: rest ->
+            | (entity: EntityModel) :: rest ->
                 if entity.Id.Equals(packageName, StringComparison.OrdinalIgnoreCase)
                    && not (Documentation.isEmpty entity.Summary) then
                     Some entity.Summary
@@ -384,14 +385,32 @@ module SiteBuilder =
                             | Some html ->
                                 div [ _class "prose prose-lg max-w-none mb-12 bg-base-200/30 p-8 rounded-3xl border border-base-300" ] [ rawText html ]
                             | None -> emptyText
-                            View.h2WithAnchor "contents" "Contents" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
-                            div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (
-                                ownedEntities |> List.map (fun entity ->
-                                    a [ _href ("../" + entity.Id + ".html"); _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
-                                        span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str entity.Name ]
-                                        span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string entity.Kind) ]
-                                    ])
-                            )
+                            let entityCard (entity: EntityModel) =
+                                a [ _href ("../" + entity.Id + ".html"); _class "flex items-center justify-between p-4 bg-base-100 border border-base-300 rounded-2xl hover:border-primary hover:shadow-md transition-all group" ] [
+                                    span [ _class "font-bold group-hover:text-primary transition-colors" ] [ str entity.Name ]
+                                    span [ _class "badge badge-sm opacity-40 font-mono text-[10px]" ] [ str (string entity.Kind) ]
+                                ]
+                            let configuredSections =
+                                context.Package.Organization.PackageSections
+                                |> List.filter (fun sectionInfo -> sectionInfo.PackageName = packageInfo.Name)
+                                |> List.sortBy (fun sectionInfo -> sectionInfo.Order, sectionInfo.Title)
+                            if configuredSections.IsEmpty then
+                                View.h2WithAnchor "contents" "Contents" "text-xl font-black mb-6 opacity-30 uppercase tracking-widest"
+                                div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (ownedEntities |> List.map entityCard)
+                            else
+                                div [ _class "flex flex-col gap-12" ] [
+                                    for sectionInfo in configuredSections do
+                                        let sectionEntities : EntityModel list =
+                                            sectionInfo.EntityIds
+                                            |> List.choose (fun id -> ownedEntities |> List.tryFind (fun entity -> entity.Id = id))
+                                            |> List.distinctBy (fun entity -> ApiOrganizationModel.familyForEntity context.Package.Organization entity.Id |> Option.map _.Id |> Option.defaultValue entity.Id)
+                                        if not sectionEntities.IsEmpty then
+                                            section [ _id ("package-section-" + sectionInfo.Id); attr "data-api-package-section" sectionInfo.Id ] [
+                                                View.h2WithAnchor ("package-section-" + sectionInfo.Id) sectionInfo.Title "text-2xl font-black mb-3"
+                                                if not (Documentation.isEmpty sectionInfo.Summary) then div [ _class "prose max-w-none mb-6" ] [ rawText (Presentation.renderDocumentationHtml context.Package sectionInfo.Summary) ]
+                                                div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (sectionEntities |> List.map entityCard)
+                                            ]
+                                ]
                         ]
                         let packageContext =
                             { renderContext with
@@ -455,9 +474,25 @@ module SiteBuilder =
                     apiSections context.Package.Entities
                 else
                     packageGroups |> List.collect (fun (projectName, entities) ->
+                        let configured = context.Package.Organization.PackageSections |> List.filter (fun sectionInfo -> sectionInfo.PackageName = projectName) |> List.sortBy (fun sectionInfo -> sectionInfo.Order, sectionInfo.Title)
                         [
                             h2 [ _class "text-xs font-black uppercase tracking-[0.2em] opacity-40 border-b border-base-300 pb-3" ] [ str projectName ]
-                            div [ _class "flex flex-col gap-12" ] (apiSections entities)
+                            if configured.IsEmpty then
+                                div [ _class "flex flex-col gap-12" ] (apiSections entities)
+                            else
+                                let all = Presentation.flattenEntities entities
+                                div [ _class "flex flex-col gap-12" ] [
+                                    for sectionInfo in configured do
+                                        let items =
+                                            sectionInfo.EntityIds
+                                            |> List.choose (fun id -> all |> List.tryFind (fun entity -> entity.Id = id))
+                                            |> List.distinctBy (fun entity -> ApiOrganizationModel.familyForEntity context.Package.Organization entity.Id |> Option.map _.Id |> Option.defaultValue entity.Id)
+                                        if not items.IsEmpty then
+                                            section [ attr "data-api-package-section" sectionInfo.Id ] [
+                                                View.h3WithAnchor ("package-" + projectName + "-" + sectionInfo.Id) sectionInfo.Title "text-xl font-black mb-5"
+                                                div [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" ] (items |> List.map card)
+                                            ]
+                                ]
                         ])
             )
         ]
@@ -773,7 +808,7 @@ module SiteBuilder =
                             else
                                 None)
 
-                    let card entity =
+                    let card (entity: EntityModel) =
                         a
                             [ _href (entity.Id + ".html")
                               _class "card bg-base-100 border border-base-300 p-5 hover:border-primary transition-all" ]

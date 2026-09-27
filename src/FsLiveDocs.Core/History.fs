@@ -9,12 +9,12 @@ open FsLiveDocs.Core.Schema
 /// <summary>Loads and verifies immutable inputs for a multi-version documentation build.</summary>
 module History =
 
-    /// Schema 4 adds the optional package `Description`. Schema 3 is read by explicit migration.
+    /// Schema 5 adds renderer-neutral API families, sections, placements, and facets.
     [<Literal>]
-    let ApiModelSchemaVersion = 4
+    let ApiModelSchemaVersion = 5
 
     /// API schema versions this renderer reads. Older versions are migrated; unknown versions are rejected.
-    let supportedApiModelSchemaVersions = set [ 3; 4 ]
+    let supportedApiModelSchemaVersions = set [ 3; 4; 5 ]
 
     [<Literal>]
     let SemanticSchemaVersion = 2
@@ -47,6 +47,19 @@ module History =
             | _ -> invalidOp "API schema 3 payload is missing Package."
             root["SchemaVersion"] <- System.Text.Json.Nodes.JsonValue.Create(4)
 
+        /// Schema 4 predates organization. Add an explicit empty value for strict decoding;
+        /// readApiArtifact then derives conservative one-release defaults from the stored graph.
+        let migrateV4 (root: System.Text.Json.Nodes.JsonObject) =
+            match root["Package"] with
+            | :? System.Text.Json.Nodes.JsonObject as package ->
+                if not (package.ContainsKey "Organization") then
+                    let organization = System.Text.Json.Nodes.JsonObject()
+                    organization["Families"] <- System.Text.Json.Nodes.JsonArray()
+                    organization["PackageSections"] <- System.Text.Json.Nodes.JsonArray()
+                    package["Organization"] <- organization
+            | _ -> invalidOp "API schema 4 payload is missing Package."
+            root["SchemaVersion"] <- System.Text.Json.Nodes.JsonValue.Create(5)
+
     /// <summary>Reads an API artifact of any supported schema version, migrating older versions to the current one.</summary>
     let readApiArtifact (json: string) : ApiModelArtifact =
         let root =
@@ -57,11 +70,14 @@ module History =
         if not (supportedApiModelSchemaVersions.Contains declared) then
             let supported = supportedApiModelSchemaVersions |> Set.toList |> List.map string |> String.concat ", "
             invalidOp $"Unsupported API model schema {declared}; supported versions are {supported}."
-        if declared = 3 then
-            LegacyApi.migrateV3 root
-            Json.deserialize apiCodec (root.ToJsonString())
-        else
-            Json.deserialize apiCodec json
+        if declared = 3 then LegacyApi.migrateV3 root
+        if declared <= 4 then LegacyApi.migrateV4 root
+        let artifact =
+            if declared < ApiModelSchemaVersion then Json.deserialize apiCodec (root.ToJsonString())
+            else Json.deserialize apiCodec json
+        if declared < ApiModelSchemaVersion then
+            { artifact with Package = { artifact.Package with Organization = ApiOrganizationModel.derive artifact.Package.Entities } }
+        else artifact
 
     /// <summary>Computes the lowercase SHA-256 digest of a file.</summary>
     let sha256 path =

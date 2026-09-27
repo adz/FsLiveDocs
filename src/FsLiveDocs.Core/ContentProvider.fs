@@ -9,6 +9,7 @@ open Markdig.Renderers.Html
 open Markdig.Extensions.CustomContainers
 open YamlDotNet.Serialization
 open YamlDotNet.Serialization.NamingConventions
+open YamlDotNet.RepresentationModel
 open Axial
 open Axial.FileSystem
 open FsLiveDocs.Core.Effects
@@ -810,6 +811,82 @@ module ContentProvider =
         match Run.orRaise FileSystemError.describe $"Could not read API documentation under {apiDocsDir}" apiDocsWork with
         | None -> package
         | Some docFiles ->
+            let yamlScalar (node: YamlNode) : string =
+                match node with
+                | :? YamlScalarNode as scalar -> scalar.Value
+                | _ -> ""
+            let tryChild (name: string) (mapping: YamlMappingNode) : YamlNode option =
+                mapping.Children
+                |> Seq.tryPick (fun pair -> if yamlScalar pair.Key = name then Some pair.Value else None)
+            let stringList (node: YamlNode) : string list =
+                match node with
+                | :? YamlSequenceNode as values -> values.Children |> Seq.map yamlScalar |> Seq.filter (System.String.IsNullOrWhiteSpace >> not) |> Seq.toList
+                | :? YamlScalarNode as value when not (System.String.IsNullOrWhiteSpace value.Value) -> [ value.Value ]
+                | _ -> []
+            let parseDirective (defaultId: string) (raw: string) : ApiOrganizationModel.FamilyDirective option =
+                match parseFrontMatter raw with
+                | None -> None
+                | Some _ ->
+                    let ending = raw.IndexOf("\n---", 3, System.StringComparison.Ordinal)
+                    if ending < 0 then None else
+                    let yaml = raw.Substring(4, ending - 4)
+                    let stream = YamlStream()
+                    use reader = new StringReader(yaml)
+                    stream.Load(reader)
+                    match stream.Documents.[0].RootNode with
+                    | :? YamlMappingNode as root ->
+                        match tryChild "api" root with
+                        | Some (:? YamlMappingNode as api) ->
+                            let familyId = tryChild "family" api |> Option.map yamlScalar |> Option.filter (System.String.IsNullOrWhiteSpace >> not) |> Option.defaultValue defaultId
+                            let name = tryChild "name" api |> Option.map yamlScalar |> Option.filter (System.String.IsNullOrWhiteSpace >> not)
+                            let sections =
+                                match tryChild "sections" api with
+                                | Some (:? YamlSequenceNode as items) ->
+                                    items.Children
+                                    |> Seq.choose (function
+                                        | :? YamlMappingNode as sectionInfo ->
+                                            let id = tryChild "id" sectionInfo |> Option.map yamlScalar |> Option.defaultValue ""
+                                            if System.String.IsNullOrWhiteSpace id then None else
+                                            let facets =
+                                                match tryChild "facets" sectionInfo with
+                                                | Some (:? YamlMappingNode as values) -> values.Children |> Seq.map (fun pair -> yamlScalar pair.Key, stringList pair.Value) |> Seq.toList
+                                                | _ -> []
+                                            Some ({
+                                                Id = id
+                                                Title = tryChild "title" sectionInfo |> Option.map yamlScalar |> Option.filter (System.String.IsNullOrWhiteSpace >> not) |> Option.defaultValue id
+                                                Summary = tryChild "summary" sectionInfo |> Option.map yamlScalar |> Option.filter (System.String.IsNullOrWhiteSpace >> not) |> Option.map (Documentation.markdown >> List.singleton) |> Option.defaultValue []
+                                                Order = tryChild "order" sectionInfo |> Option.map yamlScalar |> Option.bind (fun value -> match System.Int32.TryParse value with | true, number -> Some number | _ -> None) |> Option.defaultValue 100
+                                                Symbols = tryChild "symbols" sectionInfo |> Option.map stringList |> Option.defaultValue []
+                                                Members = tryChild "members" sectionInfo |> Option.map stringList |> Option.defaultValue []
+                                                Facets = facets } : ApiOrganizationModel.SectionDirective)
+                                        | _ -> None)
+                                    |> Seq.toList
+                                | _ -> []
+                            let packageSections =
+                                match tryChild "packageSections" api with
+                                | Some (:? YamlSequenceNode as items) ->
+                                    items.Children
+                                    |> Seq.choose (function
+                                        | :? YamlMappingNode as sectionInfo ->
+                                            let id = tryChild "id" sectionInfo |> Option.map yamlScalar |> Option.defaultValue ""
+                                            let packageName = tryChild "package" sectionInfo |> Option.map yamlScalar |> Option.defaultValue ""
+                                            if System.String.IsNullOrWhiteSpace id || System.String.IsNullOrWhiteSpace packageName then None
+                                            else
+                                                Some ({
+                                                    PackageName = packageName
+                                                    Id = id
+                                                    Title = tryChild "title" sectionInfo |> Option.map yamlScalar |> Option.filter (System.String.IsNullOrWhiteSpace >> not) |> Option.defaultValue id
+                                                    Summary = tryChild "summary" sectionInfo |> Option.map yamlScalar |> Option.filter (System.String.IsNullOrWhiteSpace >> not) |> Option.map (Documentation.markdown >> List.singleton) |> Option.defaultValue []
+                                                    Order = tryChild "order" sectionInfo |> Option.map yamlScalar |> Option.bind (fun value -> match System.Int32.TryParse value with | true, number -> Some number | _ -> None) |> Option.defaultValue 100
+                                                    Entities = tryChild "entities" sectionInfo |> Option.map stringList |> Option.defaultValue []
+                                                } : ApiOrganizationModel.PackageSectionDirective)
+                                        | _ -> None)
+                                    |> Seq.toList
+                                | _ -> []
+                            Some ({ FamilyId = familyId; Name = name; Sections = sections; PackageSections = packageSections } : ApiOrganizationModel.FamilyDirective)
+                        | _ -> None
+                    | _ -> None
+
             let rec updateEntity (e: EntityModel) (docs: Map<string, DocumentationNode list>) =
                 let summary = docs |> Map.tryFind e.Id |> Option.defaultValue e.Summary
                 { e with
@@ -841,7 +918,21 @@ module ContentProvider =
                     id, [ Documentation.markdown rewritten ])
                 |> Map.ofList
             
-            { package with Entities = package.Entities |> List.map (fun e -> updateEntity e docsMap) }
+            let organization =
+                docFiles
+                |> List.choose (fun (file, raw) -> parseDirective (Path.GetFileNameWithoutExtension file) raw)
+                |> List.fold (fun current directive -> ApiOrganizationModel.applyDirective directive current) package.Organization
+            for packageInfo in package.Packages do
+                let sections = organization.PackageSections |> List.filter (fun sectionInfo -> sectionInfo.PackageName = packageInfo.Name)
+                if not sections.IsEmpty then
+                    let assigned = sections |> List.collect _.EntityIds |> Set.ofList
+                    let missing = packageInfo.EntityIds |> List.filter (assigned.Contains >> not)
+                    if not missing.IsEmpty then
+                        let listed = String.concat ", " missing
+                        invalidOp $"API package sections for {packageInfo.Name} leave entities unassigned: {listed}. Every entity must belong to an explicit section."
+            { package with
+                Entities = package.Entities |> List.map (fun e -> updateEntity e docsMap)
+                Organization = organization }
 
     /// <summary>Applies long-form API documentation with semantic F# formatting.</summary>
     let applyApiDocsWithOptions

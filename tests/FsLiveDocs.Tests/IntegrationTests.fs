@@ -16,7 +16,7 @@ module IntegrationTests =
             DocumentationDiscovery.discoverMarkdown
                 "guide.md"
                 (Some coreProject)
-                "```fsharp\nopen FsLiveDocs.Core\nlet package : PackageModel = { Version = \"1\"; Entities = []; Scenarios = []; Packages = [] }\n```\n```fsharp\nlet version : string = package.Version\n```"
+                "```fsharp\nopen FsLiveDocs.Core\nlet package : PackageModel = { Version = \"1\"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty }\n```\n```fsharp\nlet version : string = package.Version\n```"
         let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
         let result = Assert.Single(results)
         let errors = result.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
@@ -142,7 +142,7 @@ module IntegrationTests =
             DocumentationDiscovery.discoverMarkdown
                 "guide.md"
                 (Some coreProject)
-                "```fsharp\nopen FsLiveDocs.Core\nlet package : PackageModel = { Version = \"1\"; Entities = []; Scenarios = []; Packages = [] }\n```"
+                "```fsharp\nopen FsLiveDocs.Core\nlet package : PackageModel = { Version = \"1\"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty }\n```"
         let! results = DocumentationCompiler.checkBlocksWithProject evaluated "" blocks
         let result = Assert.Single(results)
         let errors = result.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
@@ -176,7 +176,7 @@ module IntegrationTests =
             DocumentationDiscovery.discoverMarkdown
                 "core-guide.md"
                 (Some coreProject)
-                "```fsharp\nopen FsLiveDocs.Core\nlet package : PackageModel = { Version = \"1\"; Entities = []; Scenarios = []; Packages = [] }\n```"
+                "```fsharp\nopen FsLiveDocs.Core\nlet package : PackageModel = { Version = \"1\"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty }\n```"
         let secondBlocks =
             DocumentationDiscovery.discoverMarkdown
                 "second-guide.md"

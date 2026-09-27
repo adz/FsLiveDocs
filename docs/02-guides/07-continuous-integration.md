@@ -37,7 +37,7 @@ dotnet livedocs test --interactive false --banner false
 
 ## Generic pipeline
 
-Any CI system that provides the .NET SDK and Node.js can run:
+Any CI system that provides the .NET SDK can run:
 
 ```bash
 dotnet tool restore
@@ -46,8 +46,7 @@ dotnet livedocs test --interactive false --banner false
 dotnet livedocs build --interactive false --banner false
 ```
 
-`livedocs build` shells out to `npx pagefind` to build the search index, so Node.js
-must be on `PATH`. Publish the `output/` directory as the site artifact.
+`livedocs build` invokes the native Pagefind executable bundled with the FsLiveDocs tool package. Node.js, npm, and a separate Pagefind installation are unnecessary. Publish `output/` as the site artifact.
 
 If you commit a generated snapshot test project (see
 [Author and test examples](verified-examples.md#manage-examples-as-normal-tests)), run it
@@ -98,7 +97,7 @@ Assumptions:
 
 - GitHub repository with **Pages** set to "GitHub Actions", default branch `main`;
 - releases tagged `v<semver>`;
-- .NET SDK `10.0.x`, Node.js `22` — edit the workflow for other versions;
+- .NET SDK `10.0.x` — edit the workflow for other versions;
 - `GITHUB_TOKEN` may create releases and push to `main` (`permissions: contents: write, pages: write, id-token: write`).
 
 `generate-ci` refuses to overwrite an existing `livedocs.yml`; delete it to regenerate.

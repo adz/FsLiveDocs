@@ -49,6 +49,9 @@ jobs:
       - name: Check release notes
         run: bash scripts/check-release-notes.sh "$VERSION"
 
+      - name: Fetch bundled Pagefind executables
+        run: bash scripts/fetch-pagefind.sh all
+
       - name: Restore
         run: dotnet restore FsLiveDocs.slnx
 

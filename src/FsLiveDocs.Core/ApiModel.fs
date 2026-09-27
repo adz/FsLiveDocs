@@ -123,6 +123,60 @@ type PackageInfo = {
     Description: string option
 }
 
+/// <summary>Where an API facet came from. Provenance keeps generated facts distinct from author intent.</summary>
+type FacetOrigin =
+    | Authored
+    | SectionDefault
+    | CompilerDerived
+    | HistoryDerived
+
+/// <summary>A renderer-neutral classification attached to an API symbol.</summary>
+type ApiFacet = {
+    Dimension: string
+    Value: string
+    Origin: FacetOrigin
+}
+
+/// <summary>Places one entity or member in a primary section and gives it orthogonal facets.</summary>
+type ApiPlacement = {
+    SymbolId: string
+    SectionId: string option
+    Facets: ApiFacet list
+}
+
+/// <summary>An ordered, documented group within an API family.</summary>
+type ApiSection = {
+    Id: string
+    Title: string
+    Summary: DocumentationNode list
+    Order: int
+}
+
+/// <summary>A conceptual API page composed from independently linkable compiler entities.</summary>
+type ApiFamily = {
+    Id: string
+    Name: string
+    EntityIds: string list
+    Sections: ApiSection list
+    Placements: ApiPlacement list
+}
+
+/// <summary>An ordered group of entities on a package landing page and in API navigation.</summary>
+type ApiPackageSection = {
+    PackageName: string
+    Id: string
+    Title: string
+    Summary: DocumentationNode list
+    Order: int
+    EntityIds: string list
+}
+
+/// <summary>Curated organization layered over the factual compiler symbol graph.</summary>
+type ApiOrganization = {
+    Families: ApiFamily list
+    PackageSections: ApiPackageSection list
+}
+
 /// <summary>The root model representing a documented package or solution.</summary>
 type PackageModel = { 
     /// <summary>The semantic version of the documentation snapshot.</summary>
@@ -133,6 +187,8 @@ type PackageModel = {
     Scenarios: ScenarioModel list
     /// <summary>Package provenance retained across multi-project extraction and merge.</summary>
     Packages: PackageInfo list
+    /// <summary>Renderer-neutral families, sections, placements, and facets.</summary>
+    Organization: ApiOrganization
 }
 
 /// <summary>Versioned, schema-tagged API model stored as a release artifact.</summary>

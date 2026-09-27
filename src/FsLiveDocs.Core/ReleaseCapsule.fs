@@ -302,6 +302,45 @@ module ReleaseCapsule =
 
         validateEntities api.Package.Entities
 
+        let allSymbolIds = Set.union (entityIds |> Set.ofSeq) (memberIds |> Set.ofSeq)
+        match api.Package.Organization.Families |> List.countBy _.Id |> List.tryFind (fun (_, count) -> count > 1) with
+        | Some(id, _) -> invalidOp $"Release API organization contains duplicate family ID {id}."
+        | None -> ()
+        for family in api.Package.Organization.Families do
+            if String.IsNullOrWhiteSpace family.Id then invalidOp "Release API organization contains a family without an ID."
+            if String.IsNullOrWhiteSpace family.Name then invalidOp $"API family {family.Id} has no display name."
+            match family.Sections |> List.countBy _.Id |> List.tryFind (fun (_, count) -> count > 1) with
+            | Some(id, _) -> invalidOp $"API family {family.Id} contains duplicate section ID {id}."
+            | None -> ()
+            for sectionInfo in family.Sections do
+                if String.IsNullOrWhiteSpace sectionInfo.Id then invalidOp $"API family {family.Id} contains a section without an ID."
+                if String.IsNullOrWhiteSpace sectionInfo.Title then invalidOp $"API family {family.Id} section {sectionInfo.Id} has no title."
+            let sectionIds = family.Sections |> List.map _.Id |> Set.ofList
+            for entityId in family.EntityIds do
+                if not (entityIds.Contains entityId) then invalidOp $"API family {family.Id} contains unknown entity {entityId}."
+            match family.Placements |> List.countBy _.SymbolId |> List.tryFind (fun (_, count) -> count > 1) with
+            | Some(id, _) -> invalidOp $"API family {family.Id} places symbol {id} more than once."
+            | None -> ()
+            for placement in family.Placements do
+                if not (allSymbolIds.Contains placement.SymbolId) then invalidOp $"API family {family.Id} places unknown symbol {placement.SymbolId}."
+                match placement.SectionId with
+                | Some id when not (sectionIds.Contains id) -> invalidOp $"API family {family.Id} places {placement.SymbolId} in unknown section {id}."
+                | _ -> ()
+                for facet in placement.Facets do
+                    if String.IsNullOrWhiteSpace facet.Dimension || String.IsNullOrWhiteSpace facet.Value then
+                        invalidOp $"API symbol {placement.SymbolId} contains an empty facet dimension or value."
+
+        let packageNames = api.Package.Packages |> List.map _.Name |> Set.ofList
+        match api.Package.Organization.PackageSections |> List.countBy (fun sectionInfo -> sectionInfo.PackageName, sectionInfo.Id) |> List.tryFind (fun (_, count) -> count > 1) with
+        | Some((packageName, id), _) -> invalidOp $"Package {packageName} contains duplicate API section ID {id}."
+        | None -> ()
+        for sectionInfo in api.Package.Organization.PackageSections do
+            if not (packageNames.Contains sectionInfo.PackageName) then invalidOp $"API package section {sectionInfo.Id} references unknown package {sectionInfo.PackageName}."
+            if String.IsNullOrWhiteSpace sectionInfo.Id then invalidOp $"Package {sectionInfo.PackageName} contains an API section without an ID."
+            if String.IsNullOrWhiteSpace sectionInfo.Title then invalidOp $"API package section {sectionInfo.PackageName}/{sectionInfo.Id} has no title."
+            for entityId in sectionInfo.EntityIds do
+                if not (entityIds.Contains entityId) then invalidOp $"API package section {sectionInfo.PackageName}/{sectionInfo.Id} references unknown entity {entityId}."
+
     let private validateSemantic (semantic: SemanticDocumentationArtifact) =
         match semantic.Pages |> List.countBy _.SourcePath |> List.tryFind (fun (_, count) -> count > 1) with
         | Some (path, _) -> invalidOp $"Release semantic artifact contains duplicate page {path}."
@@ -428,6 +467,9 @@ module ReleaseCapsule =
         let duplicates = normalizedAssets |> List.countBy fst |> List.filter (fun (_, count) -> count > 1)
         if not duplicates.IsEmpty then invalidOp $"Release content contains duplicate asset path: {fst duplicates.Head}"
 
+        // Validate plain model values before a strict codec attempts to write them, so malformed
+        // authored organization reports its field rather than failing inside the JSON encoder.
+        validateApi api
         let apiBytes = serializeWith apiCodec api
         let semanticBytes = serializeWith semanticCodec semantic
 

@@ -90,6 +90,74 @@ Reuse a client instead of creating one per request.
 
 Checked fences, links, and transclusions work here exactly as they do in guides.
 
+## Organize related APIs
+
+FsLiveDocs presents a same-named F# type and companion module as one **API family**. The compiler symbols and cross-reference targets remain distinct, but readers see the representation and its operations together.
+
+Put lightweight placement metadata beside a declaration:
+
+```fsharp
+/// <summary>Creates a validated order.</summary>
+/// <group ref="construction" />
+/// <facet name="audience" value="common" />
+let createOrganized subtotal = {| Subtotal = subtotal |}
+```
+
+Declare ordered sections, prose, member placement, and inherited facets in the family's API page:
+
+```yaml
+---
+title: Order
+api:
+  family: Acme.Docs.Order
+  sections:
+    - id: construction
+      title: Construction
+      order: 10
+      summary: Create values while preserving Order invariants.
+      members: [create, tryCreate]
+      facets:
+        task: [create]
+        audience: [common]
+    - id: pricing
+      title: Pricing
+      order: 20
+      members: [subtotal, total]
+      facets:
+        capability: [pricing]
+---
+```
+
+Use `symbols` instead of `members` when an overloaded or cross-entity name is ambiguous. Symbol IDs are the generated IDs shown in the reference output.
+
+`task`, `audience`, `capability`, and `lifecycle` express author intent. FsLiveDocs derives objective `kind` and `shape` facets from compiler symbols and signatures. It does not guess whether an API is common, advanced, safe, or preferred.
+
+Members not explicitly placed remain visible in a conservative default section. A section's facets are inherited by the members assigned to it.
+
+## Organize a package landing page
+
+Entity sections organize members inside one family. Package sections organize modules and types on package landing pages, the API overview, and sidebar navigation.
+
+Add `packageSections` to an API page owned by that package:
+
+```yaml
+api:
+  packageSections:
+    - package: Example.Core
+      id: domain
+      title: Domain APIs
+      order: 10
+      summary: The values and operations used by application code.
+      entities: [Example.Order, Example.Customer]
+    - package: Example.Core
+      id: integration
+      title: Integration
+      order: 20
+      entities: [Example.Json, Example.Http]
+```
+
+Each configured section becomes an expandable sidebar group. Once a package declares sections, every public entity in that package must be assigned. The build reports all omissions instead of creating a vague catch-all.
+
 ## Link instead of repeating
 
 Use API pages for purpose, invariants, common operations, failure behavior, and focused examples.

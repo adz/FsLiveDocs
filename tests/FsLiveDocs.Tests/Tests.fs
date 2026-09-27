@@ -164,7 +164,7 @@ module HistoryTests =
     [<Fact>]
     let ``loadArtifact verifies checksum schema and version`` () =
         let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")
-        let package : PackageModel = { Version = "1.2.3"; Entities = []; Scenarios = []; Packages = [] }
+        let package : PackageModel = { Version = "1.2.3"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
         let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
         File.WriteAllText(path, Json.serialize Codecs.apiModelArtifact artifact)
 
@@ -199,6 +199,7 @@ module HistoryTests =
     let ``schema 4 API artifacts round-trip the package description`` () =
         let package : PackageModel =
             { Version = "1.2.3"; Entities = []; Scenarios = []
+              Organization = ApiOrganizationModel.empty
               Packages = [ { Name = "Pkg"; EntityIds = []; Description = Some "What it does." } ] }
         let artifact : ApiModelArtifact = { SchemaVersion = History.ApiModelSchemaVersion; Package = package }
 
@@ -218,6 +219,7 @@ module HistoryTests =
               } ]
         let package : PackageModel =
             {
+                Organization = ApiOrganizationModel.empty
                 Version = "1.2.3"
                 Entities = [ { Id = "Sample"; Name = "Sample"; Kind = EntityKind.Module; Summary = summary; Members = []; Examples = []; Entities = [] } ]
                 Scenarios = []
@@ -288,6 +290,7 @@ module ReleaseCapsuleTests =
             { Version = "1.2.3"
               Entities = []
               Scenarios = []
+              Organization = ApiOrganizationModel.empty
               Packages = [] }
 
         let api: ApiModelArtifact =
@@ -622,7 +625,7 @@ module SymbolListerTests =
     let ``merge removes empty synthetic Default namespace`` () =
         let child = { Id = "Default.Sample"; Name = "Sample"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] }
         let defaultNamespace = { Id = "Default"; Name = "Default"; Kind = EntityKind.Namespace; Summary = []; Members = []; Examples = []; Entities = [ child ] }
-        let package = SymbolLister.merge [ { Version = "1.0"; Entities = [ defaultNamespace; child ]; Scenarios = []; Packages = [ { Name = "Example.Package"; EntityIds = [ child.Id ]; Description = None } ] } ]
+        let package = SymbolLister.merge [ { Version = "1.0"; Entities = [ defaultNamespace; child ]; Scenarios = []; Packages = [ { Name = "Example.Package"; EntityIds = [ child.Id ]; Description = None } ] ; Organization = ApiOrganizationModel.empty } ]
 
         let onlyEntity = Assert.Single(package.Entities)
         Assert.Equal("Default.Sample", onlyEntity.Id)
@@ -636,7 +639,7 @@ module SymbolListerTests =
         let coreRoot = { Id = "Example"; Name = "Example"; Kind = EntityKind.Namespace; Summary = []; Members = []; Examples = []; Entities = [ coreChild ] }
         let satelliteRoot = { Id = "Example"; Name = "Example"; Kind = EntityKind.Namespace; Summary = []; Members = []; Examples = []; Entities = [ satelliteChild ] }
         let model name root child =
-            { Version = "1.0"; Entities = [ root; child ]; Scenarios = []; Packages = [ { Name = name; EntityIds = [ root.Id; child.Id ]; Description = None } ] }
+            { Version = "1.0"; Entities = [ root; child ]; Scenarios = []; Packages = [ { Name = name; EntityIds = [ root.Id; child.Id ]; Description = None } ] ; Organization = ApiOrganizationModel.empty }
 
         let merged = SymbolLister.merge [ model "Example.Core" coreRoot coreChild; model "Example.Http" satelliteRoot satelliteChild ]
         let root = Assert.Single(merged.Entities)
@@ -746,7 +749,7 @@ type Calculator() =
 
 module ContentProviderTests =
 
-    let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+    let private emptyPackage : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
 
     [<Fact>]
     let ``canonical discovery assigns stable ids modes and normalized hashes`` () =
@@ -1062,6 +1065,7 @@ module ContentProviderTests =
     [<Fact>]
     let ``resolveSnippets handles transclusion and xrefs`` () =
         let package : PackageModel = { 
+            Organization = ApiOrganizationModel.empty
             Version = "1.0"
             Entities = [ { Id = "M1"; Name = "add"; Kind = EntityKind.Module; Summary = []; Members = [ { Id = "M1.add"; Name = "add"; Signature = "int -> int"; Parameters = []; ReturnType = "int"; Summary = []; Remarks = []; Examples = [ { Name = "E1"; Content = "1+1"; ExpectedOutput = None; Scenario = None; IsSnapshotTest = false; NoCheckReason = None } ]; Location = { File = ""; Line = 0 } } ]; Examples = []; Entities = [] } ]
             Scenarios = []; Packages = []
@@ -1079,6 +1083,7 @@ module ContentProviderTests =
         File.WriteAllText(file, "Use `Math.add` and `Math`. Keep `missing` as code.")
         let package : PackageModel =
             {
+                Organization = ApiOrganizationModel.empty
                 Version = "1.0"
                 Entities =
                     [
@@ -1136,6 +1141,7 @@ module ContentProviderTests =
         let file = Path.Combine(root, "guide.md")
         let package : PackageModel =
             {
+                Organization = ApiOrganizationModel.empty
                 Version = "1.0"
                 Entities = [ { Id = "Example.Math"; Name = "Math"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] } ]
                 Scenarios = []
@@ -1158,6 +1164,7 @@ module ContentProviderTests =
         File.WriteAllText(file, "```fsharp no-check reason=\"Illustrative\"\nlet answer = 42\n```\n\nSee [`the math module`](xref:T:Example.Math).")
         let package : PackageModel =
             {
+                Organization = ApiOrganizationModel.empty
                 Version = "1.0"
                 Entities = [ { Id = "Example.Math"; Name = "Math"; Kind = EntityKind.Module; Summary = []; Members = []; Examples = []; Entities = [] } ]
                 Scenarios = []
@@ -1258,6 +1265,7 @@ module DocTestRunnerTests =
     let ``a transcript example runs and matches its documented output`` () =
         let package : PackageModel =
             {
+                Organization = ApiOrganizationModel.empty
                 Version = "1.0"
                 Entities =
                     [
@@ -1297,6 +1305,7 @@ module DocTestRunnerTests =
     let ``collectSnapshots returns structured snapshot payload`` () =
         let package : PackageModel =
             {
+                Organization = ApiOrganizationModel.empty
                 Version = "1.0"
                 Entities =
                     [
@@ -1353,7 +1362,7 @@ module ViewTests =
 
     [<Fact>]
     let ``tooltip surface is explicitly opaque`` () =
-        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
         let page = { Metadata = ContentMetadata.empty "Guide"; ContentHtml = ""; Markdown = ""; FilePath = "guide.md"; OutputPath = "guide.html"; SectionOrder = 0 }
         let context : SiteBuilder.SiteRenderContext =
             { AllPages = [ page ]; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "dark"; RootPath = ""; SiteRootPath = "" }
@@ -1371,7 +1380,7 @@ module ViewTests =
             [ page "01-start.md" "start.html" "Get started"
               page "02-guides/01-examples.md" "guides/examples.html" "Examples"
               page "03-advanced.md" "advanced.html" "Advanced" ]
-        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
         let context : SiteBuilder.SiteRenderContext =
             { AllPages = pages; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "light"; RootPath = ""; SiteRootPath = "" }
 
@@ -1414,7 +1423,7 @@ module ViewTests =
                 Entities = []
             }
 
-        let package : PackageModel = { Version = "1.0"; Entities = [ recordEntity ]; Scenarios = []; Packages = [ { Name = "FsLiveDocs.Core"; EntityIds = [ recordEntity.Id ]; Description = None } ] }
+        let package : PackageModel = { Version = "1.0"; Entities = [ recordEntity ]; Scenarios = []; Packages = [ { Name = "FsLiveDocs.Core"; EntityIds = [ recordEntity.Id ]; Description = None } ] ; Organization = ApiOrganizationModel.empty }
         let context : SiteBuilder.SiteRenderContext =
             {
                 AllPages = []
@@ -1453,7 +1462,7 @@ module SiteBuilderTests =
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "index.md"; Blocks = [ semanticBlock ] } ] }
         let options = { SemanticCode.defaults with Artifact = Some artifact }
-        let package : PackageModel = { Version = "1.0.0"; Entities = []; Scenarios = []; Packages = [] }
+        let package : PackageModel = { Version = "1.0.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
         let pages = ContentProvider.scanDocsWithOptions docsDir (Path.GetDirectoryName docsDir) package "" options
 
         SiteBuilder.buildHistory "1.0.0" [ "1.0.0", package, pages, docsDir ] defaultSiteConfig "light" outputDir
@@ -1473,7 +1482,7 @@ module SiteBuilderTests =
             Directory.CreateDirectory(docsDir) |> ignore
             File.WriteAllText(Path.Combine(docsDir, "index.md"), "---\ntitle: Home\n---\nHello")
             File.WriteAllText(Path.Combine(docsDir, "guide.md"), "---\ntitle: Guide\n---\nGuide body")
-            let package : PackageModel = { Version = version; Entities = []; Scenarios = []; Packages = [] }
+            let package : PackageModel = { Version = version; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
             let pages = ContentProvider.scanDocsWithOptions docsDir docsDir package "" SemanticCode.defaults
             version, package, pages, docsDir
 
@@ -1525,7 +1534,7 @@ module SiteBuilderTests =
             Examples = []
             Entities = []
         }
-        let package : PackageModel = { Version = "1.0"; Entities = [ exitEntity; deferredEntity ]; Scenarios = []; Packages = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = [ exitEntity; deferredEntity ]; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
         let context : SiteBuilder.SiteRenderContext = {
             AllPages = []
             Package = package
@@ -1562,7 +1571,7 @@ module SiteBuilderTests =
             Examples = []
             Entities = []
         }
-        let package : PackageModel = { Version = "1.0"; Entities = [ entity ]; Scenarios = []; Packages = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = [ entity ]; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
 
         SiteBuilder.build {
             Pages = []
@@ -1581,7 +1590,7 @@ module SiteBuilderTests =
 
     [<Fact>]
     let ``generateLlmsTxt includes the expected heading`` () =
-        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
         let summary = SiteBuilder.generateLlmsTxt package
 
         Assert.StartsWith("# API Reference for LLMs", summary)
@@ -1597,7 +1606,7 @@ module SiteBuilderTests =
                 { Metadata = metadata "Advanced"; ContentHtml = "<h1>Advanced</h1>"; Markdown = ""; FilePath = "docs/01-http/01-advanced/_index.md"; OutputPath = "http/advanced/index.html"; SectionOrder = 1 }
                 { Metadata = metadata "Retries"; ContentHtml = "<h1>Retries</h1>"; Markdown = ""; FilePath = "docs/01-http/01-advanced/01-retries.md"; OutputPath = "http/advanced/retries.html"; SectionOrder = 1 }
             ]
-        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
 
         SiteBuilder.build {
             Pages = pages
@@ -1641,7 +1650,7 @@ module SiteBuilderTests =
     [<Fact>]
     let ``build renders consumer identity and navigation`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
-        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
         let config = {
             RepoUrl = Some "https://github.com/example/library"
             SiteName = Some "Example Library"
@@ -1701,7 +1710,7 @@ module SiteBuilderTests =
             Examples = []
             Entities = [ child ]
         }
-        let package : PackageModel = { Version = "1.0"; Entities = [ root ]; Scenarios = []; Packages = [] }
+        let package : PackageModel = { Version = "1.0"; Entities = [ root ]; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
 
         SiteBuilder.build {
             Pages = []
@@ -1742,6 +1751,7 @@ module SiteBuilderTests =
             Entities = [ first; second ]
         }
         let package : PackageModel = {
+            Organization = ApiOrganizationModel.empty
             Version = "1.0"
             Entities = [ shared ]
             Scenarios = []
@@ -1796,6 +1806,7 @@ module SiteBuilderTests =
             Entities = [ first; second ]
         }
         let package : PackageModel = {
+            Organization = ApiOrganizationModel.empty
             Version = "1.0"
             Entities = [ shared ]
             Scenarios = []
@@ -1848,6 +1859,7 @@ module SiteBuilderTests =
             Entities = []
         }
         let package : PackageModel = {
+            Organization = ApiOrganizationModel.empty
             Version = "1.0"
             Entities = [ owned; shared ]
             Scenarios = []
@@ -1915,6 +1927,7 @@ module SiteBuilderTests =
             Entities = [ axialLayers ]
         }
         let package : PackageModel = {
+            Organization = ApiOrganizationModel.empty
             Version = "1.0"
             Entities = [ axial ]
             Scenarios = []
@@ -1986,6 +1999,7 @@ module SiteBuilderTests =
             Entities = [ schemaModule; schemaType; inspectModule ]
         }
         let package : PackageModel = {
+            Organization = ApiOrganizationModel.empty
             Version = "1.0"
             Entities = [ reified ]
             Scenarios = []
@@ -2015,7 +2029,7 @@ module SiteBuilderTests =
 
     let private renderPackagePage (entities: EntityModel list) (info: PackageInfo) =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
-        let package : PackageModel = { Version = "1.0"; Entities = entities; Scenarios = []; Packages = [ info ] }
+        let package : PackageModel = { Version = "1.0"; Entities = entities; Scenarios = []; Packages = [ info ] ; Organization = ApiOrganizationModel.empty }
 
         SiteBuilder.build {
             Pages = []
@@ -2099,6 +2113,7 @@ module SiteBuilderTests =
             Entities = [ app; axialLayers ]
         }
         let package : PackageModel = {
+            Organization = ApiOrganizationModel.empty
             Version = "1.0"
             Entities = [ axial ]
             Scenarios = []
@@ -2163,6 +2178,7 @@ module SiteBuilderTests =
             Entities = [ telemetry ]
         }
         let package : PackageModel = {
+            Organization = ApiOrganizationModel.empty
             Version = "1.0"
             Entities = [ axial ]
             Scenarios = []
@@ -2232,6 +2248,7 @@ module PresentationTests =
             { Version = "1"
               Entities = [ target ]
               Scenarios = []
+              Organization = ApiOrganizationModel.empty
               Packages = [] }
 
         let reference =
@@ -2376,6 +2393,7 @@ module DocumentationSetTests =
             { Version = "1.0.0"
               Entities = []
               Scenarios = []
+              Organization = ApiOrganizationModel.empty
               Packages = [] }
 
         let outputs = set [ "index.html"; "internal/index.html" ]
@@ -2426,6 +2444,7 @@ module DocumentationSetTests =
             { Version = "2.0.0"
               Entities = [ publicEntity; internalEntity ]
               Scenarios = []
+              Organization = ApiOrganizationModel.empty
               Packages =
                 [ { Name = "Public"
                     EntityIds = [ publicEntity.Id ]
@@ -2501,6 +2520,7 @@ module DocumentationSetTests =
             { Version = version
               Entities = []
               Scenarios = []
+              Organization = ApiOrganizationModel.empty
               Packages = [] }
 
         let metadata title = ContentMetadata.empty title
@@ -2610,6 +2630,7 @@ module DocumentationSetTests =
                 { Version = version
                   Entities = entities
                   Scenarios = []
+                  Organization = ApiOrganizationModel.empty
                   Packages = [] }
             { Version = version
               Package = model
@@ -2641,6 +2662,7 @@ module DocumentationSetTests =
             { Version = "2.0.0"
               Entities = []
               Scenarios = []
+              Organization = ApiOrganizationModel.empty
               Packages = [] }
 
         let api: ApiModelArtifact =
@@ -2703,6 +2725,7 @@ module DocumentationSetTests =
             { Version = "1.0.0"
               Entities = []
               Scenarios = []
+              Organization = ApiOrganizationModel.empty
               Packages = [] }
 
         let api: ApiModelArtifact =
@@ -2854,7 +2877,7 @@ module BlogTests =
 
     let private renderContext pages config : SiteBuilder.SiteRenderContext =
         { AllPages = pages
-          Package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+          Package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
           Config = config
           Versions = []
           Theme = "light"
@@ -2944,7 +2967,7 @@ module BlogTests =
 
         SiteBuilder.build {
             Pages = posts
-            Package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] }
+            Package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
             Config = { blogSiteConfig with SiteName = Some "Layout Marker Site" }
             Versions = []
             Theme = "light"
@@ -3035,3 +3058,86 @@ module WorkspaceTests =
         Workspace.writeIfChanged path "new"
 
         Assert.Equal("new\n", File.ReadAllText path)
+
+module ApiOrganizationTests =
+
+    let private entity id name kind members : EntityModel =
+        { Id = id; Name = name; Kind = kind; Summary = []; Members = members; Examples = []; Entities = [] }
+
+    let private memberInfo id name signature : MemberModel =
+        { Id = id; Name = name; Signature = signature; Parameters = []; ReturnType = "unit"; Summary = []; Remarks = []; Examples = []; Location = { File = ""; Line = 0 } }
+
+    [<Fact>]
+    let ``derive combines a companion type and module and derives objective facets`` () =
+        let record = entity "Example.Order" "Order" EntityKind.Record [ memberInfo "Example.Order.Subtotal" "Subtotal" "decimal" ]
+        let operations = entity "Example.OrderModule" "Order" EntityKind.Module [ memberInfo "Example.Order.tryCreate" "tryCreate" "decimal -> Order option" ]
+
+        let organization = ApiOrganizationModel.derive [ record; operations ]
+        let family = Assert.Single organization.Families
+
+        Assert.Equal("Example.Order", family.Id)
+        Assert.Equal<string list>([ "Example.Order"; "Example.OrderModule" ], family.EntityIds)
+        let placement = family.Placements |> List.find (fun item -> item.SymbolId = "Example.Order.tryCreate")
+        Assert.Contains(placement.Facets, fun facet -> facet.Dimension = "shape" && facet.Value = "option" && facet.Origin = CompilerDerived)
+
+    [<Fact>]
+    let ``API page directives order sections place members and inherit facets`` () =
+        let create = memberInfo "Example.Order.create" "create" "decimal -> Order"
+        let package : PackageModel =
+            { Version = "1.0"; Entities = [ entity "Example.Order" "Order" EntityKind.Module [ create ] ]; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.derive [ entity "Example.Order" "Order" EntityKind.Module [ create ] ] }
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let api = Path.Combine(root, "api")
+        Directory.CreateDirectory(api) |> ignore
+        File.WriteAllText(Path.Combine(api, "Example.Order.md"), "---\napi:\n  family: Example.Order\n  sections:\n    - id: construction\n      title: Construction\n      order: 10\n      members: [create]\n      facets:\n        task: [create]\n---\n# Order")
+
+        let updated = ContentProvider.applyApiDocs root root package
+        let family = Assert.Single updated.Organization.Families
+        let placement = family.Placements |> List.find (fun item -> item.SymbolId = create.Id)
+
+        Assert.Equal(Some "construction", placement.SectionId)
+        Assert.Contains(placement.Facets, fun facet -> facet.Dimension = "task" && facet.Value = "create" && facet.Origin = SectionDefault)
+
+    [<Fact>]
+    let ``schema 4 artifacts migrate to deterministic API organization`` () =
+        let json = """{"SchemaVersion":4,"Package":{"Version":"1.0","Entities":[{"Id":"Example.Order","Name":"Order","Kind":"Module","Summary":[],"Members":[],"Examples":[],"Entities":[]}],"Scenarios":[],"Packages":[]}}"""
+
+        let artifact = History.readApiArtifact json
+
+        Assert.Equal(History.ApiModelSchemaVersion, artifact.SchemaVersion)
+        Assert.Equal("Example.Order", (Assert.Single artifact.Package.Organization.Families).Id)
+
+    [<Fact>]
+    let ``sections appear in entity summaries sidebars and package landing pages`` () =
+        let create = memberInfo "Example.Order.create" "create" "decimal -> Order"
+        let order = entity "Example.Order" "Order" EntityKind.Module [ create ]
+        let orderType = entity "Example.Order`1" "Order<'value>" EntityKind.Type []
+        let family =
+            { Id = order.Id
+              Name = order.Name
+              EntityIds = [ order.Id; orderType.Id ]
+              Sections = [ { Id = "construction"; Title = "Construction"; Summary = []; Order = 10 } ]
+              Placements = [ { SymbolId = create.Id; SectionId = Some "construction"; Facets = [] } ] }
+        let package : PackageModel =
+            { Version = "1.0"
+              Entities = [ order; orderType ]
+              Scenarios = []
+              Packages = [ { Name = "Example"; EntityIds = [ order.Id; orderType.Id ]; Description = None } ]
+              Organization =
+                { Families = [ family ]
+                  PackageSections = [ { PackageName = "Example"; Id = "domain"; Title = "Domain APIs"; Summary = []; Order = 10; EntityIds = [ order.Id; orderType.Id ] } ] } }
+        let config = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None; CommentsProvider = None }
+        let output = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+
+        SiteBuilder.build { Pages = []; Package = package; Config = config; Versions = []; Theme = "light"; RootPath = ""; SiteRootPath = ""; OutputDir = output }
+
+        let entityHtml = File.ReadAllText(Path.Combine(output, "api", "Example.Order.html"))
+        let packageHtml = File.ReadAllText(Path.Combine(output, "api", "packages", "Example.html"))
+        let apiHtml = File.ReadAllText(Path.Combine(output, "api.html"))
+        Assert.Contains("data-api-summary-section=\"construction\"", entityHtml)
+        Assert.Contains("Example.Order.html#Example.Order-section-construction", entityHtml)
+        Assert.Contains("Example.Order.html#Example.Order.create", entityHtml)
+        Assert.Contains("data-api-package-section=\"domain\"", packageHtml)
+        Assert.Contains(">Domain APIs<", packageHtml)
+        Assert.DoesNotContain("../Example.Order`1.html", packageHtml)
+        Assert.Contains("data-api-package-section=\"domain\"", apiHtml)
+        Assert.DoesNotContain("api/Example.Order`1.html", apiHtml)

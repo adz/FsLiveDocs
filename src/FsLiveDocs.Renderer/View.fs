@@ -171,9 +171,17 @@ module View =
                     ]
         ]
 
-    let rec sidebarEntityLink (rootPath: string) (e: EntityModel) =
+    let rec sidebarEntityLink (rootPath: string) (organization: ApiOrganization) (e: EntityModel) =
+        let familySections =
+            ApiOrganizationModel.familyForEntity organization e.Id
+            |> Option.map (fun family ->
+                let memberIds = e.Members |> List.map _.Id |> Set.ofList
+                family.Sections
+                |> List.filter (fun sectionInfo ->
+                    family.Placements |> List.exists (fun placement -> placement.SectionId = Some sectionInfo.Id && memberIds.Contains placement.SymbolId)))
+            |> Option.defaultValue []
         li [ attr "data-sidebar-item" "true" ] [
-            if e.Entities.IsEmpty then
+            if e.Entities.IsEmpty && familySections.IsEmpty then
                 a [ _href (Url.resolve rootPath ("api/" + e.Id + ".html")); _class "py-2 px-4 hover:bg-base-300 rounded-lg block text-sm" ] [ str e.Name ]
             else
                 details [ _class "group" ] [
@@ -195,7 +203,29 @@ module View =
                             attr "aria-label" $"Toggle {e.Name}"
                         ] []
                     ]
-                    ul [ _class "menu menu-sm p-0 mt-1 ml-2 border-l border-base-300" ] (e.Entities |> List.map (sidebarEntityLink rootPath))
+                    ul [ _class "menu menu-sm p-0 mt-1 ml-2 border-l border-base-300" ] [
+                        for sectionInfo in familySections do
+                            let familyInfo = ApiOrganizationModel.familyForEntity organization e.Id
+                            let familyId = familyInfo |> Option.map _.Id |> Option.defaultValue e.Id
+                            let placements = familyInfo |> Option.map _.Placements |> Option.defaultValue []
+                            let sectionMembers =
+                                e.Members
+                                |> List.filter (fun memberInfo -> placements |> List.exists (fun placement -> placement.SymbolId = memberInfo.Id && placement.SectionId = Some sectionInfo.Id))
+                            li [ attr "data-sidebar-item" "true" ] [
+                                details [ _class "group" ] [
+                                    summary [ _class "flex items-center py-1.5 px-4 cursor-pointer text-xs font-bold" ] [
+                                        a [ _href (Url.resolve rootPath ("api/" + e.Id + ".html#" + familyId + "-section-" + sectionInfo.Id)); attr "onclick" "event.stopPropagation();"; _class "flex-1 hover:link" ] [ str sectionInfo.Title ]
+                                    ]
+                                    ul [ _class "menu menu-xs p-0 ml-2 border-l border-base-300" ] [
+                                        for memberInfo in sectionMembers do
+                                            li [ attr "data-sidebar-item" "true" ] [
+                                                a [ _href (Url.resolve rootPath ("api/" + e.Id + ".html#" + memberInfo.Id)); _class "py-1 px-4 font-mono text-[11px]" ] [ str memberInfo.Name ]
+                                            ]
+                                    ]
+                                ]
+                            ]
+                        yield! e.Entities |> List.map (sidebarEntityLink rootPath organization)
+                    ]
                 ]
         ]
 
@@ -229,7 +259,7 @@ module View =
         | [ entity ] when entity.Kind = EntityKind.Namespace -> omitAncestorNamespaces entity.Entities
         | _ -> entities
 
-    let private sidebarApiGroup (rootPath: string) (label: string) (groupPageId: string option) (packageAnchor: string option) (entities: EntityModel list) =
+    let private sidebarApiGroup (rootPath: string) (organization: ApiOrganization) (label: string) (groupPageId: string option) (packageAnchor: string option) (entities: EntityModel list) (packageSections: ApiPackageSection list) =
         // The label spans the full row height (not just its text) so the whole row - not only the
         // glyphs - is a navigation target, matching leaf sidebar items. Only the chevron's own small
         // zone toggles expand/collapse; a plain background highlight on this link (added by the
@@ -252,7 +282,24 @@ module View =
                         ] [ str label ]
                     | None -> span [ _class "flex-1 min-w-0 truncate py-2 pl-4" ] [ str label ]
                 ]
-                ul [ _class "menu menu-sm p-0 mt-2 gap-1 border-l-2 border-primary/10 ml-4" ] (entities |> List.map (sidebarEntityLink rootPath))
+                ul [ _class "menu menu-sm p-0 mt-2 gap-1 border-l-2 border-primary/10 ml-4" ] [
+                    if packageSections.IsEmpty then
+                        yield! entities |> List.map (sidebarEntityLink rootPath organization)
+                    else
+                        let all = Presentation.flattenEntities entities
+                        for sectionInfo in packageSections |> List.sortBy (fun item -> item.Order, item.Title) do
+                            let sectionEntities =
+                                sectionInfo.EntityIds
+                                |> List.choose (fun id -> all |> List.tryFind (fun entity -> entity.Id = id))
+                                |> List.distinctBy (fun entity -> ApiOrganizationModel.familyForEntity organization entity.Id |> Option.map _.Id |> Option.defaultValue entity.Id)
+                            if not sectionEntities.IsEmpty then
+                                li [ attr "data-sidebar-item" "true" ] [
+                                    details [ _class "group" ] [
+                                        summary [ _class "py-2 px-4 cursor-pointer text-xs font-bold" ] [ str sectionInfo.Title ]
+                                        ul [ _class "menu menu-sm p-0 ml-2 border-l border-base-300" ] (sectionEntities |> List.map (sidebarEntityLink rootPath organization))
+                                    ]
+                                ]
+                ]
             ]
         ]
 
@@ -271,7 +318,9 @@ module View =
                     | Some root -> project.Name, Some groupPageId, root.Entities, None, contributed
                     | None -> project.Name, Some groupPageId, omitAncestorNamespaces contributed, None, contributed)
                 |> List.filter (fun (_, _, _, _, contributed) -> not contributed.IsEmpty)
-                |> List.map (fun (name, pageId, entities, anchor, _) -> name, pageId, entities, anchor)
+                |> List.map (fun (name, pageId, entities, anchor, _) ->
+                let sections = package.Organization.PackageSections |> List.filter (fun sectionInfo -> sectionInfo.PackageName = name)
+                name, pageId, entities, anchor, sections)
 
         let namespaceGroups =
             package.Entities
@@ -319,10 +368,10 @@ module View =
                                 |> List.tryFind (fun entity -> entity.Kind = EntityKind.Namespace && entity.Name.Equals(area, StringComparison.OrdinalIgnoreCase))
                                 |> Option.map _.Id
                                 |> Option.defaultValue area
-                            sidebarApiGroup rootPath area (Some areaPageId) None entitiesToRender)
+                            sidebarApiGroup rootPath package.Organization area (Some areaPageId) None entitiesToRender [])
                     else
                         packageGroups
-                        |> List.map (fun (projectName, pageId, entities, anchor) -> sidebarApiGroup rootPath projectName pageId anchor entities)
+                        |> List.map (fun (projectName, pageId, entities, anchor, sections) -> sidebarApiGroup rootPath package.Organization projectName pageId anchor entities sections)
                 )
             ]
         ]
@@ -383,7 +432,9 @@ module View =
                 | Some root -> project.Name, Some groupPageId, root.Entities, None, contributed
                 | None -> project.Name, Some groupPageId, omitAncestorNamespaces contributed, None, contributed)
             |> List.filter (fun (_, _, _, _, contributed) -> not contributed.IsEmpty)
-            |> List.map (fun (name, pageId, entities, anchor, _) -> name, pageId, entities, anchor)
+            |> List.map (fun (name, pageId, entities, anchor, _) ->
+                let sections = package.Organization.PackageSections |> List.filter (fun sectionInfo -> sectionInfo.PackageName = name)
+                name, pageId, entities, anchor, sections)
 
         let namespaceGroups =
             package.Entities
@@ -491,11 +542,11 @@ module View =
                                          |> Option.map _.Id
                                          |> Option.defaultValue area
 
-                                     sidebarApiGroup setRouteRoot area (Some pageId) None items)
+                                     sidebarApiGroup setRouteRoot package.Organization area (Some pageId) None items [])
                              else
                                  packageGroups
-                                 |> List.map (fun (name, pageId, entities, anchor) ->
-                                     sidebarApiGroup setRouteRoot name pageId anchor entities)) ] ]
+                                 |> List.map (fun (name, pageId, entities, anchor, sections) ->
+                                     sidebarApiGroup setRouteRoot package.Organization name pageId anchor entities sections)) ] ]
 
     let private apiCardCore renderDocumentation (repoUrl: string option) (memberModel: MemberModel) =
         let sourceLink =

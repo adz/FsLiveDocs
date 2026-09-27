@@ -16,6 +16,7 @@
     <Compile Include="Transcript.fs" />
     <Compile Include="DocumentationModel.fs" />
     <Compile Include="ApiModel.fs" />
+    <Compile Include="ApiOrganization.fs" />
     <Compile Include="ApiDiagnostic.fs" />
     <Compile Include="SemanticModel.fs" />
     <Compile Include="HistoryModel.fs" />
