@@ -1,11 +1,13 @@
-{
+﻿{
   Name: ResolveSnippetExample,
   Source:
-> let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
+> let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty };;
 val package: PackageModel = { Version = "1.0"
   Entities = []
   Scenarios = []
-  Packages = [] }
+  Packages = []
+  Organization = { Families = []
+                   PackageSections = [] } }
 
 > ContentProvider.resolveSnippets "Hello" "." package "";;
 val it: string = "Hello",
@@ -14,7 +16,9 @@ val it: string = "Hello",
 val package: PackageModel = { Version = "1.0"
   Entities = []
   Scenarios = []
-  Packages = [] }
+  Packages = []
+  Organization = { Families = []
+                   PackageSections = [] } }
 val it: string = "Hello",
   Status: {}
 }

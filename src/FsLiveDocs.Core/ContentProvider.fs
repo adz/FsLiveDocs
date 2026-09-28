@@ -16,11 +16,13 @@ open FsLiveDocs.Core.Effects
 
 /// <summary>Provides capabilities to load, parse, and resolve Markdown documentation pages.</summary>
 /// <example name="ResolveSnippetExample" data-livedocs="snapshot">
-/// > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
+/// > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty };;
 /// val package: PackageModel = { Version = "1.0"
 ///   Entities = []
 ///   Scenarios = []
-///   Packages = [] }
+///   Packages = []
+///   Organization = { Families = []
+///                    PackageSections = [] } }
 ///
 /// > ContentProvider.resolveSnippets "Hello" "." package "";;
 /// val it: string = "Hello"
