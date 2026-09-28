@@ -45,7 +45,50 @@ module ProjectResolver =
             }
         Run.orFallback resolution (Path.GetFullPath(projectPath))
 
-    let resolveAssemblyPath (projectPath: string) =
+    /// <summary>The build that documentation is compiled and run against.</summary>
+    /// <remarks><c>Arguments</c> select it in further <c>dotnet msbuild</c> calls.</remarks>
+    type DocumentationBuild = { Framework: string option; Arguments: string list; TargetPath: string option }
+
+    /// <summary>
+    /// Selects the build documentation uses: <paramref name="targetFramework" />, or the sole or first framework the
+    /// project declares, in the default configuration when that has been built and in Release otherwise.
+    /// </summary>
+    let documentationBuildFor (targetFramework: string option) (projectPath: string) : DocumentationBuild =
+        let fullPath = Path.GetFullPath(projectPath)
+        if not (File.Exists fullPath) then invalidOp $"Documentation project does not exist: {fullPath}"
+
+        let dimensions = MsBuild.evaluate fullPath [ "-getProperty:TargetFramework,TargetFrameworks" ]
+        let declaredFrameworks =
+            match MsBuild.property dimensions "TargetFramework", MsBuild.property dimensions "TargetFrameworks" with
+            | Some framework, _ -> [ framework ]
+            | None, Some frameworks ->
+                frameworks.Split(';', StringSplitOptions.RemoveEmptyEntries ||| StringSplitOptions.TrimEntries) |> Array.toList
+            | None, None -> []
+
+        match targetFramework with
+        | Some requested when not (declaredFrameworks |> List.contains requested) ->
+            let declared = String.concat ", " declaredFrameworks
+            invalidOp $"Target framework '{requested}' is not declared by {fullPath}. Declared frameworks: {declared}."
+        | _ -> ()
+
+        let framework = targetFramework |> Option.orElseWith (fun () -> List.tryHead declaredFrameworks)
+        let frameworkArgument = framework |> Option.map (fun value -> $"-property:TargetFramework={value}") |> Option.toList
+
+        let builtTarget configurationArgument =
+            let json = MsBuild.evaluate fullPath (configurationArgument @ frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
+            MsBuild.property json "TargetPath" |> Option.filter File.Exists
+
+        match builtTarget [] with
+        | Some target -> { Framework = framework; Arguments = frameworkArgument; TargetPath = Some target }
+        | None ->
+            let release = [ "-property:Configuration=Release" ]
+            match builtTarget release with
+            | Some target -> { Framework = framework; Arguments = release @ frameworkArgument; TargetPath = Some target }
+            | None -> { Framework = framework; Arguments = frameworkArgument; TargetPath = None }
+
+    /// The most recently written documented build of the project under `bin` or an ancestor's `artifacts/bin`, for
+    /// when MSBuild cannot evaluate it.
+    let private newestBuiltAssembly (projectPath: string) =
         let projectName = Path.GetFileNameWithoutExtension(projectPath)
         let projDir = Path.GetDirectoryName(projectPath)
         let assemblyName =
@@ -111,6 +154,30 @@ module ProjectResolver =
                     |> Option.defaultValue ""
             }
         Run.orFallback resolution ""
+
+    let private builtAssemblies = Collections.Concurrent.ConcurrentDictionary<string, Lazy<string>>()
+
+    /// <summary>The assembly examples run against: the same build <c>DocumentationCompiler</c> type-checks them with.</summary>
+    /// <remarks>
+    /// Picking the newest file instead mixed target frameworks: after a multi-targeting build, one package could resolve
+    /// to `net8.0` and its dependency to `netstandard2.1`, and examples failed to compile. Cached per project for the
+    /// process, since every example asks.
+    /// </remarks>
+    let resolveAssemblyPath (projectPath: string) =
+        builtAssemblies
+            .GetOrAdd(
+                Path.GetFullPath projectPath,
+                fun path ->
+                    lazy
+                        (let evaluated =
+                            try
+                                (documentationBuildFor None path).TargetPath
+                            with :? InvalidOperationException ->
+                                None
+
+                         evaluated |> Option.defaultWith (fun () -> newestBuiltAssembly path))
+            )
+            .Value
 
     let resolve (projectPath: string) =
         let resolvedProjectPath = resolveProjectPath projectPath

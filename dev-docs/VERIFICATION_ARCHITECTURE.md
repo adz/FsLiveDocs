@@ -41,6 +41,15 @@ documented project's graph.
   its `runtimeconfig.json` beside the Runner in every consumer. Generated snapshot projects, which reference the Runner by
   `HintPath`, copy those three files explicitly. `TranscriptHostClient` resolves the worker beside the assembly that
   declares the protocol, or from `FSLIVEDOCS_TRANSCRIPT_HOST`.
+- The worker never runs from where it ships. That folder also holds the tool's Axial, and the F# compiler resolves a
+  referenced assembly's dependencies from the folder it was loaded from and from the working directory, so a documented
+  `Axial.HttpClient.dll` referenced before its `Axial.dll` would type-check against the tool's copy. `TranscriptHostClient`
+  copies the worker and the runtime and resource assets its `deps.json` lists into
+  `<temp>/fslivedocs-transcript-host/<hash>/`, keyed by those files' paths, sizes, and timestamps, and runs that copy.
+- Examples run against the build the audit compiles. `ProjectResolver.documentationBuildFor` selects it (the sole or
+  first declared framework, the default configuration when built, otherwise Release) for both `DocumentationCompiler`
+  and `ProjectResolver.resolveAssemblyPath`. The newest file under `bin` is only a fallback when MSBuild cannot
+  evaluate the project.
 - The request travels as JSON on the worker's stdin and the response on its stdout; both carry
   `Protocol.Version`, and a mismatch is rejected. Evaluated code's stdout is redirected to the worker's stderr so
   printing cannot corrupt the response. That output is not part of the compared transcript, as before the move.

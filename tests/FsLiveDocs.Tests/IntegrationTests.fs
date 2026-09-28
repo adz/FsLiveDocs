@@ -609,3 +609,31 @@ type IWriter =
         let versionExit, unknownVersion = runWorker """{"ProtocolVersion":999,"Examples":[]}"""
         Assert.Equal(1, versionExit)
         Assert.Contains("Unsupported transcript protocol version 999", unknownVersion.Error)
+
+    [<Fact>]
+    let ``examples run against the framework the audit compiles, not the newest build`` () =
+        // Resolving by timestamp once picked net8.0 for one package and netstandard2.1 for its dependency, and examples
+        // failed with "System.Runtime did not contain CancellationToken".
+        let directory = Path.Combine(Path.GetTempPath(), "fslivedocs-tests", Guid.NewGuid().ToString "N")
+        Directory.CreateDirectory directory |> ignore
+        try
+            let project = Path.Combine(directory, "Multi.fsproj")
+            File.WriteAllText(
+                project,
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks></PropertyGroup></Project>")
+
+            let build framework =
+                let output = Path.Combine(directory, "bin", "Debug", framework, "Multi.dll")
+                Directory.CreateDirectory(Path.GetDirectoryName output) |> ignore
+                File.WriteAllText(output, "")
+                File.WriteAllText(Path.ChangeExtension(output, ".xml"), "<doc />")
+                output
+
+            let first = build "netstandard2.1"
+            let newest = build "net8.0"
+            File.SetLastWriteTimeUtc(first, DateTime.UtcNow.AddHours -1.0)
+            File.SetLastWriteTimeUtc(newest, DateTime.UtcNow)
+
+            Assert.Equal(first, ProjectResolver.resolveAssemblyPath project)
+        finally
+            Directory.Delete(directory, true)

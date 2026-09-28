@@ -61,45 +61,14 @@ module DocumentationCompiler =
     /// For a cross-targeting project, the first framework declared in TargetFrameworks is the documentation context.
     let evaluateProjectFor (targetFramework: string option) (projectPath: string) =
         let fullPath = Path.GetFullPath(projectPath)
-        if not (File.Exists fullPath) then invalidOp $"Documentation project does not exist: {fullPath}"
         // ResolveReferences is supplied by the inner language build. A cross-targeting
         // outer build imports only the dispatch targets, so choose its first declared
         // framework before asking MSBuild for compiler references.
-        let dimensions =
-            MsBuild.evaluate fullPath [ "-getProperty:TargetFramework,TargetFrameworks" ]
-        let dimensionProperty name = tryProperty dimensions "Properties" |> Option.bind (fun properties -> readString properties name)
-        let declaredFrameworks =
-            match dimensionProperty "TargetFramework", dimensionProperty "TargetFrameworks" with
-            | Some framework, _ -> [ framework ]
-            | None, Some frameworks ->
-                frameworks.Split(';', StringSplitOptions.RemoveEmptyEntries ||| StringSplitOptions.TrimEntries) |> Array.toList
-            | None, None -> []
-        let selectedFramework = targetFramework |> Option.orElseWith (fun () -> List.tryHead declaredFrameworks)
-        match targetFramework with
-        | Some requested when not (declaredFrameworks |> List.contains requested) ->
-            let declared = String.concat ", " declaredFrameworks
-            invalidOp $"Target framework '{requested}' is not declared by {fullPath}. Declared frameworks: {declared}."
-        | _ -> ()
-        let frameworkArgument =
-            selectedFramework |> Option.map (fun framework -> $"-property:TargetFramework={framework}") |> Option.toList
-        let targetExists (json: JsonObject) =
-            tryProperty json "Properties"
-            |> Option.bind (fun properties -> readString properties "TargetPath")
-            |> Option.exists File.Exists
-        let defaultBuild =
-            MsBuild.evaluate fullPath (frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
-        let configurationArgument =
-            if targetExists defaultBuild then []
-            else
-                let releaseArgument = [ "-property:Configuration=Release" ]
-                let releaseBuild =
-                    MsBuild.evaluate fullPath (releaseArgument @ frameworkArgument @ [ "-getProperty:Configuration,TargetPath" ])
-                if targetExists releaseBuild then releaseArgument else []
+        let build = ProjectResolver.documentationBuildFor targetFramework fullPath
         let json =
             MsBuild.evaluate
                 fullPath
-                (configurationArgument
-                 @ frameworkArgument
+                (build.Arguments
                  @ [ "-target:ResolveReferences"
                      "-getProperty:TargetFramework,TargetPath,LangVersion,DefineConstants,NoWarn,WarningsAsErrors"
                      "-getItem:ReferencePath" ])

@@ -3,7 +3,9 @@ namespace FsLiveDocs.Runner
 open System
 open System.IO
 open System.Runtime.InteropServices
+open System.Security.Cryptography
 open System.Text
+open System.Text.Json
 open Axial
 open Axial.Process
 open FsLiveDocs.Core.Effects
@@ -36,6 +38,76 @@ module TranscriptHostClient =
             // The worker ships beside the assembly that declares its protocol: the tool folder, a test output
             // folder, or a generated verification project's output folder.
             Path.Combine(Path.GetDirectoryName(typeof<TranscriptRequest>.Assembly.Location), Protocol.WorkerFileName)
+
+    /// The files the worker needs to start: itself, its runtime files, and each runtime and resource asset its
+    /// `deps.json` lists, as paths relative to the directory it ships in.
+    let private workerFiles (worker: string) =
+        let directory = Path.GetDirectoryName worker
+        let name = Path.GetFileNameWithoutExtension worker
+        let own = [ Path.GetFileName worker; $"{name}.deps.json"; $"{name}.runtimeconfig.json" ]
+
+        use deps = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, $"{name}.deps.json")))
+
+        let assets =
+            [ for target in deps.RootElement.GetProperty("targets").EnumerateObject() do
+                  for library in target.Value.EnumerateObject() do
+                      let mutable runtime = Unchecked.defaultof<JsonElement>
+                      if library.Value.TryGetProperty("runtime", &runtime) then
+                          for asset in runtime.EnumerateObject() -> Path.GetFileName asset.Name
+
+                      let mutable resources = Unchecked.defaultof<JsonElement>
+                      if library.Value.TryGetProperty("resources", &resources) then
+                          for asset in resources.EnumerateObject() ->
+                              Path.Combine(asset.Value.GetProperty("locale").GetString(), Path.GetFileName asset.Name) ]
+
+        own @ assets
+        |> List.distinct
+        |> List.filter (fun relative -> File.Exists(Path.Combine(directory, relative)))
+
+    /// <summary>
+    /// Copies the worker into a directory that holds nothing else, and returns the copy's path.
+    /// </summary>
+    /// <remarks>
+    /// The worker ships beside FsLiveDocs.Runner, whose folder also holds the tool's own Axial assemblies. A separate
+    /// process keeps them out of the worker's runtime, but the F# compiler inside it also resolves an assembly's
+    /// dependencies from the folder the compiler was loaded from. A documented `Axial.HttpClient.dll` referenced before
+    /// its `Axial.dll` then type-checked against the tool's older Axial. The staged folder is keyed by the worker files'
+    /// sizes and timestamps, built once per process, and moved into place so concurrent runs share one copy.
+    /// </remarks>
+    let private stage (worker: string) =
+        let directory = Path.GetDirectoryName worker
+        let files = workerFiles worker
+
+        let key =
+            files
+            |> List.map (fun relative ->
+                let info = FileInfo(Path.Combine(directory, relative))
+                $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}")
+            |> String.concat "\n"
+            |> Encoding.UTF8.GetBytes
+            |> SHA256.HashData
+            |> Convert.ToHexString
+            |> fun hash -> hash.Substring(0, 16).ToLowerInvariant()
+
+        let root = Path.Combine(Path.GetTempPath(), "fslivedocs-transcript-host")
+        let target = Path.Combine(root, key)
+        let staged = Path.Combine(target, Path.GetFileName worker)
+
+        if not (File.Exists staged) then
+            let temporary = Path.Combine(root, $"{key}.{Guid.NewGuid():N}")
+            for relative in files do
+                let destination = Path.Combine(temporary, relative)
+                Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
+                File.Copy(Path.Combine(directory, relative), destination)
+            try
+                Directory.Move(temporary, target)
+            with :? IOException when File.Exists staged ->
+                // Another run staged the same worker first.
+                Directory.Delete(temporary, true)
+
+        staged
+
+    let private stagedWorkers = Collections.Concurrent.ConcurrentDictionary<string, Lazy<string>>()
 
     /// The `dotnet` host that is running this process, so the worker uses the same installation even when `dotnet`
     /// is not on PATH (a global tool launched through its apphost).
@@ -77,6 +149,8 @@ module TranscriptHostClient =
             let worker = workerPath ()
             if not (File.Exists worker) then
                 invalidOp $"The transcript worker was not found at {worker}. It ships beside FsLiveDocs.Runner; set {WorkerPathVariable} to override."
+
+            let worker = stagedWorkers.GetOrAdd(worker, fun path -> lazy (stage path)).Value
 
             let request = Protocol.serializeRequest { ProtocolVersion = Protocol.Version; Examples = List.toArray examples }
 

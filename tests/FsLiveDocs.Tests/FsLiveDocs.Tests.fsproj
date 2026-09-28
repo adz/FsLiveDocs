@@ -9,6 +9,7 @@
     <Compile Include="Tests.fs" />
     <Compile Include="GitTests.fs" />
     <Compile Include="IntegrationTests.fs" />
+    <Compile Include="WorkerIsolationTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />

@@ -40,3 +40,17 @@ module MsBuild =
             failure fullPath detail
         | Exit.Failure(Cause.Fail processError) -> failure fullPath (ProcessError.describe processError)
         | Exit.Failure cause -> failure fullPath (string cause)
+
+    /// <summary>One property from the JSON that <c>-getProperty</c> prints, or <c>None</c> when it is missing or empty.</summary>
+    /// <remarks>MSBuild prints JSON only when more than one property is requested; a single property prints bare.</remarks>
+    let property (json: JsonObject) (name: string) : string option =
+        let child (node: JsonObject) (key: string) =
+            let mutable value = Unchecked.defaultof<JsonNode>
+            if node.TryGetPropertyValue(key, &value) then Option.ofObj value else None
+
+        match child json "Properties" with
+        | Some(:? JsonObject as properties) ->
+            child properties name
+            |> Option.map (fun value -> value.GetValue<string>())
+            |> Option.filter (String.IsNullOrWhiteSpace >> not)
+        | _ -> None
