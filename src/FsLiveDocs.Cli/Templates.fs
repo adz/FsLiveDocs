@@ -30,9 +30,9 @@ Replace the project path below, then run from your repository root:
 
 ```bash
 dotnet build
-livedocs audit
-livedocs build
-livedocs watch --host 127.0.0.1 --port 5000
+dotnet livedocs audit
+dotnet livedocs build
+dotnet livedocs watch --host 127.0.0.1 --port 5000
 ```
 
 Add an ordinary `fsharp` fence to a guide for compile-only verification. Use `run` only for intentional execution,
@@ -42,7 +42,7 @@ Add an ordinary `fsharp` fence to a guide for compile-only verification. Use `ru
 To capture a release after verification succeeds, run:
 
 ```bash
-livedocs capture --version 1.0.0
+dotnet livedocs capture --version 1.0.0
 ```
 """
 

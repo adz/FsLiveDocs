@@ -214,6 +214,20 @@ module ProjectDocumentationTests =
 
 module WorkspaceInitializationTests =
 
+    [<Fact>]
+    let ``starter page uses the local tool command for every livedocs example`` () =
+        let commands =
+            Templates.DocIndex.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+            |> Array.map (fun line -> line.Trim())
+            |> Array.filter (fun line -> line.StartsWith("livedocs ", StringComparison.Ordinal) || line.StartsWith("dotnet livedocs ", StringComparison.Ordinal))
+
+        Assert.Equal<string array>(
+            [| "dotnet livedocs audit"
+               "dotnet livedocs build"
+               "dotnet livedocs watch --host 127.0.0.1 --port 5000"
+               "dotnet livedocs capture --version 1.0.0" |],
+            commands)
+
     [<Theory>]
     [<InlineData(false, true, true)>]
     [<InlineData(true, true, false)>]
