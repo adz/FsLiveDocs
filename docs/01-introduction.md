@@ -7,6 +7,15 @@ weight: 2
 
 This guide takes an existing F# repository from no docs setup to a live local preview.
 
+## Start here
+
+1. Set `<GenerateDocumentationFile>true</GenerateDocumentationFile>` to get API pages.
+2. Build the projects before running `dotnet livedocs`, and again after code changes.
+3. `docs/index.md` is the home page.
+4. Set `siteName` in `.livedocs/config.json`.
+5. Link documentation pages by their real Markdown file names. Links outside the docs root need a source URL setting, or should be plain paths.
+6. A leading number in a Markdown file name is dropped from its page URL.
+
 ## Before you start
 
 You need the .NET SDK used by the repository. The project should already build.

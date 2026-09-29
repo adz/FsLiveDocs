@@ -261,6 +261,31 @@ module DocumentationSourceTests =
         for path in sources do
             Assert.DoesNotContain("tool install FsLiveDocs --version", File.ReadAllText path)
 
+    [<Fact>]
+    let ``getting started guide puts the six setup steps before installation`` () =
+        let root = repositoryRoot AppContext.BaseDirectory
+        let guide = File.ReadAllText(Path.Combine(root, "docs", "01-introduction.md"))
+        let checklistStart = guide.IndexOf("## Start here", StringComparison.Ordinal)
+        let installationStart = guide.IndexOf("## Install FsLiveDocs", StringComparison.Ordinal)
+
+        Assert.True(checklistStart >= 0, "The getting-started checklist is missing.")
+        Assert.True(installationStart > checklistStart, "The checklist must come before installation.")
+
+        let checklist = guide.Substring(checklistStart, installationStart - checklistStart)
+        let requiredSteps =
+            [ "Set `<GenerateDocumentationFile>true</GenerateDocumentationFile>` to get API pages."
+              "Build the projects before running `dotnet livedocs`, and again after code changes."
+              "`docs/index.md` is the home page."
+              "Set `siteName` in `.livedocs/config.json`."
+              "Link documentation pages by their real Markdown file names. Links outside the docs root need a source URL setting, or should be plain paths."
+              "A leading number in a Markdown file name is dropped from its page URL." ]
+
+        let mutable previousPosition = -1
+        for step in requiredSteps do
+            let position = checklist.IndexOf(step, StringComparison.Ordinal)
+            Assert.True(position > previousPosition, $"Missing or out-of-order setup step: {step}")
+            previousPosition <- position
+
 module AnnotationContractTests =
 
     [<Fact>]

@@ -6,6 +6,15 @@ title: Command reference
 
 Run commands from the repository root. Project arguments are optional: FsLiveDocs uses explicit arguments first, the union of top-level `projects` and every `docsSets[].projects` entry in `.livedocs/config.json` second, and automatic discovery last.
 
+## Before the first build
+
+- Set `<GenerateDocumentationFile>true</GenerateDocumentationFile>` or the project has no API pages.
+- Run `dotnet build` before `dotnet livedocs`, and again after code changes.
+- `docs/index.md` is the home page. `init` asks whether to use `docs/README.md` when no index exists.
+- Set `siteName` in `.livedocs/config.json` to choose the title shown on the site.
+- Link pages by their source Markdown filenames. Links outside the docs root need a source URL setting, or should be plain paths.
+- Leading numbers in Markdown filenames are removed from generated page URLs.
+
 Every command assumes it runs at the repository root with `.livedocs/` present
 (`init` creates it). Every command that reads the API — `audit`, `test`,
 `generate-tests`, `build`, `watch`, `capture`, `extract` — additionally assumes the
