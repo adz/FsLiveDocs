@@ -11,7 +11,7 @@ Run commands from the repository root. Project arguments are optional: FsLiveDoc
 - Set `<GenerateDocumentationFile>true</GenerateDocumentationFile>` or the project has no API pages.
 - Run `dotnet build` before `dotnet livedocs`, and again after code changes.
 - `docs/index.md` is the home page. `init` asks whether to use `docs/README.md` when no index exists.
-- Set `siteName` in `.livedocs/config.json` to choose the title shown on the site.
+- `init` sets `siteName` from the single root solution name, falling back to the repo folder; edit it in `.livedocs/config.json` to choose another title.
 - Link pages by their source Markdown filenames. Links outside the docs root need a source URL setting, or should be plain paths.
 - Leading numbers in Markdown filenames are removed from generated page URLs.
 

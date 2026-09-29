@@ -12,7 +12,7 @@ This guide takes an existing F# repository from no docs setup to a live local pr
 1. Set `<GenerateDocumentationFile>true</GenerateDocumentationFile>` to get API pages.
 2. Build the projects before running `dotnet livedocs`, and again after code changes.
 3. `docs/index.md` is the home page.
-4. Set `siteName` in `.livedocs/config.json`.
+4. `init` sets `siteName` from the solution name or repo folder; change it in `.livedocs/config.json`.
 5. Link documentation pages by their real Markdown file names. Links outside the docs root need a source URL setting, or should be plain paths.
 6. A leading number in a Markdown file name is dropped from its page URL.
 
@@ -53,6 +53,7 @@ docs/
 
 It also adds disposable caches and downloaded capsules to `.gitignore`.
 `docs/index.md` is the site home page and becomes `output/index.html`. If `docs/README.md` exists without an index, `init` asks whether to use the README as the home page; when selected, the build maps it to `index.html`.
+`init` sets `siteName` to the filename of the single solution at the repository root, or to the repository folder name when there is no single root solution. Change it in `.livedocs/config.json` to choose the title shown on the site.
 
 `--discover-projects` records the `.fsproj` files it finds. Open `.livedocs/config.json` and remove tests, benchmarks, or apps that should not appear in the public API.
 

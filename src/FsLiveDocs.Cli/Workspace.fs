@@ -53,6 +53,34 @@ module internal Workspace =
             items |> Seq.choose (fun item -> try Some(item.GetValue<string>()) with _ -> None) |> Seq.toList
         | _ -> []
 
+    /// Uses the name of one root solution when available, otherwise the repository folder name.
+    let internal inferSiteName (repositoryRoot: string) =
+        let solutions =
+            Directory.GetFiles(repositoryRoot)
+            |> Array.filter (fun path ->
+                let extension = Path.GetExtension path
+                extension.Equals(".sln", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase))
+
+        match solutions with
+        | [| solution |] -> Path.GetFileNameWithoutExtension solution
+        | _ -> Path.GetFileName(Path.TrimEndingDirectorySeparator repositoryRoot)
+
+    /// Fills an absent or blank siteName while preserving other top-level config values.
+    let internal applyDefaultSiteName (configText: string) (defaultSiteName: string) =
+        let configNode =
+            if String.IsNullOrWhiteSpace configText then JsonObject() :> JsonNode
+            else JsonNode.Parse configText
+
+        match configNode with
+        | :? JsonObject as config ->
+            match tryString configNode "siteName" with
+            | Some _ -> configText
+            | None ->
+                config["siteName"] <- JsonValue.Create defaultSiteName
+                config.ToJsonString(JsonSerializerOptions(WriteIndented = true)) + Environment.NewLine
+        | _ -> invalidOp ".livedocs/config.json must contain a JSON object."
+
     let internal docsSetConfigCodec =
         Json.compile (
             schema<DocsSetConfig> {
@@ -275,12 +303,15 @@ module internal Workspace =
 
     /// Creates the repository-local files required by the default workflow.
     let initialize discover useReadmeAsHome =
+        let defaultSiteName = inferSiteName (Directory.GetCurrentDirectory())
         let setupFlow =
             flow {
                 do! FileSystem.createDirectory ".livedocs"
-                let! configExists = FileSystem.fileExists ".livedocs/config.json"
-                if not configExists then
-                    do! FileSystem.writeAllText ".livedocs/config.json" "{}"
+                let! existingConfig = readIfExists ".livedocs/config.json"
+                let configText = existingConfig |> Option.defaultValue "{}"
+                let updatedConfig = applyDefaultSiteName configText defaultSiteName
+                if existingConfig.IsNone || updatedConfig <> configText then
+                    do! FileSystem.writeAllText ".livedocs/config.json" updatedConfig
             }
 
         Run.orRaise FileSystemError.describe "Could not initialize .livedocs directory" setupFlow

@@ -214,6 +214,46 @@ module ProjectDocumentationTests =
 
 module WorkspaceInitializationTests =
 
+    [<Theory>]
+    [<InlineData(".sln")>]
+    [<InlineData(".slnx")>]
+    let ``init derives the site name from the sole root solution`` extension =
+        let root = Path.Combine(Path.GetTempPath(), "fslivedocs-repo-name-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+
+        try
+            File.WriteAllText(Path.Combine(root, "Example.Library" + extension), "")
+            Assert.Equal("Example.Library", Workspace.inferSiteName(root))
+        finally
+            Directory.Delete(root, true)
+
+    [<Fact>]
+    let ``init falls back to the repository folder unless there is one root solution`` () =
+        let root = Path.Combine(Path.GetTempPath(), "fslivedocs-repo-name-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+
+        try
+            Assert.Equal(Path.GetFileName(root), Workspace.inferSiteName(root))
+            File.WriteAllText(Path.Combine(root, "One.sln"), "")
+            File.WriteAllText(Path.Combine(root, "Two.slnx"), "")
+            Assert.Equal(Path.GetFileName(root), Workspace.inferSiteName(root))
+        finally
+            Directory.Delete(root, true)
+
+    [<Fact>]
+    let ``init adds the inferred site name without replacing existing config`` () =
+        let updated = Workspace.applyDefaultSiteName """{ "projects": ["src/Example.fsproj"] }""" "Example"
+        use parsed = System.Text.Json.JsonDocument.Parse updated
+        let project = parsed.RootElement.GetProperty("projects").EnumerateArray() |> Seq.head
+        Assert.Equal("Example", parsed.RootElement.GetProperty("siteName").GetString())
+        Assert.Equal("src/Example.fsproj", project.GetString())
+
+        let existing = Workspace.applyDefaultSiteName """{ "siteName": "Custom", "projects": ["src/Example.fsproj"] }""" "Example"
+        use existingParsed = System.Text.Json.JsonDocument.Parse existing
+        let existingProject = existingParsed.RootElement.GetProperty("projects").EnumerateArray() |> Seq.head
+        Assert.Equal("Custom", existingParsed.RootElement.GetProperty("siteName").GetString())
+        Assert.Equal("src/Example.fsproj", existingProject.GetString())
+
     [<Fact>]
     let ``starter page uses the local tool command for every livedocs example`` () =
         let commands =
@@ -290,7 +330,7 @@ module DocumentationSourceTests =
             [ "Set `<GenerateDocumentationFile>true</GenerateDocumentationFile>` to get API pages."
               "Build the projects before running `dotnet livedocs`, and again after code changes."
               "`docs/index.md` is the home page."
-              "Set `siteName` in `.livedocs/config.json`."
+              "`init` sets `siteName` from the solution name or repo folder; change it in `.livedocs/config.json`."
               "Link documentation pages by their real Markdown file names. Links outside the docs root need a source URL setting, or should be plain paths."
               "A leading number in a Markdown file name is dropped from its page URL." ]
 
