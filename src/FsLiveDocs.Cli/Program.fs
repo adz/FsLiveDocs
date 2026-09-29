@@ -56,7 +56,18 @@ module Program =
                 elif results.Contains Init then
                     Actions.printBanner()
                     AnsiConsole.MarkupLine("[blue]Scaffolding new project...[/]")
-                    let discovered = Workspace.initialize (results.Contains Discover_Projects)
+                    let indexExists = File.Exists("docs/index.md")
+                    let readmeExists = File.Exists("docs/README.md")
+                    let useReadmeAsHome =
+                        if Workspace.shouldAskForReadmeHome indexExists readmeExists then
+                            if Console.IsInputRedirected || Console.IsOutputRedirected || not AnsiConsole.Profile.Capabilities.Interactive then
+                                AnsiConsole.MarkupLine("[grey]Using docs/README.md as the home page because init cannot prompt in this console.[/]")
+                                true
+                            else
+                                AnsiConsole.Confirm("Use docs/README.md as the site home page?", true)
+                        else
+                            false
+                    let discovered = Workspace.initialize (results.Contains Discover_Projects) useReadmeAsHome
                     match discovered with
                     | Some (count, configPath, projects) ->
                         AnsiConsole.MarkupLine($"[green]✔ Recorded {count} project(s):[/] {Markup.Escape configPath}")

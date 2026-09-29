@@ -18,7 +18,7 @@ Links between documentation pages use their source Markdown paths, including the
 
 | Command | Result | Assumes |
 | --- | --- | --- |
-| `livedocs init` | Create starter configuration, history, docs, and ignore entries. | A writable working directory. Never overwrites existing files. |
+| `livedocs init` | Create starter configuration, history, docs, and ignore entries. Ask whether an existing `docs/README.md` should be the home page when no index exists. | A writable working directory. Never overwrites existing files. |
 | `livedocs init --discover-projects` | Discover `.fsproj` files, record them in configuration, and print the XML documentation setting when it is disabled. | `.fsproj` files exist below the root; benchmarks, probes, and apps may need removing from the list afterward. |
 | `livedocs generate-ci [--provider github]` | Generate a GitHub Actions workflow that verifies docs and publishes releases (provider steps spelled out). | GitHub repository, Pages set to "GitHub Actions", default branch `main`, release tags `v<semver>`. Won't overwrite an existing `livedocs.yml`. Other hosts: follow the recipe in [Verify documentation in CI](guides/continuous-integration.md). |
 
@@ -29,7 +29,7 @@ Links between documentation pages use their source Markdown paths, including the
 | `livedocs audit [projects...]` | Check modes, coverage, and compilation for every F# block; report each compiler error with its line and column. | Projects built. Does not execute examples. |
 | `livedocs test [projects...]` | Audit, then compile every unit and run each `run` block and `transcript`. | Projects built. Executable examples have the same file, network, process, and clock access as the shell. |
 | `livedocs generate-tests [projects...]` | Write `tests/FsLiveDocs.SnapshotTests/` with one xUnit case per discovered example. | Projects built. Regenerate after adding, removing, or renaming an example or fence. |
-| `livedocs build [projects...]` | Verify and render the current site to `output/`; report all broken local page links before failing. Warns for projects without XML documentation, and reuses the prior output only while docs, configuration, project inputs, assemblies, and XML docs are unchanged. | Projects built. The tool includes the native Pagefind indexer. |
+| `livedocs build [projects...]` | Verify and render the current site to `output/`; report all broken local page links before failing. Warns for projects without XML documentation and an unedited starter home page, and reuses the prior output only while docs, configuration, project inputs, assemblies, and XML docs are unchanged. | Projects built. The tool includes the native Pagefind indexer. |
 | `livedocs watch [projects...]` | Verify, rebuild, and serve the site after changes to docs, project inputs, assemblies, or XML docs. | Projects built; a free TCP port (default `0.0.0.0:5000`); on Linux, enough inotify watches. |
 
 ## Releases and history

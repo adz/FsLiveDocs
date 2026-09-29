@@ -212,6 +212,37 @@ module ProjectDocumentationTests =
         finally
             Directory.Delete(root, true)
 
+module WorkspaceInitializationTests =
+
+    [<Theory>]
+    [<InlineData(false, true, true)>]
+    [<InlineData(true, true, false)>]
+    [<InlineData(false, false, false)>]
+    let ``init only asks about README when it exists without an index`` indexExists readmeExists expected =
+        Assert.Equal(expected, Workspace.shouldAskForReadmeHome indexExists readmeExists)
+
+    [<Theory>]
+    [<InlineData(false, true, true, false)>]
+    [<InlineData(false, true, false, true)>]
+    [<InlineData(true, true, true, false)>]
+    let ``init writes a starter index unless README was selected as home`` indexExists readmeExists useReadme expected =
+        Assert.Equal(expected, Workspace.shouldWriteStarterIndex indexExists readmeExists useReadme)
+
+    [<Fact>]
+    let ``starter page detection stops after the index is edited`` () =
+        let directory = Path.Combine(Path.GetTempPath(), "fslivedocs-starter-index-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory) |> ignore
+        let indexPath = Path.Combine(directory, "index.md")
+
+        try
+            File.WriteAllText(indexPath, Templates.DocIndex)
+            Assert.True(Workspace.isUneditedStarterIndex indexPath)
+
+            File.AppendAllText(indexPath, "\nUpdated for this library.\n")
+            Assert.False(Workspace.isUneditedStarterIndex indexPath)
+        finally
+            Directory.Delete(directory, true)
+
 module DocumentationSourceTests =
 
     let rec private repositoryRoot directory =
@@ -1088,6 +1119,24 @@ module ContentProviderTests =
     let ``outputPathFor preserves folders and removes ordering prefixes`` () =
         let path = ContentProvider.outputPathFor "docs" "docs/03-the-flow-type/02-creating-flows.md"
         Assert.Equal("the-flow-type/creating-flows.html", path)
+
+    [<Fact>]
+    let ``root README is the homepage only when the docs index is absent`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(docsDir) |> ignore
+        let readme = Path.Combine(docsDir, "README.md")
+        File.WriteAllText(readme, "# Existing documentation")
+
+        try
+            let readmeOnly = ContentProvider.scanDocs docsDir docsDir emptyPackage ""
+            Assert.Equal("index.html", (Assert.Single readmeOnly).OutputPath)
+
+            File.WriteAllText(Path.Combine(docsDir, "index.md"), "# Explicit home")
+            let withIndex = ContentProvider.scanDocs docsDir docsDir emptyPackage ""
+            Assert.Equal("readme.html", withIndex |> List.find (fun page -> page.FilePath = readme) |> _.OutputPath)
+            Assert.Equal("index.html", withIndex |> List.find (fun page -> page.FilePath.EndsWith("index.md", StringComparison.OrdinalIgnoreCase)) |> _.OutputPath)
+        finally
+            Directory.Delete(docsDir, true)
 
     [<Fact>]
     let ``scanDocs resolves local Markdown links through source paths regardless of output casing`` () =

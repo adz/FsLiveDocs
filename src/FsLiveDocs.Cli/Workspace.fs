@@ -239,6 +239,19 @@ module internal Workspace =
         let site = loadSiteConfig ()
         DocsSet.resolve site.SiteName projectPaths site.FSharpPrelude (loadDocsSetConfigs ())
 
+    let shouldAskForReadmeHome (indexExists: bool) (readmeExists: bool) =
+        readmeExists && not indexExists
+
+    let shouldWriteStarterIndex (indexExists: bool) (readmeExists: bool) (useReadmeAsHome: bool) =
+        not indexExists && not (readmeExists && useReadmeAsHome)
+
+    let isUneditedStarterIndex (indexPath: string) =
+        if not (File.Exists indexPath) then
+            false
+        else
+            let normalize (text: string) = text.Replace("\r\n", "\n").TrimEnd('\n')
+            normalize (File.ReadAllText indexPath) = normalize Templates.DocIndex
+
     let writeIfChanged (path: string) (content: string) =
         let normalized = content.Replace("\r\n", "\n").TrimEnd() + "\n"
 
@@ -261,7 +274,7 @@ module internal Workspace =
         Run.orRaise FileSystemError.describe $"Could not write {path}" work
 
     /// Creates the repository-local files required by the default workflow.
-    let initialize discover =
+    let initialize discover useReadmeAsHome =
         let setupFlow =
             flow {
                 do! FileSystem.createDirectory ".livedocs"
@@ -293,7 +306,8 @@ module internal Workspace =
 
                 do! FileSystem.createDirectory "docs"
                 let! indexExists = FileSystem.fileExists "docs/index.md"
-                if not indexExists then
+                let! readmeExists = FileSystem.fileExists "docs/README.md"
+                if shouldWriteStarterIndex indexExists readmeExists useReadmeAsHome then
                     do! FileSystem.writeAllText "docs/index.md" Templates.DocIndex
             }
 

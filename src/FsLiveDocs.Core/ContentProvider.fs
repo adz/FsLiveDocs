@@ -202,14 +202,37 @@ module ContentProvider =
     let private sourcePathKey (relativePath: string) =
         relativePath.Replace('\\', '/').ToUpperInvariant()
 
-    let private sourceOutputPathsForFiles (docsDir: string) (routePrefix: string) (files: string list) =
+    let private outputPathsForFiles (docsDir: string) (routePrefix: string) (files: string list) (allowRootReadmeHome: bool) =
+        let relativePath filePath = sourceRelativePath docsDir filePath
+        let hasIndex =
+            files
+            |> List.exists (fun filePath ->
+                (relativePath filePath).Equals("index.md", System.StringComparison.OrdinalIgnoreCase))
+        let hasRootReadme =
+            files
+            |> List.exists (fun filePath ->
+                (relativePath filePath).Equals("README.md", System.StringComparison.OrdinalIgnoreCase))
+        let readmeIsHome = allowRootReadmeHome && not hasIndex && hasRootReadme
+
+        files
+        |> List.map (fun filePath ->
+            let outputPath =
+                if readmeIsHome && (relativePath filePath).Equals("README.md", System.StringComparison.OrdinalIgnoreCase) then
+                    "index.html"
+                else
+                    outputPathForFile docsDir filePath
+            filePath, routePrefix + outputPath)
+        |> Map.ofList
+
+    let private sourceOutputPathsForFiles (docsDir: string) (routePrefix: string) (files: string list) (allowRootReadmeHome: bool) =
+        let outputPaths = outputPathsForFiles docsDir routePrefix files allowRootReadmeHome
         files
         |> List.map (fun filePath ->
             let sourcePath = sourceRelativePath docsDir filePath
             let key = sourcePath |> sourcePathKey
             key,
             { SourcePath = sourcePath
-              OutputPath = routePrefix + outputPathForFile docsDir filePath })
+              OutputPath = outputPaths.[filePath] })
         |> Map.ofList
 
     /// <summary>Searches for a member by ID or Name within a PackageModel.</summary>
@@ -525,7 +548,10 @@ module ContentProvider =
         Run.orRaise FileSystemError.describe $"Could not list Markdown files under {docsDir}" work
 
     let private collectGuideOutputs (docsDir: string) =
-        markdownFilesIn docsDir |> List.map (outputPathForFile docsDir)
+        markdownFilesIn docsDir
+        |> fun files -> outputPathsForFiles docsDir "" files true
+        |> Map.toList
+        |> List.map snd
 
     let private collectAllowedOutputs (docsDir: string) (package: PackageModel) =
         let guideOutputs = collectGuideOutputs docsDir
@@ -854,7 +880,7 @@ module ContentProvider =
         let raw =
             Run.orRaise FileSystemError.describe $"Could not read Markdown page {filePath}" (FileSystem.readAllText filePath)
         let docsDir = Path.GetDirectoryName(Path.GetFullPath filePath)
-        let sourceOutputPaths = markdownFilesIn docsDir |> sourceOutputPathsForFiles docsDir ""
+        let sourceOutputPaths = markdownFilesIn docsDir |> fun files -> sourceOutputPathsForFiles docsDir "" files false
         let linkErrors = ResizeArray<string>()
         let page =
             loadMarkdownPage
@@ -922,8 +948,7 @@ module ContentProvider =
             Run.orRaise FileSystemError.describe $"Could not read Markdown pages under {docsDir}" work
             |> Map.ofList
 
-        let outputPathsByFile =
-            files |> List.map (fun filePath -> filePath, routePrefix + outputPathForFile docsDir filePath) |> Map.ofList
+        let outputPathsByFile = outputPathsForFiles docsDir routePrefix files true
 
         let sourceOutputPaths =
             outputPathsByFile
@@ -1030,7 +1055,8 @@ module ContentProvider =
 
     /// <summary>Guide output paths for a set's files, prefixed by its route, for building the shared allowed-output set.</summary>
     let setGuideOutputs (sourceDir: string) (routePrefix: string) (files: string list) =
-        files |> List.map (fun f -> routePrefix + outputPathFor sourceDir f)
+        let outputs = outputPathsForFiles sourceDir routePrefix files true
+        files |> List.map (fun filePath -> outputs.[filePath])
 
     /// <summary>Scans the docs directory and loads all guide pages.</summary>
     /// <param name="docsDir">The docs root containing markdown pages.</param>
@@ -1070,7 +1096,7 @@ module ContentProvider =
         | Some docFiles ->
             let docsRoot = Path.GetDirectoryName(Path.GetFullPath apiDocsDir)
             let guideSourceOutputPaths =
-                markdownFilesIn docsRoot |> sourceOutputPathsForFiles docsRoot routePrefix
+                markdownFilesIn docsRoot |> fun files -> sourceOutputPathsForFiles docsRoot routePrefix files true
             let apiSourceOutputPaths =
                 docFiles
                 |> List.map (fun (filePath, _) ->

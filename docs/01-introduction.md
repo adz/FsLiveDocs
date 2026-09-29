@@ -32,7 +32,7 @@ Run this from the repository root:
 dotnet livedocs init --discover-projects
 ```
 
-FsLiveDocs creates or preserves:
+FsLiveDocs creates or preserves the configuration and history files, and creates `docs/index.md` unless you choose an existing README as the home page:
 
 ```text
 .livedocs/
@@ -43,6 +43,7 @@ docs/
 ```
 
 It also adds disposable caches and downloaded capsules to `.gitignore`.
+`docs/index.md` is the site home page and becomes `output/index.html`. If `docs/README.md` exists without an index, `init` asks whether to use the README as the home page; when selected, the build maps it to `index.html`.
 
 `--discover-projects` records the `.fsproj` files it finds. Open `.livedocs/config.json` and remove tests, benchmarks, or apps that should not appear in the public API.
 
@@ -64,6 +65,7 @@ A small setup looks like this:
 ```
 
 `repoUrl` adds source links to generated API members. Project paths are relative to the repository root.
+`build` warns while `docs/index.md` still contains the unedited starter page.
 
 ## Build the library
 

@@ -444,6 +444,8 @@ module Actions =
     let buildAction (warnAsError: bool) (includeDrafts: bool) (projectPaths: string list) (theme: string) (version: string option) =
         let root = Directory.GetCurrentDirectory()
         let requestedVersion = version |> Option.defaultValue "<project>"
+        if Workspace.isUneditedStarterIndex "docs/index.md" then
+            AnsiConsole.MarkupLine("[yellow]Warning:[/] docs/index.md is still the FsLiveDocs starter page. Replace it with your site's home-page content.")
         PackageExtraction.missingXmlDocumentationWarnings projectPaths
         |> reportMissingXmlDocumentationWarnings warnAsError
         let projectFingerprint = PackageExtraction.inputFingerprint projectPaths
