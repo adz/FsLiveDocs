@@ -123,7 +123,7 @@ type Arguments =
             | Verbosity _ -> "Set console verbosity: warnings (default), info, or debug."
             | Interactive _ -> "Enable or disable interactive terminal rendering (default: true)."
             | Banner _ -> "Enable or disable the LiveDocs banner (default: true)."
-            | Discover_Projects -> "With init, discover project files and save them in .livedocs/config.json."
+            | Discover_Projects -> "With init, discover project files, save them in .livedocs/config.json, and report missing XML documentation settings."
             | Dry_Run -> "With capture, validate and report expected output without writing a capsule."
             | Drafts -> "With build or watch, include pages whose frontmatter sets draft: true."
 

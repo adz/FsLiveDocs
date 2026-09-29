@@ -58,8 +58,12 @@ module Program =
                     AnsiConsole.MarkupLine("[blue]Scaffolding new project...[/]")
                     let discovered = Workspace.initialize (results.Contains Discover_Projects)
                     match discovered with
-                    | Some (count, configPath) ->
+                    | Some (count, configPath, projects) ->
                         AnsiConsole.MarkupLine($"[green]✔ Recorded {count} project(s):[/] {Markup.Escape configPath}")
+                        for project in Workspace.projectsWithoutGenerateDocumentationFile projects do
+                            AnsiConsole.MarkupLine($"[yellow]⚠ Project {Markup.Escape project} does not enable XML documentation.[/]")
+                            AnsiConsole.MarkupLine("  Add this to the project or Directory.Build.props:")
+                            AnsiConsole.MarkupLine("  [grey]<GenerateDocumentationFile>true</GenerateDocumentationFile>[/]")
                     | None -> ()
                     AnsiConsole.MarkupLine("[green]✔ Done![/]")
                     0

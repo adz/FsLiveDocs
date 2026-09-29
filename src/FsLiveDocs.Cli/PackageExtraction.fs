@@ -169,6 +169,24 @@ module internal PackageExtraction =
                 [ assemblyPath; Path.ChangeExtension(assemblyPath, ".xml") ])
         |> List.distinct
 
+    /// <summary>Build warning for a project whose resolved assembly has no adjacent XML documentation file.</summary>
+    let xmlDocumentationWarning (projectPath: string) (assemblyPath: string) =
+        let xmlPath =
+            if String.IsNullOrWhiteSpace assemblyPath then None
+            else Some(Path.ChangeExtension(assemblyPath, ".xml"))
+
+        match xmlPath with
+        | Some path when not (File.Exists path) ->
+            Some
+                $"Project {projectPath} has no XML documentation file, so it has no API pages. Set <GenerateDocumentationFile>true</GenerateDocumentationFile> in the project or Directory.Build.props."
+        | _ -> None
+
+    let missingXmlDocumentationWarnings (projectPaths: string list) =
+        projectPaths
+        |> List.choose (fun projectPath ->
+            let assemblyPath = (ProjectResolver.resolve projectPath).AssemblyPath
+            xmlDocumentationWarning projectPath assemblyPath)
+
     /// <summary>Content fingerprint for the resolved project assemblies and their XML documentation.</summary>
     let outputFilesFingerprint (outputPaths: string list) =
         outputPaths

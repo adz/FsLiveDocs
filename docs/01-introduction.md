@@ -73,7 +73,7 @@ FsLiveDocs reads compiled assemblies and XML documentation, so build first:
 dotnet build
 ```
 
-If the project does not emit XML documentation, set `GenerateDocumentationFile` to `true` in the project or shared build props.
+FsLiveDocs warns for each configured project that has no XML documentation file next to its assembly. That project has no API pages; set `GenerateDocumentationFile` to `true` in the project or shared build props. Use `--warn-as-error` to make the warning fail the build. `init --discover-projects` checks the effective project setting and prints the line to add when it is disabled.
 After code changes, build the projects again before running FsLiveDocs so it reads the current assemblies and XML docs.
 
 ## Start the preview

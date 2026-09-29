@@ -154,6 +154,64 @@ module BuildStateTests =
             File.WriteAllText(xml, "xml v2")
             Assert.False(BuildState.isCurrent root (invocation ()) [ "docs" ]))
 
+module ProjectDocumentationTests =
+
+    [<Fact>]
+    let ``missing adjacent XML documentation gives the project setting fix`` () =
+        let directory = Path.Combine(Path.GetTempPath(), "fslivedocs-project-docs-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory) |> ignore
+        let assembly = Path.Combine(directory, "Example.dll")
+        File.WriteAllText(assembly, "assembly")
+
+        try
+            let warning = PackageExtraction.xmlDocumentationWarning "src/Example.fsproj" assembly
+            Assert.Equal<string option>(
+                Some "Project src/Example.fsproj has no XML documentation file, so it has no API pages. Set <GenerateDocumentationFile>true</GenerateDocumentationFile> in the project or Directory.Build.props.",
+                warning)
+
+            File.WriteAllText(Path.ChangeExtension(assembly, ".xml"), "<doc />")
+            Assert.Equal<string option>(None, PackageExtraction.xmlDocumentationWarning "src/Example.fsproj" assembly)
+        finally
+            Directory.Delete(directory, true)
+
+    [<Fact>]
+    let ``warn as error promotes missing XML documentation advice to a build error`` () =
+        let warning =
+            "Project src/Example.fsproj has no XML documentation file, so it has no API pages. Set <GenerateDocumentationFile>true</GenerateDocumentationFile> in the project or Directory.Build.props."
+
+        let error =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                Actions.reportMissingXmlDocumentationWarnings true [ warning ])
+
+        Assert.Contains("--warn-as-error", error.Message)
+        Assert.Contains("<GenerateDocumentationFile>true</GenerateDocumentationFile>", error.Message)
+
+    [<Fact>]
+    let ``init project discovery respects inherited GenerateDocumentationFile settings`` () =
+        let root = Path.Combine(Path.GetTempPath(), "fslivedocs-init-projects-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        File.WriteAllText(
+            Path.Combine(root, "Directory.Build.props"),
+            "<Project><PropertyGroup><GenerateDocumentationFile>true</GenerateDocumentationFile></PropertyGroup></Project>")
+        let createProject name overrideValue =
+            let path = Path.Combine(root, name + ".csproj")
+            let overrideXml =
+                overrideValue
+                |> Option.map (fun value -> $"<GenerateDocumentationFile>{value}</GenerateDocumentationFile>")
+                |> Option.defaultValue ""
+            File.WriteAllText(
+                path,
+                $"<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework>{overrideXml}</PropertyGroup></Project>")
+            path
+
+        let inherited = createProject "Inherited" None
+        let disabled = createProject "Disabled" (Some "false")
+
+        try
+            Assert.Equal<string list>([ disabled ], Workspace.projectsWithoutGenerateDocumentationFile [ inherited; disabled ])
+        finally
+            Directory.Delete(root, true)
+
 module DocumentationSourceTests =
 
     let rec private repositoryRoot directory =

@@ -424,10 +424,24 @@ module Actions =
             invalidOp ("Blog warnings were treated as errors because --warn-as-error was passed:" + Environment.NewLine + String.concat Environment.NewLine warnings)
         | warnings -> for warning in warnings do reportNote $"Warning: {warning}"
 
+    let reportMissingXmlDocumentationWarnings (warnAsError: bool) (warnings: string list) =
+        match warnings with
+        | [] -> ()
+        | _ when warnAsError ->
+            invalidOp
+                ("XML documentation warnings were treated as errors because --warn-as-error was passed:"
+                 + Environment.NewLine
+                 + String.concat Environment.NewLine warnings)
+        | _ ->
+            for warning in warnings do
+                AnsiConsole.MarkupLine($"[yellow]Warning:[/] {Markup.Escape warning}")
+
     /// <summary>Orchestrates the build process for one or more projects.</summary>
     let buildAction (warnAsError: bool) (includeDrafts: bool) (projectPaths: string list) (theme: string) (version: string option) =
         let root = Directory.GetCurrentDirectory()
         let requestedVersion = version |> Option.defaultValue "<project>"
+        PackageExtraction.missingXmlDocumentationWarnings projectPaths
+        |> reportMissingXmlDocumentationWarnings warnAsError
         let projectFingerprint = PackageExtraction.inputFingerprint projectPaths
         let documentationRoots =
             configuredDocsSets projectPaths

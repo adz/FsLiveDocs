@@ -11,6 +11,7 @@ open Reified.SchemaDSL
 open FsLiveDocs.Core
 open FsLiveDocs.Core.Effects
 open FsLiveDocs.Core.Schema
+open FsLiveDocs.Runner
 
 /// Repository-local release publication settings, read from the top-level `history`
 /// object in `.livedocs/config.json`. These configure how CI locates and names
@@ -180,7 +181,22 @@ module internal Workspace =
             $"Could not write {configPath}"
             (FileSystem.writeAllText configPath serialized)
 
-        projects.Length, configPath
+        projects.Length, configPath, projects
+
+    /// Projects without the effective MSBuild setting that writes XML API documentation.
+    /// Evaluation failures are treated as unknown and included in the suggestions so init can
+    /// still finish before a project has been restored.
+    let projectsWithoutGenerateDocumentationFile (projectPaths: string list) =
+        projectPaths
+        |> List.filter (fun projectPath ->
+            try
+                let fullPath = Path.GetFullPath projectPath
+                let properties =
+                    MsBuild.evaluate fullPath [ "-getProperty:GenerateDocumentationFile,TargetFramework" ]
+                MsBuild.property properties "GenerateDocumentationFile"
+                |> Option.exists (fun value -> value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
+                |> not
+            with _ -> true)
 
     let loadHistoryConfig () =
         let configPath = Path.Combine(".livedocs", "config.json")
