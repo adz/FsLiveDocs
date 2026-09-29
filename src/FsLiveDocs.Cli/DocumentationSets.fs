@@ -139,6 +139,7 @@ module internal DocumentationSets =
                 ContentProvider.setGuideOutputs sourceDir (DocsSet.routePrefix set) (guideFiles sourceDir files))
 
         let allowed = validateAndCollectOutputs capturedSets guideOutputs
+        let linkErrors = ResizeArray<string>()
 
         let sites =
             (ownedFiles, capturedSets)
@@ -152,7 +153,7 @@ module internal DocumentationSets =
 
                 let apiPackage =
                     if captured.Api then
-                        ContentProvider.applyApiDocsForSet
+                        ContentProvider.applyApiDocsForSetWithLinkErrors
                             sourceDir
                             root
                             package
@@ -160,11 +161,12 @@ module internal DocumentationSets =
                             allowed
                             apiRoutes
                             options
+                            linkErrors
                     else
                         package
 
                 let pages =
-                    ContentProvider.scanDocsSet
+                    ContentProvider.scanDocsSetWithLinkErrors linkErrors
                         { SourceDir = sourceDir
                           SnippetSourceDir = root
                           Package = apiPackage
@@ -180,6 +182,8 @@ module internal DocumentationSets =
                    Package = apiPackage
                    Pages = pages }
                 : SiteBuilder.DocsSetSite))
+
+        ContentProvider.throwLinkErrors linkErrors
 
         let staticFiles =
             ownedFiles
@@ -227,6 +231,7 @@ module internal DocumentationSets =
                   yield! ContentProvider.setGuideOutputs sourceDir prefix files ]
 
         let allowed = validateAndCollectOutputs content.DocsSets guideOutputs
+        let linkErrors = ResizeArray<string>()
 
         let sites =
             content.DocsSets
@@ -245,7 +250,7 @@ module internal DocumentationSets =
 
                 let apiPackage =
                     if set.Api then
-                        ContentProvider.applyApiDocsForSet
+                        ContentProvider.applyApiDocsForSetWithLinkErrors
                             sourceDir
                             materializedRoot
                             package
@@ -253,6 +258,7 @@ module internal DocumentationSets =
                             allowed
                             apiRoutes
                             options
+                            linkErrors
                     else
                         package
 
@@ -265,7 +271,7 @@ module internal DocumentationSets =
                         Path.Combine(sourceDir, page.SourcePath.Replace('/', Path.DirectorySeparatorChar)))
 
                 let pages =
-                    ContentProvider.scanDocsSet
+                    ContentProvider.scanDocsSetWithLinkErrors linkErrors
                         { SourceDir = sourceDir
                           SnippetSourceDir = materializedRoot
                           Package = apiPackage
@@ -281,6 +287,8 @@ module internal DocumentationSets =
                    Package = apiPackage
                    Pages = pages }
                 : SiteBuilder.DocsSetSite))
+
+        ContentProvider.throwLinkErrors linkErrors
 
         { Sites = sites
           Sets = content.DocsSets

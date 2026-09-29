@@ -29,7 +29,7 @@ Links between documentation pages use their source Markdown paths, including the
 | `livedocs audit [projects...]` | Check modes, coverage, and compilation for every F# block. | Projects built. Does not execute examples. |
 | `livedocs test [projects...]` | Audit, then compile every unit and run each `run` block and `transcript`. | Projects built. Executable examples have the same file, network, process, and clock access as the shell. |
 | `livedocs generate-tests [projects...]` | Write `tests/FsLiveDocs.SnapshotTests/` with one xUnit case per discovered example. | Projects built. Regenerate after adding, removing, or renaming an example or fence. |
-| `livedocs build [projects...]` | Verify and render the current site to `output/`. | Projects built. The tool includes the native Pagefind indexer. |
+| `livedocs build [projects...]` | Verify and render the current site to `output/`; report all broken local page links before failing. | Projects built. The tool includes the native Pagefind indexer. |
 | `livedocs watch [projects...]` | Verify, rebuild, and serve the site after changes. | Projects built; a free TCP port (default `0.0.0.0:5000`); on Linux, enough inotify watches. |
 
 ## Releases and history

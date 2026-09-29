@@ -1049,6 +1049,39 @@ module ContentProviderTests =
         Assert.Contains("plain path in backticks or a full URL", error.Message)
 
     [<Fact>]
+    let ``scanDocs reports every broken local link across all pages`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(docsDir) |> ignore
+        File.WriteAllText(Path.Combine(docsDir, "index.md"), "[one](missing-one.md) [two](missing-two.md)")
+        File.WriteAllText(Path.Combine(docsDir, "guide.md"), "[three](missing-three.md)")
+
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> ignore)
+
+        Assert.Contains("missing-one.md", error.Message)
+        Assert.Contains("missing-two.md", error.Message)
+        Assert.Contains("missing-three.md", error.Message)
+        Assert.Equal(3, Regex.Matches(error.Message, "Broken documentation link in").Count)
+
+    [<Fact>]
+    let ``shared link diagnostics include API and guide pages`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(Path.Combine(docsDir, "api")) |> ignore
+        File.WriteAllText(Path.Combine(docsDir, "api", "Example.md"), "[api](missing-api.md)")
+        File.WriteAllText(Path.Combine(docsDir, "index.md"), "[guide](missing-guide.md)")
+        let linkErrors = ResizeArray<string>()
+
+        let package =
+            ContentProvider.applyApiDocsWithOptionsAndLinkErrors
+                docsDir docsDir emptyPackage SemanticCode.defaults linkErrors
+        ContentProvider.scanDocsWithOptionsWithLinkErrors
+            docsDir docsDir package "" SemanticCode.defaults linkErrors
+        |> ignore
+
+        Assert.Equal(2, linkErrors.Count)
+        Assert.Contains("missing-api.md", String.concat "\n" linkErrors)
+        Assert.Contains("missing-guide.md", String.concat "\n" linkErrors)
+
+    [<Fact>]
     let ``scanDocs names both source files when number stripping collides`` () =
         let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         let adrDir = Path.Combine(docsDir, "adr")

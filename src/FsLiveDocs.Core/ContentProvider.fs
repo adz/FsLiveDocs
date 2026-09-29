@@ -35,6 +35,14 @@ module ContentProvider =
 
     let private siteOutputRoot = Path.GetFullPath("output")
 
+    let private addLinkError (linkErrors: ResizeArray<string>) (message: string) =
+        linkErrors.Add message
+
+    /// <summary>Raises one error containing all broken local documentation links collected during a build.</summary>
+    let throwLinkErrors (linkErrors: ResizeArray<string>) =
+        if linkErrors.Count > 0 then
+            invalidOp (String.concat System.Environment.NewLine linkErrors)
+
     /// <summary>Matches the shortcode that transcludes an XML example into a page.</summary>
     /// <remarks>
     /// Shared so that callers can discover which examples a page pulls in without expanding it,
@@ -351,6 +359,37 @@ module ContentProvider =
         |> Option.defaultValue []
         |> List.tryPick (fun candidate -> outputFolderAliases |> Map.tryFind (sourcePathKey candidate))
 
+    let private resolveLocalOutput
+        (docsDir: string)
+        (currentSourcePath: string)
+        (currentOutputPath: string)
+        (allowedOutputs: Set<string>)
+        (sourceOutputPaths: Map<string, SourceOutputPath>)
+        (outputFolderAliases: Map<string, string>)
+        (href: string)
+        =
+        let hrefPath, _ = splitHrefPath href
+        if hrefPath.EndsWith(".html", System.StringComparison.OrdinalIgnoreCase) then
+            normalizeOutputPath currentOutputPath href
+            |> Option.filter allowedOutputs.Contains
+        else
+            let sourcePathOutput =
+                tryResolveSourceOutput docsDir currentSourcePath currentOutputPath sourceOutputPaths hrefPath
+            match sourcePathOutput with
+            | Some page when allowedOutputs.Contains page.OutputPath -> Some page.OutputPath
+            | Some _ -> None
+            | None when System.String.IsNullOrEmpty(Path.GetExtension(hrefPath)) ->
+                tryResolveOutputFolderAlias currentOutputPath outputFolderAliases hrefPath
+                |> Option.filter allowedOutputs.Contains
+            | None -> None
+
+    let private looksLikePageHref (hrefPath: string) =
+        let extension = Path.GetExtension(hrefPath)
+        hrefPath.EndsWith("/", System.StringComparison.Ordinal)
+        || System.String.IsNullOrEmpty(extension)
+        || extension.Equals(".md", System.StringComparison.OrdinalIgnoreCase)
+        || extension.Equals(".html", System.StringComparison.OrdinalIgnoreCase)
+
     let private brokenLinkMessage
         (docsDir: string)
         (currentSourcePath: string)
@@ -417,6 +456,8 @@ module ContentProvider =
         (currentOutputPath: string)
         (allowedOutputs: Set<string>)
         (sourceOutputPaths: Map<string, SourceOutputPath>)
+        (outputFolderAliases: Map<string, string>)
+        (linkErrors: ResizeArray<string>)
         (body: string)
         =
         let linkPattern = @"(?<!\!)\[[^\]]+\]\((?<href>[^)]+)\)"
@@ -425,15 +466,11 @@ module ContentProvider =
                 let href = m.Groups.["href"].Value.Trim().Trim('"')
                 match normalizeOutputPath currentOutputPath href with
                 | None -> ()
-                | Some target ->
-                    if target.EndsWith(".html", System.StringComparison.OrdinalIgnoreCase)
-                       || target.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
-                        let normalizedTarget =
-                            if target.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
-                                Path.ChangeExtension(target, ".html").Replace('\\', '/')
-                            else target
-                        if not (allowedOutputs.Contains normalizedTarget) then
-                            invalidOp (brokenLinkMessage docsDir currentSourcePath currentOutputPath sourceOutputPaths href)
+                | Some _ ->
+                    let hrefPath, _ = splitHrefPath href
+                    if looksLikePageHref hrefPath
+                       && resolveLocalOutput docsDir currentSourcePath currentOutputPath allowedOutputs sourceOutputPaths outputFolderAliases href |> Option.isNone then
+                        addLinkError linkErrors (brokenLinkMessage docsDir currentSourcePath currentOutputPath sourceOutputPaths href)
             protectedBody)
         |> ignore
 
@@ -450,44 +487,15 @@ module ContentProvider =
         withProtectedCodeSegments body "FSLIVEDOCS_REWRITE_LINKS" (fun protectedBody ->
             Regex.Replace(protectedBody, linkPattern, fun (m: Match) ->
                 let href = m.Groups.["href"].Value.Trim().Trim('"')
-                match normalizeOutputPath currentOutputPath href with
-                | None -> m.Value
-                | Some _ ->
-                    let hrefPath, hrefSuffix = splitHrefPath href
-                    let isHtmlLink = hrefPath.EndsWith(".html", System.StringComparison.OrdinalIgnoreCase)
-                    let resolved =
-                        if isHtmlLink then
-                            normalizeOutputPath currentOutputPath href
-                            |> Option.filter allowedOutputs.Contains
-                        else
-                            let sourcePathOutput =
-                                tryResolveSourceOutput docsDir currentSourcePath currentOutputPath sourceOutputPaths hrefPath
-                            let resolvedOutput =
-                                match sourcePathOutput with
-                                | Some page when allowedOutputs.Contains page.OutputPath -> Some page.OutputPath
-                                | Some _ -> None
-                                | None when System.String.IsNullOrEmpty(Path.GetExtension(hrefPath)) ->
-                                    tryResolveOutputFolderAlias currentOutputPath outputFolderAliases hrefPath
-                                | None -> None
-                            resolvedOutput
-                            |> Option.filter allowedOutputs.Contains
-                    match resolved with
-                    | Some resolved ->
-                        let currentDirectory = Path.GetDirectoryName(currentOutputPath)
-                        let relative =
-                            if System.String.IsNullOrWhiteSpace currentDirectory then resolved
-                            else Path.GetRelativePath(currentDirectory, resolved).Replace('\\', '/')
-                        m.Groups.["prefix"].Value + relative + hrefSuffix + m.Groups.["suffix"].Value
-                    | None ->
-                        let extension = Path.GetExtension(hrefPath)
-                        let looksLikePage =
-                            hrefPath.EndsWith("/", System.StringComparison.Ordinal)
-                            || System.String.IsNullOrEmpty(extension)
-                            || extension.Equals(".md", System.StringComparison.OrdinalIgnoreCase)
-                            || extension.Equals(".html", System.StringComparison.OrdinalIgnoreCase)
-                        if looksLikePage then
-                            invalidOp (brokenLinkMessage docsDir currentSourcePath currentOutputPath sourceOutputPaths href)
-                        m.Value))
+                match resolveLocalOutput docsDir currentSourcePath currentOutputPath allowedOutputs sourceOutputPaths outputFolderAliases href with
+                | Some resolved ->
+                    let _, hrefSuffix = splitHrefPath href
+                    let currentDirectory = Path.GetDirectoryName(currentOutputPath)
+                    let relative =
+                        if System.String.IsNullOrWhiteSpace currentDirectory then resolved
+                        else Path.GetRelativePath(currentDirectory, resolved).Replace('\\', '/')
+                    m.Groups.["prefix"].Value + relative + hrefSuffix + m.Groups.["suffix"].Value
+                | None -> m.Value))
 
     let private collectEntityIds (entities: EntityModel list) =
         let rec walk acc (items: EntityModel list) =
@@ -740,6 +748,7 @@ module ContentProvider =
             AllowedOutputs: Set<string>
             SourceOutputPaths: Map<string, SourceOutputPath>
             OutputFolderAliases: Map<string, string>
+            LinkErrors: ResizeArray<string>
             /// Route prefix ("" or e.g. "internal/") prepended to this page's semantic source path so a
             /// documentation set's persisted blocks stay uniquely keyed across the shared site.
             RoutePrefix: string
@@ -773,6 +782,8 @@ module ContentProvider =
             context.CurrentOutputPath
             context.AllowedOutputs
             context.SourceOutputPaths
+            context.OutputFolderAliases
+            context.LinkErrors
             rewritten
 
         let semanticSourcePath =
@@ -844,21 +855,26 @@ module ContentProvider =
             Run.orRaise FileSystemError.describe $"Could not read Markdown page {filePath}" (FileSystem.readAllText filePath)
         let docsDir = Path.GetDirectoryName(Path.GetFullPath filePath)
         let sourceOutputPaths = markdownFilesIn docsDir |> sourceOutputPathsForFiles docsDir ""
-        loadMarkdownPage
-            { DocsDir = docsDir
-              SourceDir = sourceDir
-              Package = package
-              RootPath = rootPath
-              CurrentOutputPath = currentOutputPath
-              AllowedOutputs = allowedOutputs
-              SourceOutputPaths = sourceOutputPaths
-              OutputFolderAliases = outputFolderAliases allowedOutputs
-              RoutePrefix = ""
-              ApiRoutes = Map.empty
-              SemanticCode = SemanticCode.defaults }
-            filePath
-            currentOutputPath
-            raw
+        let linkErrors = ResizeArray<string>()
+        let page =
+            loadMarkdownPage
+                { DocsDir = docsDir
+                  SourceDir = sourceDir
+                  Package = package
+                  RootPath = rootPath
+                  CurrentOutputPath = currentOutputPath
+                  AllowedOutputs = allowedOutputs
+                  SourceOutputPaths = sourceOutputPaths
+                  OutputFolderAliases = outputFolderAliases allowedOutputs
+                  LinkErrors = linkErrors
+                  RoutePrefix = ""
+                  ApiRoutes = Map.empty
+                  SemanticCode = SemanticCode.defaults }
+                filePath
+                currentOutputPath
+                raw
+        throwLinkErrors linkErrors
+        page
 
     /// <summary>Inputs for scanning one documentation set's Markdown into rendered pages.</summary>
     type DocsSetScan =
@@ -896,6 +912,7 @@ module ContentProvider =
         (apiRoutes: Map<string, string>)
         (semanticCode: SemanticCode.Options)
         (files: string list)
+        (linkErrors: ResizeArray<string>)
         =
         // Every file's raw text is read up front as one composed Flow, run once, rather than once
         // per file inside the map below.
@@ -936,6 +953,7 @@ module ContentProvider =
                       AllowedOutputs = allowedOutputs
                       SourceOutputPaths = sourceOutputPaths
                       OutputFolderAliases = outputFolderAliases
+                      LinkErrors = linkErrors
                       RoutePrefix = semanticPrefix
                       ApiRoutes = apiRoutes
                       SemanticCode = semanticCode }
@@ -954,8 +972,15 @@ module ContentProvider =
             pages.[0])
         |> Array.toList
 
-    /// <summary>Scans guides and semantically formats F# fences using the supplied assembly references.</summary>
-    let scanDocsWithOptions (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (semanticCode: SemanticCode.Options) =
+    /// <summary>Scans guides and semantically formats F# fences, appending local-link errors to a shared collection.</summary>
+    let scanDocsWithOptionsWithLinkErrors
+        (docsDir: string)
+        (sourceDir: string)
+        (package: PackageModel)
+        (rootPath: string)
+        (semanticCode: SemanticCode.Options)
+        (linkErrors: ResizeArray<string>)
+        =
         let work =
             flow {
                 let! exists = FileSystem.directoryExists docsDir
@@ -973,10 +998,17 @@ module ContentProvider =
         | None -> []
         | Some files ->
             let allowedOutputs = collectAllowedOutputs docsDir package
-            files |> scanFileList docsDir sourceDir package rootPath "" "" allowedOutputs Map.empty semanticCode
+            scanFileList docsDir sourceDir package rootPath "" "" allowedOutputs Map.empty semanticCode files linkErrors
+
+    /// <summary>Scans guides and semantically formats F# fences using the supplied assembly references.</summary>
+    let scanDocsWithOptions (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (semanticCode: SemanticCode.Options) =
+        let linkErrors = ResizeArray<string>()
+        let pages = scanDocsWithOptionsWithLinkErrors docsDir sourceDir package rootPath semanticCode linkErrors
+        throwLinkErrors linkErrors
+        pages
 
     /// <summary>Scans one documentation set's Markdown, honoring its route prefix and shared allowed outputs.</summary>
-    let scanDocsSet (scan: DocsSetScan) =
+    let scanDocsSetWithLinkErrors (linkErrors: ResizeArray<string>) (scan: DocsSetScan) =
         scanFileList
             scan.SourceDir
             scan.SnippetSourceDir
@@ -988,6 +1020,13 @@ module ContentProvider =
             scan.ApiRoutes
             scan.SemanticCode
             scan.Files
+            linkErrors
+
+    let scanDocsSet (scan: DocsSetScan) =
+        let linkErrors = ResizeArray<string>()
+        let pages = scanDocsSetWithLinkErrors linkErrors scan
+        throwLinkErrors linkErrors
+        pages
 
     /// <summary>Guide output paths for a set's files, prefixed by its route, for building the shared allowed-output set.</summary>
     let setGuideOutputs (sourceDir: string) (routePrefix: string) (files: string list) =
@@ -1010,6 +1049,7 @@ module ContentProvider =
         (allowedOutputs: Set<string>)
         (apiRoutes: Map<string, string>)
         (_semanticCode: SemanticCode.Options)
+        (linkErrors: ResizeArray<string>)
         =
         let apiDocsWork =
             flow {
@@ -1147,7 +1187,7 @@ module ContentProvider =
 
                     let rewritten =
                         rewriteLocalLinks docsRoot f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) expanded
-                    validateLinks docsRoot f apiOutputPath allowedOutputs sourceOutputPaths rewritten
+                    validateLinks docsRoot f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) linkErrors rewritten
                     id, [ Documentation.markdown rewritten ])
                 |> Map.ofList
             
@@ -1167,12 +1207,13 @@ module ContentProvider =
                 Entities = package.Entities |> List.map (fun e -> updateEntity e docsMap)
                 Organization = organization }
 
-    /// <summary>Applies long-form API documentation with semantic F# formatting.</summary>
-    let applyApiDocsWithOptions
+    /// <summary>Applies long-form API documentation and appends local-link errors to a shared collection.</summary>
+    let applyApiDocsWithOptionsAndLinkErrors
         (docsDir: string)
         (sourceDir: string)
         (package: PackageModel)
         (semanticCode: SemanticCode.Options)
+        (linkErrors: ResizeArray<string>)
         =
         applyApiDocsCore
             (Path.Combine(docsDir, "api"))
@@ -1182,6 +1223,40 @@ module ContentProvider =
             (collectAllowedOutputs docsDir package)
             Map.empty
             semanticCode
+            linkErrors
+
+    /// <summary>Applies long-form API documentation with semantic F# formatting.</summary>
+    let applyApiDocsWithOptions
+        (docsDir: string)
+        (sourceDir: string)
+        (package: PackageModel)
+        (semanticCode: SemanticCode.Options)
+        =
+        let linkErrors = ResizeArray<string>()
+        let enriched = applyApiDocsWithOptionsAndLinkErrors docsDir sourceDir package semanticCode linkErrors
+        throwLinkErrors linkErrors
+        enriched
+
+    /// <summary>Applies one documentation set's long-form API pages and records local-link errors.</summary>
+    let applyApiDocsForSetWithLinkErrors
+        (setSourceDir: string)
+        (snippetSourceDir: string)
+        (package: PackageModel)
+        (routePrefix: string)
+        (allowedOutputs: Set<string>)
+        (apiRoutes: Map<string, string>)
+        (semanticCode: SemanticCode.Options)
+        (linkErrors: ResizeArray<string>)
+        =
+        applyApiDocsCore
+            (Path.Combine(setSourceDir, "api"))
+            snippetSourceDir
+            package
+            routePrefix
+            allowedOutputs
+            apiRoutes
+            semanticCode
+            linkErrors
 
     /// <summary>Applies one documentation set's long-form API pages, honoring its route prefix and shared allowed outputs.</summary>
     let applyApiDocsForSet
@@ -1193,14 +1268,11 @@ module ContentProvider =
         (apiRoutes: Map<string, string>)
         (semanticCode: SemanticCode.Options)
         =
-        applyApiDocsCore
-            (Path.Combine(setSourceDir, "api"))
-            snippetSourceDir
-            package
-            routePrefix
-            allowedOutputs
-            apiRoutes
-            semanticCode
+        let linkErrors = ResizeArray<string>()
+        let enriched =
+            applyApiDocsForSetWithLinkErrors setSourceDir snippetSourceDir package routePrefix allowedOutputs apiRoutes semanticCode linkErrors
+        throwLinkErrors linkErrors
+        enriched
 
     /// <summary>Applies long-form documentation from docs/api/*.md to the package model.</summary>
     /// <param name="docsDir">The docs root that contains the api subdirectory.</param>

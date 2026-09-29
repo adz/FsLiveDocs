@@ -91,6 +91,7 @@ dotnet livedocs build
 
 The generated site goes to `output/`.
 When standard output is redirected, the build uses plain progress output automatically.
+If links are broken, FsLiveDocs reports them together so you can fix them in one pass.
 Link to a page by its real Markdown file path, including its original capitalization and any leading number. FsLiveDocs maps that source path to the generated URL, where names are lowercase and ordering numbers are removed.
 
 ## Add your first guide

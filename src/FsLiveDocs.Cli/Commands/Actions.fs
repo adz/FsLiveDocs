@@ -522,13 +522,15 @@ module Actions =
                     for source, prefix, files in prepared.StaticFiles do
                         ContentProvider.copyStaticFilesForSet source prefix files "output"
                 | None ->
+                    let linkErrors = ResizeArray<string>()
                     let package =
-                        ContentProvider.applyApiDocsWithOptions "docs" sourceDir packageRaw semanticCode
+                        ContentProvider.applyApiDocsWithOptionsAndLinkErrors "docs" sourceDir packageRaw semanticCode linkErrors
 
                     let pages =
-                        ContentProvider.scanDocsWithOptions "docs" sourceDir package "" semanticCode
+                        ContentProvider.scanDocsWithOptionsWithLinkErrors "docs" sourceDir package "" semanticCode linkErrors
                         |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft)
 
+                    ContentProvider.throwLinkErrors linkErrors
                     reportBlogDiagnostics warnAsError reportNote pages
 
                     SiteBuilder.buildAll historyDir package pages config theme "output"
