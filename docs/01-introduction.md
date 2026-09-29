@@ -122,6 +122,7 @@ dotnet livedocs test
 ```
 
 `audit` checks coverage and compilation without executing examples. `test` also runs explicit `run` blocks and transcripts.
+When one F# block has several compiler errors, `audit` reports every error with its line and column.
 
 ## Next steps
 

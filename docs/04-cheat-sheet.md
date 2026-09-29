@@ -26,7 +26,7 @@ Links between documentation pages use their source Markdown paths, including the
 
 | Command | Result | Assumes |
 | --- | --- | --- |
-| `livedocs audit [projects...]` | Check modes, coverage, and compilation for every F# block. | Projects built. Does not execute examples. |
+| `livedocs audit [projects...]` | Check modes, coverage, and compilation for every F# block; report each compiler error with its line and column. | Projects built. Does not execute examples. |
 | `livedocs test [projects...]` | Audit, then compile every unit and run each `run` block and `transcript`. | Projects built. Executable examples have the same file, network, process, and clock access as the shell. |
 | `livedocs generate-tests [projects...]` | Write `tests/FsLiveDocs.SnapshotTests/` with one xUnit case per discovered example. | Projects built. Regenerate after adding, removing, or renaming an example or fence. |
 | `livedocs build [projects...]` | Verify and render the current site to `output/`; report all broken local page links before failing. Warns for projects without XML documentation, and reuses the prior output only while docs, configuration, project inputs, assemblies, and XML docs are unchanged. | Projects built. The tool includes the native Pagefind indexer. |

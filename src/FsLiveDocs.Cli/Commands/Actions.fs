@@ -177,6 +177,11 @@ module Actions =
         | Some sets -> DocAnalysis.analyzeDocsSets sets projectPaths projectFingerprint package
         | None -> DocAnalysis.analyze prelude projectPaths projectFingerprint package
 
+    let formatAuditErrors (errors: (int * int * string) list) =
+        errors
+        |> List.map (fun (line, column, message) -> $"{line}:{column} {message}")
+        |> String.concat (Environment.NewLine + "          ")
+
     let private printAudit showSuccess (analysis: DocAnalysis.Analysis) =
         let diagnosticsByBlock = analysis.Errors |> List.groupBy fst |> Map.ofList
         let mutable failures = 0
@@ -185,8 +190,7 @@ module Actions =
             let status, detail =
                 if not errors.IsEmpty then
                     failures <- failures + 1
-                    let line, column, message = List.head errors
-                    "FAIL", $"{line}:{column} {message}"
+                    "FAIL", formatAuditErrors errors
                 else
                     match block.Mode with
                     | Page -> "PASS", "page"

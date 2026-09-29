@@ -4,6 +4,7 @@ open System
 open System.IO
 open Xunit
 open FsLiveDocs.Core
+open FsLiveDocs.Cli
 open FsLiveDocs.Runner
 
 module IntegrationTests =
@@ -232,6 +233,33 @@ module IntegrationTests =
         Assert.Equal(Some "guides/broken.md#fsharp-1", diagnostic.BlockId)
         Assert.Equal("guides/broken.md", diagnostic.SourcePath)
         Assert.Equal(2, diagnostic.StartLine)
+    }
+
+    [<Fact>]
+    let ``audit diagnostic details include every compiler error with coordinates`` () = async {
+        let blocks =
+            DocumentationDiscovery.discoverMarkdown
+                "guides/two-errors.md"
+                (Some coreProject)
+                "```fsharp\nlet first : MissingDocumentationTypeOne = Unchecked.defaultof<_>\nlet second : MissingDocumentationTypeTwo = Unchecked.defaultof<_>\n```"
+        let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
+        let errors =
+            results
+            |> List.collect _.Diagnostics
+            |> List.filter (fun diagnostic ->
+                diagnostic.Severity = SemanticDiagnosticSeverity.Error
+                && (diagnostic.Message.Contains("MissingDocumentationTypeOne")
+                    || diagnostic.Message.Contains("MissingDocumentationTypeTwo")))
+        let detail =
+            errors
+            |> List.map (fun diagnostic -> diagnostic.StartLine, diagnostic.StartColumn, diagnostic.Message)
+            |> Actions.formatAuditErrors
+
+        Assert.Equal(2, errors.Length)
+        Assert.Contains($"{errors.[0].StartLine}:{errors.[0].StartColumn}", detail)
+        Assert.Contains($"{errors.[1].StartLine}:{errors.[1].StartColumn}", detail)
+        Assert.Contains("MissingDocumentationTypeOne", detail)
+        Assert.Contains("MissingDocumentationTypeTwo", detail)
     }
 
     [<Fact>]
