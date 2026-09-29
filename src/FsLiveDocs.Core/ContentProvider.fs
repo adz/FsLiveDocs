@@ -29,6 +29,10 @@ open FsLiveDocs.Core.Effects
 /// </example>
 module ContentProvider =
 
+    type private SourceOutputPath =
+        { SourcePath: string
+          OutputPath: string }
+
     let private siteOutputRoot = Path.GetFullPath("output")
 
     /// <summary>Matches the shortcode that transcludes an XML example into a page.</summary>
@@ -193,8 +197,11 @@ module ContentProvider =
     let private sourceOutputPathsForFiles (docsDir: string) (routePrefix: string) (files: string list) =
         files
         |> List.map (fun filePath ->
-            let key = sourceRelativePath docsDir filePath |> sourcePathKey
-            key, routePrefix + outputPathForFile docsDir filePath)
+            let sourcePath = sourceRelativePath docsDir filePath
+            let key = sourcePath |> sourcePathKey
+            key,
+            { SourcePath = sourcePath
+              OutputPath = routePrefix + outputPathForFile docsDir filePath })
         |> Map.ofList
 
     /// <summary>Searches for a member by ID or Name within a PackageModel.</summary>
@@ -253,7 +260,7 @@ module ContentProvider =
         if suffixStart < 0 then href, ""
         else href.Substring(0, suffixStart), href.Substring(suffixStart)
 
-    let private sourcePathCandidates (docsDir: string) (currentSourcePath: string) (hrefPath: string) =
+    let private sourceTargetPath (docsDir: string) (currentSourcePath: string) (hrefPath: string) =
         let docsRoot = Path.GetFullPath docsDir
         let targetPath =
             if hrefPath = "/" then docsRoot
@@ -265,7 +272,15 @@ module ContentProvider =
                     hrefPath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar))
 
         let relative = Path.GetRelativePath(docsRoot, Path.GetFullPath targetPath).Replace('\\', '/')
-        if relative = ".." || relative.StartsWith("../", System.StringComparison.Ordinal) then
+        let isOutsideRoot =
+            Path.IsPathRooted(relative)
+            || relative = ".."
+            || relative.StartsWith("../", System.StringComparison.Ordinal)
+        Path.GetFullPath targetPath, relative, isOutsideRoot
+
+    let private sourcePathCandidates (docsDir: string) (currentSourcePath: string) (hrefPath: string) =
+        let _, relative, isOutsideRoot = sourceTargetPath docsDir currentSourcePath hrefPath
+        if isOutsideRoot then
             []
         else
             let extension = Path.GetExtension(relative)
@@ -284,7 +299,7 @@ module ContentProvider =
         (docsDir: string)
         (currentSourcePath: string)
         (currentOutputPath: string)
-        (sourceOutputPaths: Map<string, string>)
+        (sourceOutputPaths: Map<string, SourceOutputPath>)
         (hrefPath: string)
         =
         let bySourcePath =
@@ -304,7 +319,7 @@ module ContentProvider =
             sourceOutputPaths
             |> Map.toSeq
             |> Seq.tryPick (fun (_, outputPath) ->
-                if candidates |> List.exists (fun candidate -> System.String.Equals(candidate, outputPath, System.StringComparison.OrdinalIgnoreCase)) then
+                if candidates |> List.exists (fun candidate -> System.String.Equals(candidate, outputPath.OutputPath, System.StringComparison.OrdinalIgnoreCase)) then
                     Some outputPath
                 else
                     None)
@@ -336,6 +351,50 @@ module ContentProvider =
         |> Option.defaultValue []
         |> List.tryPick (fun candidate -> outputFolderAliases |> Map.tryFind (sourcePathKey candidate))
 
+    let private brokenLinkMessage
+        (docsDir: string)
+        (currentSourcePath: string)
+        (currentOutputPath: string)
+        (sourceOutputPaths: Map<string, SourceOutputPath>)
+        (href: string)
+        =
+        let hrefPath, _ = splitHrefPath href
+        let targetFullPath, targetRelativePath, isOutsideRoot = sourceTargetPath docsDir currentSourcePath hrefPath
+        let attemptedOutputPath = normalizeOutputPath currentOutputPath href |> Option.defaultValue targetRelativePath
+        let mappedPage =
+            let outputCandidates =
+                if hrefPath.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
+                    [ Path.ChangeExtension(attemptedOutputPath, ".html").Replace('\\', '/') ]
+                elif hrefPath.EndsWith(".html", System.StringComparison.OrdinalIgnoreCase) then
+                    [ attemptedOutputPath ]
+                elif System.String.IsNullOrEmpty(Path.GetExtension(hrefPath)) then
+                    let trimmed = attemptedOutputPath.TrimEnd('/')
+                    [ trimmed + ".html"; trimmed + "/index.html" ]
+                else
+                    []
+
+            sourceOutputPaths
+            |> Map.toSeq
+            |> Seq.tryPick (fun (_, page) ->
+                if outputCandidates |> List.exists (fun candidate -> System.String.Equals(candidate, page.OutputPath, System.StringComparison.OrdinalIgnoreCase)) then
+                    Some page
+                else
+                    None)
+
+        let detail =
+            if isOutsideRoot then
+                $"resolves to source path `{targetRelativePath}` outside the docs root. Use a plain path in backticks or a full URL."
+            elif Directory.Exists targetFullPath then
+                $"resolves to folder `{targetRelativePath}`; folder links are not pages."
+            else
+                match mappedPage with
+                | Some page ->
+                    $"resolves to `{attemptedOutputPath}`, but the source page is `{page.SourcePath}` and generates `{page.OutputPath}`."
+                | None ->
+                    $"resolves to source path `{targetRelativePath}` and generated path `{attemptedOutputPath}`, which does not resolve to a generated page."
+
+        $"Broken documentation link in {currentOutputPath}: [{href}] {detail}"
+
     let private withProtectedCodeSegments (text: string) (tokenPrefix: string) (action: string -> string) =
         let protectedSegments = ResizeArray<string>()
         let protectCodeSegments (input: string) =
@@ -352,7 +411,14 @@ module ContentProvider =
 
         text |> protectCodeSegments |> action |> restoreCodeSegments
 
-    let private validateLinks (currentOutputPath: string) (allowedOutputs: Set<string>) (body: string) =
+    let private validateLinks
+        (docsDir: string)
+        (currentSourcePath: string)
+        (currentOutputPath: string)
+        (allowedOutputs: Set<string>)
+        (sourceOutputPaths: Map<string, SourceOutputPath>)
+        (body: string)
+        =
         let linkPattern = @"(?<!\!)\[[^\]]+\]\((?<href>[^)]+)\)"
         withProtectedCodeSegments body "FSLIVEDOCS_VALIDATE_CODE" (fun protectedBody ->
             for m in System.Text.RegularExpressions.Regex.Matches(protectedBody, linkPattern) do
@@ -367,7 +433,7 @@ module ContentProvider =
                                 Path.ChangeExtension(target, ".html").Replace('\\', '/')
                             else target
                         if not (allowedOutputs.Contains normalizedTarget) then
-                            invalidOp $"Broken documentation link in {currentOutputPath}: [{href}] resolves to {normalizedTarget}, which does not exist."
+                            invalidOp (brokenLinkMessage docsDir currentSourcePath currentOutputPath sourceOutputPaths href)
             protectedBody)
         |> ignore
 
@@ -376,7 +442,7 @@ module ContentProvider =
         (currentSourcePath: string)
         (currentOutputPath: string)
         (allowedOutputs: Set<string>)
-        (sourceOutputPaths: Map<string, string>)
+        (sourceOutputPaths: Map<string, SourceOutputPath>)
         (outputFolderAliases: Map<string, string>)
         (body: string)
         =
@@ -398,7 +464,8 @@ module ContentProvider =
                                 tryResolveSourceOutput docsDir currentSourcePath currentOutputPath sourceOutputPaths hrefPath
                             let resolvedOutput =
                                 match sourcePathOutput with
-                                | Some _ -> sourcePathOutput
+                                | Some page when allowedOutputs.Contains page.OutputPath -> Some page.OutputPath
+                                | Some _ -> None
                                 | None when System.String.IsNullOrEmpty(Path.GetExtension(hrefPath)) ->
                                     tryResolveOutputFolderAlias currentOutputPath outputFolderAliases hrefPath
                                 | None -> None
@@ -419,7 +486,7 @@ module ContentProvider =
                             || extension.Equals(".md", System.StringComparison.OrdinalIgnoreCase)
                             || extension.Equals(".html", System.StringComparison.OrdinalIgnoreCase)
                         if looksLikePage then
-                            invalidOp $"Broken documentation link in {currentOutputPath}: [{href}] does not resolve to a generated page."
+                            invalidOp (brokenLinkMessage docsDir currentSourcePath currentOutputPath sourceOutputPaths href)
                         m.Value))
 
     let private collectEntityIds (entities: EntityModel list) =
@@ -671,7 +738,7 @@ module ContentProvider =
             RootPath: string
             CurrentOutputPath: string
             AllowedOutputs: Set<string>
-            SourceOutputPaths: Map<string, string>
+            SourceOutputPaths: Map<string, SourceOutputPath>
             OutputFolderAliases: Map<string, string>
             /// Route prefix ("" or e.g. "internal/") prepended to this page's semantic source path so a
             /// documentation set's persisted blocks stay uniquely keyed across the shared site.
@@ -700,7 +767,13 @@ module ContentProvider =
                 context.OutputFolderAliases
                 resolved
 
-        validateLinks context.CurrentOutputPath context.AllowedOutputs rewritten
+        validateLinks
+            context.DocsDir
+            sourcePath
+            context.CurrentOutputPath
+            context.AllowedOutputs
+            context.SourceOutputPaths
+            rewritten
 
         let semanticSourcePath =
             context.RoutePrefix
@@ -838,7 +911,11 @@ module ContentProvider =
         let sourceOutputPaths =
             outputPathsByFile
             |> Map.toList
-            |> List.map (fun (filePath, outputPath) -> sourceRelativePath docsDir filePath |> sourcePathKey, outputPath)
+            |> List.map (fun (filePath, outputPath) ->
+                let sourcePath = sourceRelativePath docsDir filePath
+                sourcePath |> sourcePathKey,
+                { SourcePath = sourcePath
+                  OutputPath = outputPath })
             |> Map.ofList
         let outputFolderAliases = outputFolderAliases allowedOutputs
 
@@ -958,7 +1035,10 @@ module ContentProvider =
                 docFiles
                 |> List.map (fun (filePath, _) ->
                     let id = Path.GetFileNameWithoutExtension filePath
-                    sourceRelativePath docsRoot filePath |> sourcePathKey, routePrefix + $"api/{id}.html")
+                    let sourcePath = sourceRelativePath docsRoot filePath
+                    sourcePath |> sourcePathKey,
+                    { SourcePath = sourcePath
+                      OutputPath = routePrefix + $"api/{id}.html" })
                 |> Map.ofList
             let sourceOutputPaths =
                 Map.fold (fun paths key value -> Map.add key value paths) guideSourceOutputPaths apiSourceOutputPaths
@@ -1067,7 +1147,7 @@ module ContentProvider =
 
                     let rewritten =
                         rewriteLocalLinks docsRoot f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) expanded
-                    validateLinks apiOutputPath allowedOutputs rewritten
+                    validateLinks docsRoot f apiOutputPath allowedOutputs sourceOutputPaths rewritten
                     id, [ Documentation.markdown rewritten ])
                 |> Map.ofList
             

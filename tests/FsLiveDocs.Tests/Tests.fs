@@ -1023,6 +1023,30 @@ module ContentProviderTests =
         let error = Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> ignore)
 
         Assert.Contains("adr/trigger-is-the-start-step.md", error.Message)
+        Assert.Contains("adr/trigger-is-the-start-step.html", error.Message)
+        Assert.Contains("adr/0004-trigger-is-the-start-step.md", error.Message)
+
+    [<Fact>]
+    let ``scanDocs explains when a broken page link targets a folder`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(Path.Combine(docsDir, "guides")) |> ignore
+        File.WriteAllText(Path.Combine(docsDir, "index.md"), "[guides](guides/)")
+
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> ignore)
+
+        Assert.Contains("guides", error.Message)
+        Assert.Contains("folder links are not pages", error.Message)
+
+    [<Fact>]
+    let ``scanDocs explains when a broken page link leaves the docs root`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "docs")
+        Directory.CreateDirectory(docsDir) |> ignore
+        File.WriteAllText(Path.Combine(docsDir, "index.md"), "[agents](../AGENTS.md)")
+
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> ignore)
+
+        Assert.Contains("outside the docs root", error.Message)
+        Assert.Contains("plain path in backticks or a full URL", error.Message)
 
     [<Fact>]
     let ``scanDocs names both source files when number stripping collides`` () =
