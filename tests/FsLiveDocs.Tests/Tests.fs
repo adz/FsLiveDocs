@@ -11,6 +11,15 @@ open FsLiveDocs.Cli
 open FsLiveDocs.Runner
 open FsLiveDocs.Renderer
 
+module ConsoleOutputTests =
+
+    [<Theory>]
+    [<InlineData(true, true, false)>]
+    [<InlineData(true, false, true)>]
+    [<InlineData(false, false, false)>]
+    let ``redirected output disables interactive rendering`` requested outputRedirected expected =
+        Assert.Equal(expected, ConsoleOutput.shouldUseInteractive requested outputRedirected)
+
 /// Codecs shared by fixtures across this file that write or read the JSON a persisted release
 /// artifact is schema-pinned to. Every test builds these bytes by hand rather than going through
 /// `ReleaseCapsule`/`History`'s own write paths, so it needs the same codec those paths use.

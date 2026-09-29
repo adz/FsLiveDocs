@@ -58,13 +58,13 @@ per-command **Assumes** column lists what each one needs beyond that.
 | `--warn-as-error` | Fail on API documentation quality and blog authoring warnings. |
 | `--drafts` | With `build` or `watch`, include blog posts marked `draft: true`. |
 | `--verbosity <level>` | Set output detail: `warnings` (default), `info`, or `debug`. |
-| `--interactive <bool>` | Enable or disable animated, stage-aware progress (default: `true`). |
+| `--interactive <bool>` | Enable or disable animated, stage-aware progress (default: `true`); redirected output uses plain progress automatically. |
 | `--banner <bool>` | Show or hide the LiveDocs banner (default: `true`). |
 | `--host <address>` | Set the preview bind address. |
 | `--port <number>` | Set the preview port. |
 | `--ignore <names>` | Add watcher directory names to ignore. |
 
-At the default `warnings` level, LiveDocs groups API issues by source file and issue kind, links to configured GitHub source, and prints a concise summary. `info` adds normal progress messages. `debug` expands every issue with its compiler message and remedy, and also lists every audited block and watcher directory. Use `--interactive false` for stable line-oriented logs. Verbosity, interactivity, and the banner are independent. In CI, pass `--interactive false --banner false` to every invocation — see [Verify documentation in CI](guides/continuous-integration.md).
+At the default `warnings` level, LiveDocs groups API issues by source file and issue kind, links to configured GitHub source, and prints a concise summary. `info` adds normal progress messages. `debug` expands every issue with its compiler message and remedy, and also lists every audited block and watcher directory. Use `--interactive false` for stable line-oriented logs. Build selects plain progress automatically when standard output is redirected. Verbosity, interactivity, and the banner are independent. In CI, pass `--interactive false --banner false` to every invocation — see [Verify documentation in CI](guides/continuous-integration.md).
 
 ## Fence modes
 

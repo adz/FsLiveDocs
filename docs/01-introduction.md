@@ -90,6 +90,7 @@ dotnet livedocs build
 ```
 
 The generated site goes to `output/`.
+When standard output is redirected, the build uses plain progress output automatically.
 
 ## Add your first guide
 

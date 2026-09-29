@@ -138,6 +138,8 @@ module internal ConsoleOutput =
     let mutable banner = true
     let mutable animateBanner = false
 
+    let shouldUseInteractive (requested: bool) (outputRedirected: bool) = requested && not outputRedirected
+
     let configure (verbosityValue: string option) (interactiveValue: bool) (bannerValue: bool) =
         verbosity <-
             match verbosityValue |> Option.map _.Trim().ToLowerInvariant() with
@@ -145,7 +147,7 @@ module internal ConsoleOutput =
             | Some "info" -> Info
             | Some "debug" -> Debug
             | Some value -> invalidArg "verbosity" $"Unsupported verbosity '{value}'. Use warnings, info, or debug."
-        interactive <- interactiveValue
+        interactive <- shouldUseInteractive interactiveValue Console.IsOutputRedirected
         banner <- bannerValue
 
     let isInfo () = verbosity = Info || verbosity = Debug
