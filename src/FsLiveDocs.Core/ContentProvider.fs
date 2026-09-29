@@ -184,6 +184,19 @@ module ContentProvider =
         let metadata = File.ReadAllText(filePath) |> parseFrontMatter |> Option.map fst
         outputPathForMetadata docsDir filePath metadata
 
+    let private sourceRelativePath (docsDir: string) (filePath: string) =
+        Path.GetRelativePath(Path.GetFullPath docsDir, Path.GetFullPath filePath).Replace('\\', '/')
+
+    let private sourcePathKey (relativePath: string) =
+        relativePath.Replace('\\', '/').ToUpperInvariant()
+
+    let private sourceOutputPathsForFiles (docsDir: string) (routePrefix: string) (files: string list) =
+        files
+        |> List.map (fun filePath ->
+            let key = sourceRelativePath docsDir filePath |> sourcePathKey
+            key, routePrefix + outputPathForFile docsDir filePath)
+        |> Map.ofList
+
     /// <summary>Searches for a member by ID or Name within a PackageModel.</summary>
     let findMember (id: string) (package: PackageModel) =
         let rec searchEntities (entities: EntityModel list) =
@@ -235,6 +248,94 @@ module ContentProvider =
             let relative = Path.GetRelativePath(siteOutputRoot, full).Replace('\\', '/')
             Some relative
 
+    let private splitHrefPath (href: string) =
+        let suffixStart = href.IndexOfAny([| '#'; '?' |])
+        if suffixStart < 0 then href, ""
+        else href.Substring(0, suffixStart), href.Substring(suffixStart)
+
+    let private sourcePathCandidates (docsDir: string) (currentSourcePath: string) (hrefPath: string) =
+        let docsRoot = Path.GetFullPath docsDir
+        let targetPath =
+            if hrefPath = "/" then docsRoot
+            elif hrefPath.StartsWith("/", System.StringComparison.Ordinal) then
+                Path.Combine(docsRoot, hrefPath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar))
+            else
+                Path.Combine(
+                    Path.GetDirectoryName(Path.GetFullPath currentSourcePath),
+                    hrefPath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar))
+
+        let relative = Path.GetRelativePath(docsRoot, Path.GetFullPath targetPath).Replace('\\', '/')
+        if relative = ".." || relative.StartsWith("../", System.StringComparison.Ordinal) then
+            []
+        else
+            let extension = Path.GetExtension(relative)
+            if extension.Equals(".md", System.StringComparison.OrdinalIgnoreCase) then
+                [ relative ]
+            elif relative = "." || System.String.IsNullOrEmpty extension then
+                let trimmed = relative.TrimEnd('/')
+                if trimmed = "." || System.String.IsNullOrEmpty trimmed then
+                    [ "index.md"; "_index.md" ]
+                else
+                    [ trimmed + ".md"; trimmed + "/index.md"; trimmed + "/_index.md" ]
+            else
+                []
+
+    let private tryResolveSourceOutput
+        (docsDir: string)
+        (currentSourcePath: string)
+        (currentOutputPath: string)
+        (sourceOutputPaths: Map<string, string>)
+        (hrefPath: string)
+        =
+        let bySourcePath =
+            sourcePathCandidates docsDir currentSourcePath hrefPath
+            |> List.tryPick (fun candidate -> sourceOutputPaths |> Map.tryFind (sourcePathKey candidate))
+
+        match bySourcePath with
+        | Some _ -> bySourcePath
+        | None when System.String.IsNullOrEmpty(Path.GetExtension(hrefPath)) ->
+            let outputTarget = normalizeOutputPath currentOutputPath hrefPath
+            let candidates =
+                outputTarget
+                |> Option.map (fun target ->
+                    let trimmed = target.TrimEnd('/')
+                    [ trimmed + ".html"; trimmed + "/index.html" ])
+                |> Option.defaultValue []
+            sourceOutputPaths
+            |> Map.toSeq
+            |> Seq.tryPick (fun (_, outputPath) ->
+                if candidates |> List.exists (fun candidate -> System.String.Equals(candidate, outputPath, System.StringComparison.OrdinalIgnoreCase)) then
+                    Some outputPath
+                else
+                    None)
+        | None -> None
+
+    let private outputFolderAliases (allowedOutputs: Set<string>) =
+        allowedOutputs
+        |> Set.toList
+        |> List.collect (fun outputPath ->
+            if outputPath.Equals("index.html", System.StringComparison.OrdinalIgnoreCase) then
+                [ "", outputPath; "/", outputPath ]
+            elif outputPath.EndsWith("/index.html", System.StringComparison.OrdinalIgnoreCase) then
+                let folderPath = outputPath.Substring(0, outputPath.Length - "index.html".Length)
+                [ folderPath, outputPath; folderPath.TrimEnd('/'), outputPath ]
+            else
+                [])
+        |> List.map (fun (alias, outputPath) -> sourcePathKey alias, outputPath)
+        |> Map.ofList
+
+    let private tryResolveOutputFolderAlias
+        (currentOutputPath: string)
+        (outputFolderAliases: Map<string, string>)
+        (hrefPath: string)
+        =
+        normalizeOutputPath currentOutputPath hrefPath
+        |> Option.map (fun target ->
+            let trimmed = target.TrimEnd('/')
+            [ target; trimmed; trimmed + "/" ])
+        |> Option.defaultValue []
+        |> List.tryPick (fun candidate -> outputFolderAliases |> Map.tryFind (sourcePathKey candidate))
+
     let private withProtectedCodeSegments (text: string) (tokenPrefix: string) (action: string -> string) =
         let protectedSegments = ResizeArray<string>()
         let protectCodeSegments (input: string) =
@@ -270,28 +371,40 @@ module ContentProvider =
             protectedBody)
         |> ignore
 
-    let private rewriteLocalLinks (currentOutputPath: string) (allowedOutputs: Set<string>) (body: string) =
+    let private rewriteLocalLinks
+        (docsDir: string)
+        (currentSourcePath: string)
+        (currentOutputPath: string)
+        (allowedOutputs: Set<string>)
+        (sourceOutputPaths: Map<string, string>)
+        (outputFolderAliases: Map<string, string>)
+        (body: string)
+        =
         let linkPattern = @"(?<!\!)(?<prefix>\[[^\]]+\]\()(?<href>[^\s\)]+)(?<suffix>[^\)]*\))"
         withProtectedCodeSegments body "FSLIVEDOCS_REWRITE_LINKS" (fun protectedBody ->
             Regex.Replace(protectedBody, linkPattern, fun (m: Match) ->
                 let href = m.Groups.["href"].Value.Trim().Trim('"')
                 match normalizeOutputPath currentOutputPath href with
                 | None -> m.Value
-                | Some target ->
-                    let hrefPath = href.Split([| '#'; '?' |], 2).[0]
-                    let hrefSuffix = href.Substring(hrefPath.Length)
-                    let candidates =
-                        [
-                            yield target
-                            if target.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) then
-                                yield Path.ChangeExtension(target, ".html").Replace('\\', '/')
-                            if hrefPath.EndsWith("/", System.StringComparison.Ordinal) || System.String.IsNullOrEmpty(Path.GetExtension(target)) then
-                                let trimmed = target.TrimEnd('/')
-                                yield trimmed + ".html"
-                                yield trimmed + "/index.html"
-                        ]
-                        |> List.distinct
-                    match candidates |> List.tryFind allowedOutputs.Contains with
+                | Some _ ->
+                    let hrefPath, hrefSuffix = splitHrefPath href
+                    let isHtmlLink = hrefPath.EndsWith(".html", System.StringComparison.OrdinalIgnoreCase)
+                    let resolved =
+                        if isHtmlLink then
+                            normalizeOutputPath currentOutputPath href
+                            |> Option.filter allowedOutputs.Contains
+                        else
+                            let sourcePathOutput =
+                                tryResolveSourceOutput docsDir currentSourcePath currentOutputPath sourceOutputPaths hrefPath
+                            let resolvedOutput =
+                                match sourcePathOutput with
+                                | Some _ -> sourcePathOutput
+                                | None when System.String.IsNullOrEmpty(Path.GetExtension(hrefPath)) ->
+                                    tryResolveOutputFolderAlias currentOutputPath outputFolderAliases hrefPath
+                                | None -> None
+                            resolvedOutput
+                            |> Option.filter allowedOutputs.Contains
+                    match resolved with
                     | Some resolved ->
                         let currentDirectory = Path.GetDirectoryName(currentOutputPath)
                         let relative =
@@ -558,6 +671,8 @@ module ContentProvider =
             RootPath: string
             CurrentOutputPath: string
             AllowedOutputs: Set<string>
+            SourceOutputPaths: Map<string, string>
+            OutputFolderAliases: Map<string, string>
             /// Route prefix ("" or e.g. "internal/") prepended to this page's semantic source path so a
             /// documentation set's persisted blocks stay uniquely keyed across the shared site.
             RoutePrefix: string
@@ -576,7 +691,14 @@ module ContentProvider =
                     resolveCrossReferencesWithRoutes expanded context.Package context.RootPath context.ApiRoutes
 
         let rewritten =
-            rewriteLocalLinks context.CurrentOutputPath context.AllowedOutputs resolved
+            rewriteLocalLinks
+                context.DocsDir
+                sourcePath
+                context.CurrentOutputPath
+                context.AllowedOutputs
+                context.SourceOutputPaths
+                context.OutputFolderAliases
+                resolved
 
         validateLinks context.CurrentOutputPath context.AllowedOutputs rewritten
 
@@ -647,13 +769,17 @@ module ContentProvider =
     let loadPage (filePath: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (currentOutputPath: string) (allowedOutputs: Set<string>) =
         let raw =
             Run.orRaise FileSystemError.describe $"Could not read Markdown page {filePath}" (FileSystem.readAllText filePath)
+        let docsDir = Path.GetDirectoryName(Path.GetFullPath filePath)
+        let sourceOutputPaths = markdownFilesIn docsDir |> sourceOutputPathsForFiles docsDir ""
         loadMarkdownPage
-            { DocsDir = Path.GetDirectoryName(Path.GetFullPath(filePath))
+            { DocsDir = docsDir
               SourceDir = sourceDir
               Package = package
               RootPath = rootPath
               CurrentOutputPath = currentOutputPath
               AllowedOutputs = allowedOutputs
+              SourceOutputPaths = sourceOutputPaths
+              OutputFolderAliases = outputFolderAliases allowedOutputs
               RoutePrefix = ""
               ApiRoutes = Map.empty
               SemanticCode = SemanticCode.defaults }
@@ -706,10 +832,20 @@ module ContentProvider =
             Run.orRaise FileSystemError.describe $"Could not read Markdown pages under {docsDir}" work
             |> Map.ofList
 
+        let outputPathsByFile =
+            files |> List.map (fun filePath -> filePath, routePrefix + outputPathForFile docsDir filePath) |> Map.ofList
+
+        let sourceOutputPaths =
+            outputPathsByFile
+            |> Map.toList
+            |> List.map (fun (filePath, outputPath) -> sourceRelativePath docsDir filePath |> sourcePathKey, outputPath)
+            |> Map.ofList
+        let outputFolderAliases = outputFolderAliases allowedOutputs
+
         files
         |> List.toArray
         |> Array.map (fun f ->
-            let outputPath = routePrefix + outputPathForFile docsDir f
+            let outputPath = outputPathsByFile.[f]
             let depth = outputPath.Split('/').Length - 1
             let pageRootPath = siteRootPath + String.replicate depth "../"
 
@@ -721,6 +857,8 @@ module ContentProvider =
                       RootPath = pageRootPath
                       CurrentOutputPath = outputPath
                       AllowedOutputs = allowedOutputs
+                      SourceOutputPaths = sourceOutputPaths
+                      OutputFolderAliases = outputFolderAliases
                       RoutePrefix = semanticPrefix
                       ApiRoutes = apiRoutes
                       SemanticCode = semanticCode }
@@ -813,6 +951,18 @@ module ContentProvider =
         match Run.orRaise FileSystemError.describe $"Could not read API documentation under {apiDocsDir}" apiDocsWork with
         | None -> package
         | Some docFiles ->
+            let docsRoot = Path.GetDirectoryName(Path.GetFullPath apiDocsDir)
+            let guideSourceOutputPaths =
+                markdownFilesIn docsRoot |> sourceOutputPathsForFiles docsRoot routePrefix
+            let apiSourceOutputPaths =
+                docFiles
+                |> List.map (fun (filePath, _) ->
+                    let id = Path.GetFileNameWithoutExtension filePath
+                    sourceRelativePath docsRoot filePath |> sourcePathKey, routePrefix + $"api/{id}.html")
+                |> Map.ofList
+            let sourceOutputPaths =
+                Map.fold (fun paths key value -> Map.add key value paths) guideSourceOutputPaths apiSourceOutputPaths
+
             let yamlScalar (node: YamlNode) : string =
                 match node with
                 | :? YamlScalarNode as scalar -> scalar.Value
@@ -915,7 +1065,8 @@ module ContentProvider =
                             else
                                 resolveCrossReferencesWithRoutes value package rootPath apiRoutes
 
-                    let rewritten = rewriteLocalLinks apiOutputPath allowedOutputs expanded
+                    let rewritten =
+                        rewriteLocalLinks docsRoot f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) expanded
                     validateLinks apiOutputPath allowedOutputs rewritten
                     id, [ Documentation.markdown rewritten ])
                 |> Map.ofList

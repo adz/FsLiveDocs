@@ -985,6 +985,62 @@ module ContentProviderTests =
         Assert.Equal("the-flow-type/creating-flows.html", path)
 
     [<Fact>]
+    let ``scanDocs resolves local Markdown links through source paths regardless of output casing`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(Path.Combine(docsDir, "workflows")) |> ignore
+        Directory.CreateDirectory(Path.Combine(docsDir, "MixedCase")) |> ignore
+        File.WriteAllText(
+            Path.Combine(docsDir, "index.md"),
+            "[readme](workflows/README.md) [guide](workflows/Guide.md) [mixed](MixedCase/Page.md)")
+        File.WriteAllText(Path.Combine(docsDir, "workflows", "README.md"), "Readme")
+        File.WriteAllText(Path.Combine(docsDir, "workflows", "Guide.md"), "Guide")
+        File.WriteAllText(Path.Combine(docsDir, "MixedCase", "Page.md"), "Page")
+
+        let home = ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> List.find (fun page -> page.OutputPath = "index.html")
+
+        Assert.Contains("href=\"workflows/readme.html\"", home.ContentHtml)
+        Assert.Contains("href=\"workflows/guide.html\"", home.ContentHtml)
+        Assert.Contains("href=\"mixedcase/page.html\"", home.ContentHtml)
+
+    [<Fact>]
+    let ``scanDocs resolves links using the real number-prefixed Markdown source path`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(Path.Combine(docsDir, "adr")) |> ignore
+        File.WriteAllText(Path.Combine(docsDir, "index.md"), "[record](adr/0004-trigger-is-the-start-step.md)")
+        File.WriteAllText(Path.Combine(docsDir, "adr", "0004-trigger-is-the-start-step.md"), "Record")
+
+        let home = ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> List.find (fun page -> page.OutputPath = "index.html")
+
+        Assert.Contains("href=\"adr/trigger-is-the-start-step.html\"", home.ContentHtml)
+
+    [<Fact>]
+    let ``scanDocs rejects a link that only matches the stripped number-prefixed output name`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(Path.Combine(docsDir, "adr")) |> ignore
+        File.WriteAllText(Path.Combine(docsDir, "index.md"), "[record](adr/trigger-is-the-start-step.md)")
+        File.WriteAllText(Path.Combine(docsDir, "adr", "0004-trigger-is-the-start-step.md"), "Record")
+
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> ignore)
+
+        Assert.Contains("adr/trigger-is-the-start-step.md", error.Message)
+
+    [<Fact>]
+    let ``scanDocs names both source files when number stripping collides`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let adrDir = Path.Combine(docsDir, "adr")
+        Directory.CreateDirectory(adrDir) |> ignore
+        let numbered = Path.Combine(adrDir, "0001-a.md")
+        let plain = Path.Combine(adrDir, "a.md")
+        File.WriteAllText(numbered, "Numbered")
+        File.WriteAllText(plain, "Plain")
+
+        let error = Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> ignore)
+
+        Assert.Contains("Documentation output path collision", error.Message)
+        Assert.Contains(numbered, error.Message)
+        Assert.Contains(plain, error.Message)
+
+    [<Fact>]
     let ``scanDocs rejects output path collisions`` () =
         let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(Path.Combine(docsDir, "01-guides")) |> ignore

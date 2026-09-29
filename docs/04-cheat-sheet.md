@@ -12,6 +12,8 @@ Every command assumes it runs at the repository root with `.livedocs/` present
 documented projects **already compiled** in this SDK; run `dotnet build` first. The
 per-command **Assumes** column lists what each one needs beyond that.
 
+Links between documentation pages use their source Markdown paths, including the real filename capitalization and any leading number. Generated page URLs lowercase names and drop ordering numbers.
+
 ## Repository setup
 
 | Command | Result | Assumes |
