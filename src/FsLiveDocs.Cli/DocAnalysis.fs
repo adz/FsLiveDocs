@@ -53,6 +53,58 @@ module internal DocAnalysis =
           Artifact: SemanticDocumentationArtifact option
           CachePath: string }
 
+    type private ApiNameCandidate = { FullName: string; OpenPath: string option }
+
+    let private fSharpFullName (entity: EntityModel) =
+        let withoutArity = System.Text.RegularExpressions.Regex.Replace(entity.Id, @"`\d+$", "")
+        if entity.Kind = EntityKind.Module && withoutArity.EndsWith("Module", StringComparison.Ordinal) then
+            withoutArity.Substring(0, withoutArity.Length - "Module".Length)
+        else
+            withoutArity
+
+    let private apiNameCandidates (package: PackageModel) name =
+        let rec collect parentOpenPath (entities: EntityModel list) =
+            [ for entity in entities do
+                  let openPath =
+                      match entity.Kind with
+                      | EntityKind.Namespace
+                      | EntityKind.Module -> Some(fSharpFullName entity)
+                      | _ -> parentOpenPath
+
+                  let fullName =
+                      match entity.Kind, parentOpenPath with
+                      | (EntityKind.Namespace | EntityKind.Module), _ -> fSharpFullName entity
+                      | _, Some parent -> $"{parent}.{entity.Name}"
+                      | _, None -> fSharpFullName entity
+
+                  if entity.Name.Equals(name, StringComparison.Ordinal) then
+                      yield { FullName = fullName; OpenPath = openPath }
+
+                  yield! collect openPath entity.Entities ]
+
+        collect None package.Entities
+        |> List.distinctBy (fun candidate -> candidate.FullName, candidate.OpenPath)
+        |> List.sortBy _.FullName
+
+    let internal addApiNameHint (package: PackageModel) (errorNumber: int) (message: string) =
+        if errorNumber <> 39 then
+            message
+        else
+            let missingName = System.Text.RegularExpressions.Regex.Match(message, "'(?<name>[^']+)' is not defined\\.")
+            if not missingName.Success then
+                message
+            else
+                let name = missingName.Groups["name"].Value
+                match apiNameCandidates package name with
+                | [ candidate ] ->
+                    match candidate.OpenPath with
+                    | Some openPath -> $"{message} Did you mean to open {openPath}?"
+                    | None -> $"{message} The documented symbol is {candidate.FullName}; qualify it explicitly."
+                | _ :: _ :: _ as candidates ->
+                    let names = candidates |> List.map _.FullName |> String.concat ", "
+                    $"{message} Matching public API symbols: {names}. Open or fully qualify the intended symbol to resolve the ambiguity."
+                | _ -> message
+
     /// <summary>
     /// Walks the documentation directory once, resolving every page against the projects passed to
     /// livedocs.
@@ -396,7 +448,11 @@ module internal DocAnalysis =
                                       checkedUnits
                                       |> List.collect _.Diagnostics
                                       |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error)
-                                      |> List.choose (fun item -> item.BlockId |> Option.map (fun id -> id, (item.StartLine, item.StartColumn, item.Message)))
+                                      |> List.choose (fun item ->
+                                          item.BlockId
+                                          |> Option.map (fun id ->
+                                              id,
+                                              (item.StartLine, item.StartColumn, addApiNameHint package item.ErrorNumber item.Message)))
                                   let semantic =
                                       if errors.IsEmpty then
                                           let artifact = SemanticExtractor.artifact checkedUnits

@@ -22,6 +22,7 @@ type MappedCompilerDiagnostic = {
     BlockId: string option
     SourcePath: string
     Severity: SemanticDiagnosticSeverity
+    ErrorNumber: int
     Message: string
     StartLine: int
     StartColumn: int
@@ -140,6 +141,7 @@ module DocumentationCompiler =
             BlockId = owning |> Option.map _.Block.Id
             SourcePath = sourcePath
             Severity = if diagnostic.Severity = FSharpDiagnosticSeverity.Error then Error else Warning
+            ErrorNumber = diagnostic.ErrorNumber
             Message = diagnostic.Message
             StartLine = owning |> Option.map (relativeLine diagnostic.StartLine) |> Option.defaultValue diagnostic.StartLine
             StartColumn = diagnostic.StartColumn

@@ -340,6 +340,12 @@ module DocumentationSourceTests =
             Assert.True(position > previousPosition, $"Missing or out-of-order setup step: {step}")
             previousPosition <- position
 
+    [<Fact>]
+    let ``verified examples guide explains open and type scope across page blocks`` () =
+        let root = repositoryRoot AppContext.BaseDirectory
+        let guide = File.ReadAllText(Path.Combine(root, "docs", "02-guides", "01-verified-examples.md"))
+        Assert.Contains("Earlier `open` statements and type declarations are in scope in later blocks on that page.", guide)
+
 module AnnotationContractTests =
 
     [<Fact>]

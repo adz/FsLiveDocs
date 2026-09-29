@@ -9,6 +9,7 @@ Choose the least powerful mode that proves the point. Most examples only need to
 ## Compile a page as one story
 
 Ordinary `fsharp` blocks share a page compilation unit. Later blocks can use earlier declarations, but none of them run.
+Earlier `open` statements and type declarations are in scope in later blocks on that page.
 
 ````markdown
 ```fsharp

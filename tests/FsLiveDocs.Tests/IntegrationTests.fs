@@ -12,6 +12,53 @@ module IntegrationTests =
     let private coreProject = ProjectResolver.resolveProjectPath "FsLiveDocs.Core.fsproj"
 
     [<Fact>]
+    let ``undefined public type diagnostics suggest unique opens and require an explicit ambiguous choice`` () = async {
+        let blocks =
+            DocumentationDiscovery.discoverMarkdown
+                "guide.md"
+                (Some coreProject)
+                "```fsharp\nlet value: PromptText = Unchecked.defaultof<_>\n```"
+        let! checkedUnits = DocumentationCompiler.checkBlocks coreProject "" blocks
+        let diagnostic =
+            checkedUnits
+            |> List.collect _.Diagnostics
+            |> List.find (fun item -> item.ErrorNumber = 39 && item.Message.Contains("PromptText"))
+
+        let apiEntity id name kind entities : EntityModel =
+            { Id = id; Name = name; Kind = kind; Summary = []; Members = []; Examples = []; Entities = entities }
+        let apiPackage entities : PackageModel =
+            { Version = "1.0"; Entities = entities; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty }
+        let promptText id = apiEntity id "PromptText" EntityKind.Record []
+        let unique =
+            let workflowVariables =
+                apiEntity
+                    "WorkflowTemplateModel.Variables.WorkflowVariablesModule"
+                    "WorkflowVariables"
+                    EntityKind.Module
+                    [ promptText "WorkflowTemplateModel.Variables.WorkflowVariablesModule.PromptText" ]
+            let variables =
+                apiEntity "WorkflowTemplateModel.Variables" "Variables" EntityKind.Namespace [ workflowVariables ]
+            apiPackage [ apiEntity "WorkflowTemplateModel" "WorkflowTemplateModel" EntityKind.Namespace [ variables ] ]
+
+        let uniqueHint = DocAnalysis.addApiNameHint unique diagnostic.ErrorNumber diagnostic.Message
+        Assert.Contains("Did you mean to open WorkflowTemplateModel.Variables.WorkflowVariables?", uniqueHint)
+
+        let ambiguous =
+            apiPackage
+                [ apiEntity "First" "First" EntityKind.Namespace
+                    [ apiEntity "First.WorkflowVariables" "WorkflowVariables" EntityKind.Module
+                        [ promptText "First.WorkflowVariables.PromptText" ] ]
+                  apiEntity "Second" "Second" EntityKind.Namespace
+                    [ apiEntity "Second.WorkflowVariables" "WorkflowVariables" EntityKind.Module
+                        [ promptText "Second.WorkflowVariables.PromptText" ] ] ]
+        let ambiguousHint = DocAnalysis.addApiNameHint ambiguous diagnostic.ErrorNumber diagnostic.Message
+        Assert.Contains("First.WorkflowVariables.PromptText", ambiguousHint)
+        Assert.Contains("Second.WorkflowVariables.PromptText", ambiguousHint)
+        Assert.Contains("Open or fully qualify the intended symbol", ambiguousHint)
+        Assert.DoesNotContain("Did you mean to open", ambiguousHint)
+    }
+
+    [<Fact>]
     let ``documentation compiler uses project references and page scope without executing`` () = async {
         let blocks =
             DocumentationDiscovery.discoverMarkdown
