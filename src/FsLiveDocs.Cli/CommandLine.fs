@@ -201,12 +201,12 @@ module internal PreviewWatcher =
 
             idle ())
 
-    let private createWatcher (root: string) (path: string) (recurse: bool) (ignored: Set<string>) (notify: string -> unit) =
+    let private createWatcher (root: string) (path: string) (recurse: bool) (isRelevantPath: string -> bool) (notify: string -> unit) =
         let watcher = new FileSystemWatcher(path)
         watcher.IncludeSubdirectories <- recurse
         watcher.NotifyFilter <- NotifyFilters.FileName ||| NotifyFilters.DirectoryName ||| NotifyFilters.LastWrite
         let handle (fullPath: string) =
-            if isRelevant ignored root fullPath then
+            if isRelevantPath fullPath then
                 notify (Path.GetRelativePath(root, fullPath))
         watcher.Changed.Add(fun e -> handle e.FullPath)
         watcher.Created.Add(fun e -> handle e.FullPath)
@@ -228,11 +228,11 @@ module internal PreviewWatcher =
         watcher
 
     /// <summary>
-    /// Starts one watcher per top-level source directory. Ignored directories are never watched, so they cost no
-    /// operating-system watch handles. The returned watchers must stay referenced for as long as the preview runs;
-    /// a collected watcher stops raising events.
+    /// Starts recursive watchers for relevant source directories and non-recursive watchers for configured output
+    /// files. Ignored output directories are watched only at those exact files. The returned watchers must stay
+    /// referenced for as long as the preview runs; a collected watcher stops raising events.
     /// </summary>
-    let start (root: string) (extraIgnored: Set<string>) (rebuild: unit -> unit) =
+    let start (root: string) (extraIgnored: Set<string>) (projectOutputPaths: string list) (rebuild: unit -> unit) =
         let ignored = Set.union defaultIgnoredDirectories extraIgnored
         let pump = startRebuildPump 400 rebuild
         let watched =
@@ -241,8 +241,21 @@ module internal PreviewWatcher =
             |> Array.filter (fun name -> not (ignored.Contains name))
             |> Array.sort
         let watchers =
-            [ yield createWatcher root root false ignored pump.Post
-              for name in watched -> createWatcher root (Path.Combine(root, name)) true ignored pump.Post ]
+            [ yield createWatcher root root false (isRelevant ignored root) pump.Post
+              for name in watched -> createWatcher root (Path.Combine(root, name)) true (isRelevant ignored root) pump.Post
+              let comparer = if OperatingSystem.IsWindows() then StringComparer.OrdinalIgnoreCase else StringComparer.Ordinal
+              for directory, paths in
+                  projectOutputPaths
+                  |> List.filter (String.IsNullOrWhiteSpace >> not)
+                  |> List.map Path.GetFullPath
+                  |> List.groupBy Path.GetDirectoryName do
+                  if Directory.Exists directory then
+                      let outputFiles = Collections.Generic.HashSet<string>(comparer)
+                      for path in paths do outputFiles.Add path |> ignore
+                      yield
+                          createWatcher root directory false
+                              (fun path -> outputFiles.Contains(Path.GetFullPath path))
+                              pump.Post ]
         let watchedNames = String.Join(", ", watched)
         let ignoredNames = String.Join(", ", Set.toList ignored)
         if ConsoleOutput.isDebug () then

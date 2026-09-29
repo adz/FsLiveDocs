@@ -23,41 +23,51 @@ module internal BuildState =
 
     let private statePath root = Path.Combine(root, ".livedocs", "cache", "build-state.json")
 
-    let private ignoredDirectoryNames =
-        set [ ".git"; "bin"; "obj"; "output"; "artifacts" ]
-
-    let private ignoredPath (root: string) (path: string) =
-        let relative = Path.GetRelativePath(root, path)
-        let segments = relative.Split([| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |], StringSplitOptions.RemoveEmptyEntries)
-        ignoredDirectoryNames.Contains segments.[0]
-        || (segments.Length >= 2
-            && segments.[0] = ".livedocs"
-            && (segments.[1] = "cache" || segments.[1] = "releases"))
-
-    let private inputFiles root =
-        let rec walk directory = seq {
-            for childDirectory in Directory.EnumerateDirectories directory do
-                if not (ignoredPath root childDirectory) then
-                    yield! walk childDirectory
-            for file in Directory.EnumerateFiles directory do
-                if not (ignoredPath root file) then yield file
+    let private filesUnder (directory: string) =
+        let rec walk path = seq {
+            for childDirectory in Directory.EnumerateDirectories path do
+                yield! walk childDirectory
+            yield! Directory.EnumerateFiles path
         }
-        walk root
+        if Directory.Exists directory then walk directory else Seq.empty
 
-    let capture root invocation =
+    let private fullPath (root: string) (path: string) =
+        if Path.IsPathRooted path then Path.GetFullPath path else Path.GetFullPath(Path.Combine(root, path))
+
+    let private inputFiles root documentationRoots =
+        seq {
+            for documentationRoot in documentationRoots do
+                yield! filesUnder (fullPath root documentationRoot)
+            yield! filesUnder (Path.Combine(root, ".livedocs", "history"))
+            yield Path.Combine(root, ".livedocs", "config.json")
+            yield Path.Combine(root, ".livedocs", "history.json")
+        }
+
+    let private fileStamp fullRoot path =
+        let fullPath = Path.GetFullPath path
+        let relativePath = Path.GetRelativePath(fullRoot, fullPath).Replace('\\', '/')
+        if File.Exists fullPath then
+            let info = FileInfo fullPath
+            use stream = File.OpenRead fullPath
+            { Path = relativePath
+              Length = info.Length
+              LastWriteUtcTicks = info.LastWriteTimeUtc.Ticks
+              Sha256 = SHA256.HashData(stream) |> Convert.ToHexString |> _.ToLowerInvariant() }
+        else
+            { Path = relativePath
+              Length = -1L
+              LastWriteUtcTicks = -1L
+              Sha256 = "" }
+
+    let capture root invocation documentationRoots =
         let fullRoot = Path.GetFullPath root
         let files =
-            inputFiles fullRoot
-            |> Seq.map (fun path ->
-                let info = FileInfo path
-                use stream = File.OpenRead path
-                { Path = Path.GetRelativePath(fullRoot, path).Replace('\\', '/')
-                  Length = info.Length
-                  LastWriteUtcTicks = info.LastWriteTimeUtc.Ticks
-                  Sha256 = SHA256.HashData(stream) |> Convert.ToHexString |> _.ToLowerInvariant() })
+            inputFiles fullRoot documentationRoots
+            |> Seq.distinctBy Path.GetFullPath
+            |> Seq.map (fileStamp fullRoot)
             |> Seq.sortBy _.Path
             |> Seq.toArray
-        { FormatVersion = 2; Invocation = invocation; Files = files }
+        { FormatVersion = 3; Invocation = invocation; Files = files }
 
     let private encode (value: string) = Convert.ToBase64String(Encoding.UTF8.GetBytes value)
     let private decode (value: string) = Encoding.UTF8.GetString(Convert.FromBase64String value)
@@ -92,7 +102,7 @@ module internal BuildState =
           Invocation = decode lines.[1]
           Files = files }
 
-    let isCurrent root invocation =
+    let isCurrent root invocation documentationRoots =
         let fullRoot = Path.GetFullPath root
         let path = statePath fullRoot
         let output = Path.Combine(fullRoot, "output")
@@ -101,8 +111,8 @@ module internal BuildState =
         else
             try
                 let saved = load path
-                let current = capture fullRoot invocation
-                saved.FormatVersion = 2
+                let current = capture fullRoot invocation documentationRoots
+                saved.FormatVersion = 3
                 && saved.Invocation = invocation
                 && Array.length saved.Files = Array.length current.Files
                 && Array.forall2 (=) saved.Files current.Files

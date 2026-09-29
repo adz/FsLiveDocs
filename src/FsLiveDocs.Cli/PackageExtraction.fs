@@ -158,6 +158,33 @@ module internal PackageExtraction =
         |> String.concat "\n--fslivedocs-documentation-input--\n"
         |> sha256Text
 
+    /// <summary>Assembly and adjacent XML documentation paths used by the configured projects.</summary>
+    let projectOutputPaths (projectPaths: string list) =
+        projectPaths
+        |> List.collect (fun projectPath ->
+            let assemblyPath = (ProjectResolver.resolve projectPath).AssemblyPath
+            if String.IsNullOrWhiteSpace assemblyPath then []
+            else
+                let assemblyPath = Path.GetFullPath assemblyPath
+                [ assemblyPath; Path.ChangeExtension(assemblyPath, ".xml") ])
+        |> List.distinct
+
+    /// <summary>Content fingerprint for the resolved project assemblies and their XML documentation.</summary>
+    let outputFilesFingerprint (outputPaths: string list) =
+        outputPaths
+        |> List.map Path.GetFullPath
+        |> List.distinct
+        |> List.sort
+        |> List.map (fun path ->
+            if File.Exists path then
+                use stream = File.OpenRead path
+                let hash = Security.Cryptography.SHA256.HashData(stream) |> Convert.ToHexString |> _.ToLowerInvariant()
+                $"{path}\n{FileInfo(path).Length}\n{hash}"
+            else
+                $"{path}\nmissing")
+        |> String.concat "\n--project-output--\n"
+        |> sha256Text
+
     let inputFingerprint (projectPaths: string list) =
         let ignoredSegments = set [ ".git"; ".livedocs"; "artifacts"; "bin"; "obj"; "output" ]
 
@@ -204,10 +231,14 @@ module internal PackageExtraction =
                         |> Flow.map (fun text -> Path.GetRelativePath(root, path).Replace('\\', '/'), text))
             }
 
-        Run.orRaise FileSystemError.describe "Could not compute input fingerprint" gatherWork
-        |> List.collect (fun (relative, text) -> [ relative; text ])
-        |> String.concat "\n--fslivedocs-project-input--\n"
-        |> sha256Text
+        let sourceFingerprint =
+            Run.orRaise FileSystemError.describe "Could not compute input fingerprint" gatherWork
+            |> List.collect (fun (relative, text) -> [ relative; text ])
+            |> String.concat "\n--fslivedocs-project-input--\n"
+            |> sha256Text
+
+        let outputFingerprint = projectOutputPaths projectPaths |> outputFilesFingerprint
+        sha256Text $"{sourceFingerprint}\n--fslivedocs-project-outputs--\n{outputFingerprint}"
 
     let private writeCurrentCache (path: string) (pattern: string) (value: string) =
         let directory = Path.GetDirectoryName(path)

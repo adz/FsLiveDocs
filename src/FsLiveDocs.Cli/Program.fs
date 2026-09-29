@@ -334,6 +334,7 @@ module Program =
                             PreviewWatcher.start
                                 currentDirectory
                                 (PreviewWatcher.parseIgnored (results.GetResults Ignore))
+                                (PackageExtraction.projectOutputPaths projectPaths)
                                 buildPreview
                         AnsiConsole.MarkupLine("")
 

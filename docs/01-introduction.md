@@ -74,6 +74,7 @@ dotnet build
 ```
 
 If the project does not emit XML documentation, set `GenerateDocumentationFile` to `true` in the project or shared build props.
+After code changes, build the projects again before running FsLiveDocs so it reads the current assemblies and XML docs.
 
 ## Start the preview
 
@@ -81,7 +82,7 @@ If the project does not emit XML documentation, set `GenerateDocumentationFile` 
 dotnet livedocs watch --host 127.0.0.1 --port 5000
 ```
 
-Open `http://127.0.0.1:5000`. The watcher rebuilds after changes to docs, F# source, project files, or configuration.
+Open `http://127.0.0.1:5000`. The watcher rebuilds after changes to docs, F# source, project files, configuration, or the configured projects' assemblies and XML docs.
 
 Use a one-off build when you do not need the server:
 

@@ -20,6 +20,27 @@ module ConsoleOutputTests =
     let ``redirected output disables interactive rendering`` requested outputRedirected expected =
         Assert.Equal(expected, ConsoleOutput.shouldUseInteractive requested outputRedirected)
 
+module PreviewWatcherTests =
+
+    [<Theory>]
+    [<InlineData(".dll")>]
+    [<InlineData(".xml")>]
+    let ``watcher rebuilds when a configured project output changes`` extension =
+        let root = Path.Combine(Path.GetTempPath(), "fslivedocs-watcher-" + Guid.NewGuid().ToString("N"))
+        let outputDirectory = Path.Combine(root, "artifacts", "bin", "Example", "debug", "net10.0")
+        Directory.CreateDirectory(outputDirectory) |> ignore
+        let outputFile = Path.Combine(outputDirectory, "Example" + extension)
+        File.WriteAllText(outputFile, "output v1")
+        let rebuilt = Threading.Tasks.TaskCompletionSource<unit>(Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+        let watchers = PreviewWatcher.start root Set.empty [ outputFile ] (fun () -> rebuilt.TrySetResult(()) |> ignore)
+
+        try
+            File.WriteAllText(outputFile, "output v2")
+            Assert.True(rebuilt.Task.Wait(TimeSpan.FromSeconds 10.0), "The project output change did not trigger a preview rebuild.")
+        finally
+            for watcher in watchers do watcher.Dispose()
+            Directory.Delete(root, true)
+
 /// Codecs shared by fixtures across this file that write or read the JSON a persisted release
 /// artifact is schema-pinned to. Every test builds these bytes by hand rather than going through
 /// `ReleaseCapsule`/`History`'s own write paths, so it needs the same codec those paths use.
@@ -69,10 +90,10 @@ module BuildStateTests =
             Directory.CreateDirectory(Path.Combine(root, "output")) |> ignore
             File.WriteAllText(Path.Combine(root, "output", "index.html"), "built")
 
-            let state = BuildState.capture root "build|light"
+            let state = BuildState.capture root "build|light" [ "docs" ]
             BuildState.save root state
 
-            Assert.True(BuildState.isCurrent root "build|light"))
+            Assert.True(BuildState.isCurrent root "build|light" [ "docs" ]))
 
     [<Fact>]
     let ``source change invalidates saved build state but cache writes do not`` () =
@@ -82,14 +103,18 @@ module BuildStateTests =
             File.WriteAllText(page, "# Home")
             Directory.CreateDirectory(Path.Combine(root, "output")) |> ignore
             File.WriteAllText(Path.Combine(root, "output", "index.html"), "built")
-            BuildState.capture root "build|light" |> BuildState.save root
+            BuildState.capture root "build|light" [ "docs" ] |> BuildState.save root
 
             Directory.CreateDirectory(Path.Combine(root, ".livedocs", "cache")) |> ignore
             File.WriteAllText(Path.Combine(root, ".livedocs", "cache", "new.json"), "cache")
-            Assert.True(BuildState.isCurrent root "build|light")
+            Assert.True(BuildState.isCurrent root "build|light" [ "docs" ])
+
+            Directory.CreateDirectory(Path.Combine(root, "src")) |> ignore
+            File.WriteAllText(Path.Combine(root, "src", "unrelated.cs"), "class Unrelated {}")
+            Assert.True(BuildState.isCurrent root "build|light" [ "docs" ])
 
             File.AppendAllText(page, " changed")
-            Assert.False(BuildState.isCurrent root "build|light"))
+            Assert.False(BuildState.isCurrent root "build|light" [ "docs" ]))
 
     [<Fact>]
     let ``content hashes detect edits hidden behind unchanged metadata`` () =
@@ -99,13 +124,35 @@ module BuildStateTests =
             File.WriteAllText(page, "AAAA")
             Directory.CreateDirectory(Path.Combine(root, "output")) |> ignore
             File.WriteAllText(Path.Combine(root, "output", "index.html"), "built")
-            BuildState.capture root "build|light" |> BuildState.save root
+            BuildState.capture root "build|light" [ "docs" ] |> BuildState.save root
             let timestamp = File.GetLastWriteTimeUtc page
 
             File.WriteAllText(page, "BBBB")
             File.SetLastWriteTimeUtc(page, timestamp)
 
-            Assert.False(BuildState.isCurrent root "build|light"))
+            Assert.False(BuildState.isCurrent root "build|light" [ "docs" ]))
+
+    [<Fact>]
+    let ``changes to configured project assemblies and XML docs invalidate build state`` () =
+        withTempDirectory (fun root ->
+            Directory.CreateDirectory(Path.Combine(root, "output")) |> ignore
+            File.WriteAllText(Path.Combine(root, "output", "index.html"), "built")
+            let outputDirectory = Path.Combine(root, "artifacts", "bin", "Example", "debug", "net10.0")
+            Directory.CreateDirectory(outputDirectory) |> ignore
+            let assembly = Path.Combine(outputDirectory, "Example.dll")
+            let xml = Path.Combine(outputDirectory, "Example.xml")
+            File.WriteAllText(assembly, "assembly v1")
+            File.WriteAllText(xml, "xml v1")
+            let invocation () = "build|light|outputs:" + PackageExtraction.outputFilesFingerprint [ assembly; xml ]
+            let save () = BuildState.capture root (invocation ()) [ "docs" ] |> BuildState.save root
+
+            save ()
+            File.WriteAllText(assembly, "assembly v2")
+            Assert.False(BuildState.isCurrent root (invocation ()) [ "docs" ])
+
+            save ()
+            File.WriteAllText(xml, "xml v2")
+            Assert.False(BuildState.isCurrent root (invocation ()) [ "docs" ]))
 
 module DocumentationSourceTests =
 

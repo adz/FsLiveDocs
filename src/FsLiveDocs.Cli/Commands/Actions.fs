@@ -428,16 +428,22 @@ module Actions =
     let buildAction (warnAsError: bool) (includeDrafts: bool) (projectPaths: string list) (theme: string) (version: string option) =
         let root = Directory.GetCurrentDirectory()
         let requestedVersion = version |> Option.defaultValue "<project>"
+        let projectFingerprint = PackageExtraction.inputFingerprint projectPaths
+        let documentationRoots =
+            configuredDocsSets projectPaths
+            |> Option.map (List.map _.Source)
+            |> Option.defaultValue [ "docs" ]
         let invocation =
             [ yield $"tool:{Reflection.Assembly.GetExecutingAssembly().ManifestModule.ModuleVersionId}"
               yield $"warn-as-error:{warnAsError}"
               yield $"drafts:{includeDrafts}"
               yield $"theme:{theme}"
               yield $"version:{requestedVersion}"
+              yield $"project-input:{projectFingerprint}"
               for project in projectPaths do yield "project:" + Path.GetFullPath project ]
             |> String.concat "|"
 
-        if BuildState.isCurrent root invocation then
+        if BuildState.isCurrent root invocation documentationRoots then
             AnsiConsole.MarkupLine("[green]✔ Build current:[/] no inputs changed; reused output/ and search index.")
         else
             let mutable deferredApiDiagnostics: ApiDiagnostic list = []
@@ -629,7 +635,7 @@ module Actions =
                 pipeline reportStage reportProgress reportNote
             printApiDiagnostics false deferredApiDiagnostics |> ignore
             AnsiConsole.MarkupLine("[green]✔ Build complete:[/] output/")
-            BuildState.capture root invocation |> BuildState.save root
+            BuildState.capture root invocation documentationRoots |> BuildState.save root
 
     /// Renders every version in a manifest into <paramref name="outputDir"/>. Shared by
     /// `build-history` (which then indexes the site) and `history check` (which verifies it).
