@@ -31,6 +31,7 @@ module internal ReleaseCapture =
             ReportProgress: string -> int -> int -> unit
             ReportAudit: DocAnalysis.Analysis -> unit
             ReportApiDiagnostics: bool -> ApiDiagnostic list -> unit
+            ReportLinkWarnings: bool -> string list -> unit
         }
 
     type Result =
@@ -133,7 +134,10 @@ module internal ReleaseCapture =
             |> List.distinct
         verifyExplicitCases request.ProjectPaths package pages references
 
-        let prepared = DocumentationSets.prepareCurrent request.DocsSets.IsSome resolvedSets package semantic ""
+        let prepared =
+            DocumentationSets.prepareCurrentWithSourceLinks
+                request.Site request.DocsSets.IsSome resolvedSets package semantic ""
+        request.ReportLinkWarnings request.WarnAsError prepared.Warnings
 
         let api: ApiModelArtifact =
             { SchemaVersion = History.ApiModelSchemaVersion

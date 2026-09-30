@@ -331,7 +331,7 @@ module DocumentationSourceTests =
               "Build the projects before running `dotnet livedocs`, and again after code changes."
               "`docs/index.md` is the home page."
               "`init` sets `siteName` from the solution name or repo folder; change it in `.livedocs/config.json`."
-              "Link documentation pages by their real Markdown file names. Links outside the docs root need a source URL setting, or should be plain paths."
+              "Link documentation pages by their real Markdown file names. Links to repository files and folders outside `docs/` use `sourceUrlPattern` and `sourceBranch`, or the legacy GitHub `repoUrl`; without a source URL, the build warns. Use backticks for a plain path."
               "A leading number in a Markdown file name is dropped from its page URL." ]
 
         let mutable previousPosition = -1
@@ -503,6 +503,8 @@ module ReleaseCapsuleTests =
     let private site : SiteConfig =
         {
             RepoUrl = None
+            SourceUrlPattern = None
+            SourceBranch = None
             SiteName = Some "Sample"
             LogoText = None
             LogoPath = None
@@ -1277,15 +1279,76 @@ module ContentProviderTests =
         Assert.Contains("folder links are not pages", error.Message)
 
     [<Fact>]
-    let ``scanDocs explains when a broken page link leaves the docs root`` () =
-        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "docs")
+    let ``scanDocs explains when a repo file link leaves the docs root`` () =
+        let repoRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let docsDir = Path.Combine(repoRoot, "docs")
         Directory.CreateDirectory(docsDir) |> ignore
+        File.WriteAllText(Path.Combine(repoRoot, "AGENTS.md"), "agent notes")
         File.WriteAllText(Path.Combine(docsDir, "index.md"), "[agents](../AGENTS.md)")
+        let diagnostics = ContentProvider.createLinkDiagnostics ()
 
-        let error = Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.scanDocs docsDir docsDir emptyPackage "" |> ignore)
+        ContentProvider.scanDocsWithOptionsAndLinkDiagnostics
+            docsDir repoRoot "docs" emptyPackage "" SemanticCode.defaults SiteConfig.empty diagnostics
+        |> ignore
 
-        Assert.Contains("outside the docs root", error.Message)
-        Assert.Contains("plain path in backticks or a full URL", error.Message)
+        let warning = Assert.Single diagnostics.Warnings
+        Assert.Contains("resolves to repository path `AGENTS.md` outside the docs root", warning)
+        Assert.Contains("sourceUrlPattern", warning)
+        Assert.Empty diagnostics.Errors
+
+    [<Fact>]
+    let ``scanDocs rewrites links to repository files and folders with the configured source URL`` () =
+        let repoRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let docsDir = Path.Combine(repoRoot, "docs")
+        Directory.CreateDirectory(docsDir) |> ignore
+        Directory.CreateDirectory(Path.Combine(repoRoot, "src", "Foo")) |> ignore
+        File.WriteAllText(Path.Combine(repoRoot, "src", "Foo.cs"), "class Foo {}")
+        File.WriteAllText(Path.Combine(repoRoot, "src", "Foo", "README.md"), "Foo")
+        File.WriteAllText(Path.Combine(docsDir, "index.md"), "[source](../src/Foo.cs#overview) [folder](../src/Foo/)")
+        let siteConfig : SiteConfig =
+            { RepoUrl = None
+              SourceUrlPattern = Some "https://bitbucket.org/org/repo/src/{branch}/{path}#L{line}"
+              SourceBranch = Some "master"
+              SiteName = None
+              LogoText = None
+              LogoPath = None
+              LogoDarkPath = None
+              ShowSiteName = None
+              Stylesheet = None
+              Themes = None
+              Navigation = None
+              FSharpPrelude = None
+              CommentsProvider = None }
+        let diagnostics = ContentProvider.createLinkDiagnostics ()
+
+        let pages =
+            ContentProvider.scanDocsWithOptionsAndLinkDiagnostics
+                docsDir repoRoot "docs" emptyPackage "" SemanticCode.defaults siteConfig diagnostics
+
+        let home = Assert.Single pages
+        Assert.Contains("href=\"https://bitbucket.org/org/repo/src/master/src/Foo.cs#overview\"", home.ContentHtml)
+        Assert.Contains("href=\"https://bitbucket.org/org/repo/src/master/src/Foo/\"", home.ContentHtml)
+        Assert.Empty diagnostics.Errors
+        Assert.Empty diagnostics.Warnings
+
+    [<Fact>]
+    let ``scanDocs warns when a repository file link has no source URL and supports warn-as-error`` () =
+        let repoRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let docsDir = Path.Combine(repoRoot, "docs")
+        Directory.CreateDirectory(docsDir) |> ignore
+        File.WriteAllText(Path.Combine(repoRoot, "AGENTS.md"), "agent notes")
+        File.WriteAllText(Path.Combine(docsDir, "index.md"), "[agents](../AGENTS.md)")
+        let diagnostics = ContentProvider.createLinkDiagnostics ()
+
+        ContentProvider.scanDocsWithOptionsAndLinkDiagnostics
+            docsDir repoRoot "docs" emptyPackage "" SemanticCode.defaults SiteConfig.empty diagnostics
+        |> ignore
+
+        let warning = Assert.Single diagnostics.Warnings
+        Assert.Contains("AGENTS.md", warning)
+        Assert.Contains("sourceUrlPattern", warning)
+        Assert.Throws<InvalidOperationException>(fun () -> ContentProvider.throwLinkWarnings true diagnostics.Warnings) |> ignore
+        Assert.Empty diagnostics.Errors
 
     [<Fact>]
     let ``scanDocs reports every broken local link across all pages`` () =
@@ -1719,7 +1782,7 @@ module DocTestRunnerTests =
 
 module ViewTests =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None; CommentsProvider = None }
+    let private defaultSiteConfig = SiteConfig.empty
 
     [<Fact>]
     let ``tooltip surface is explicitly opaque`` () =
@@ -1755,8 +1818,18 @@ module ViewTests =
 
     [<Fact>]
     let ``sourceLinkHref builds github source links`` () =
-        let link = View.sourceLinkHref (Some "https://github.com/user/repo") { File = "src/Example.fs"; Line = 42 }
+        let config = { defaultSiteConfig with RepoUrl = Some "https://github.com/user/repo" }
+        let link = View.sourceLinkHref config { File = "src/Example.fs"; Line = 42 }
         Assert.Equal(Some "https://github.com/user/repo/blob/main/src/Example.fs#L42", link)
+
+    [<Fact>]
+    let ``sourceLinkHref uses the configured host pattern and branch`` () =
+        let config =
+            { defaultSiteConfig with
+                SourceUrlPattern = Some "https://gitlab.com/org/repo/-/blob/{branch}/{path}#L{line}"
+                SourceBranch = Some "release/0.11" }
+        let link = View.sourceLinkHref config { File = "src/Example.fs"; Line = 42 }
+        Assert.Equal(Some "https://gitlab.com/org/repo/-/blob/release%2F0.11/src/Example.fs#L42", link)
 
     [<Fact>]
     let ``renderEntityPage renders record pages with a field table`` () =
@@ -1804,7 +1877,7 @@ module ViewTests =
 
 module SiteBuilderTests =
 
-    let private defaultSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None; CommentsProvider = None }
+    let private defaultSiteConfig = SiteConfig.empty
 
     [<Fact>]
     let ``history renders persisted semantic hovers without a historical project`` () =
@@ -2014,6 +2087,8 @@ module SiteBuilderTests =
         let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
         let config = {
             RepoUrl = Some "https://github.com/example/library"
+            SourceUrlPattern = None
+            SourceBranch = None
             SiteName = Some "Example Library"
             LogoText = Some "EL"
             LogoPath = Some "content/example-logo.svg"
@@ -2631,6 +2706,8 @@ module DocumentationSetTests =
 
     let private site: SiteConfig =
         { RepoUrl = None
+          SourceUrlPattern = None
+          SourceBranch = None
           SiteName = Some "Shared"
           LogoText = None
           LogoPath = None
@@ -2762,13 +2839,16 @@ module DocumentationSetTests =
         let scan source route identity files allowed =
             ContentProvider.scanDocsSet
                 { SourceDir = source
+                  SourceRootRelative = Path.GetRelativePath(root, source).Replace('\\', '/')
                   SnippetSourceDir = root
+                  RepositoryRoot = root
                   Package = package
                   RoutePrefix = route
                   SemanticPrefix = identity
                   SiteRootPath = ""
                   AllowedOutputs = allowed
                   SemanticCode = SemanticCode.disabled
+                  SiteConfig = SiteConfig.empty
                   ApiRoutes = Map.empty
                   Files = files }
 
@@ -3053,9 +3133,14 @@ module DocumentationSetTests =
             { SourcePath = "index.md"
               SetId = set.Id
               Metadata = metadata
-              Markdown = "# Home" }
+              Markdown = "# Home\n\n[source](../src/Foo.cs)" }
 
-        ReleaseCapsule.createWithDocsSets capsule "revision" "0.5.0" api semantic site [ set ] [ page ] []
+        let siteWithSourceLinks =
+            { site with
+                SourceUrlPattern = Some "https://bitbucket.org/org/repo/src/{branch}/{path}"
+                SourceBranch = Some "master" }
+
+        ReleaseCapsule.createWithDocsSets capsule "revision" "0.5.0" api semantic siteWithSourceLinks [ set ] [ page ] []
         |> ignore
 
         let manifest, _, _, content, _ = ReleaseCapsule.load capsule
@@ -3064,15 +3149,18 @@ module DocumentationSetTests =
         Assert.Equal("handbook", content.DocsSets.Head.Source)
         Assert.Equal("handbook", content.Pages.Head.SetId)
         Assert.Equal(Some "open System", content.DocsSets.Head.FSharpPrelude)
+        Assert.Equal(Some "https://bitbucket.org/org/repo/src/{branch}/{path}", content.Site.SourceUrlPattern)
+        Assert.Equal(Some "master", content.Site.SourceBranch)
 
         let materialized = Path.Combine(root, "materialized")
         let capturedPackage, capturedSemantic, capturedContent =
             ReleaseCapsule.materializeContentWithSets capsule materialized
         let prepared =
-            DocumentationSets.prepareCaptured materialized capturedContent capturedPackage capturedSemantic ""
+            DocumentationSets.prepareCapturedWithSourceLinks capturedContent.Site materialized capturedContent capturedPackage capturedSemantic ""
         let capturedHome = prepared.Sites.Head.Pages |> List.tryFind (fun candidate -> candidate.OutputPath = "index.html")
         Assert.True(capturedHome.IsSome, "The authored docs-set homepage must survive capsule materialization.")
         Assert.Contains("Home", capturedHome.Value.ContentHtml)
+        Assert.Contains("href=\"https://bitbucket.org/org/repo/src/master/src/Foo.cs\"", capturedHome.Value.ContentHtml)
 
     /// Writes a capsule whose content component is the given legacy payload, byte for byte.
     let private writeLegacyContentCapsule (contentSchema: int) (contentBytes: byte array) =
@@ -3157,6 +3245,32 @@ module DocumentationSetTests =
         Assert.Equal(None, content.Site.CommentsProvider)
 
     [<Fact>]
+    let ``content schema three migration adds explicit source URL defaults`` () =
+        let fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "content-schema-2.json")
+        let root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText fixture).AsObject()
+        root["SchemaVersion"] <- System.Text.Json.Nodes.JsonValue.Create(3)
+        let page = root["Pages"].AsArray().[0]
+        let metadata = page["Metadata"].AsObject()
+        metadata["Date"] <- null
+        metadata["Tags"] <- System.Text.Json.Nodes.JsonArray()
+        metadata["Category"] <- null
+        metadata["Draft"] <- System.Text.Json.Nodes.JsonValue.Create(false)
+        metadata["Summary"] <- null
+        metadata["Slug"] <- null
+        metadata["Series"] <- null
+        metadata["SeriesOrder"] <- null
+        metadata["Comments"] <- System.Text.Json.Nodes.JsonValue.Create(false)
+        metadata["BlogList"] <- null
+        root["Site"].AsObject()["CommentsProvider"] <- null
+        let capsule = writeLegacyContentCapsule 3 (Text.Encoding.UTF8.GetBytes(root.ToJsonString()))
+
+        let _, _, _, content, _ = ReleaseCapsule.load capsule
+
+        Assert.Equal(4, content.SchemaVersion)
+        Assert.Equal(None, content.Site.SourceUrlPattern)
+        Assert.Equal(None, content.Site.SourceBranch)
+
+    [<Fact>]
     let ``content schema two fixture migrates with explicit blog defaults`` () =
         let fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "content-schema-2.json")
         let capsule = writeLegacyContentCapsule 2 (File.ReadAllBytes fixture)
@@ -3183,7 +3297,7 @@ module DocumentationSetTests =
 
 module BlogTests =
 
-    let private blogSiteConfig = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None; CommentsProvider = None }
+    let private blogSiteConfig = SiteConfig.empty
 
     let private post title date draft series order =
         let metadata =
@@ -3217,7 +3331,7 @@ module BlogTests =
 
     [<Fact>]
     let ``giscus comments provider is read from site configuration json`` () =
-        let json = """{ "siteName": "Blog", "projects": ["a.fsproj"], "fSharpPrelude": "open System", "navigation": [ { "label": "Home", "href": "index.html" } ], "commentsProvider": { "kind": "giscus", "repo": "owner/repo", "repoId": "repo-id", "category": "Announcements", "categoryId": "category-id", "theme": "dark" } }"""
+        let json = """{ "siteName": "Blog", "projects": ["a.fsproj"], "sourceUrlPattern": "https://bitbucket.org/org/repo/src/{branch}/{path}", "sourceBranch": "master", "fSharpPrelude": "open System", "navigation": [ { "label": "Home", "href": "index.html" } ], "commentsProvider": { "kind": "giscus", "repo": "owner/repo", "repoId": "repo-id", "category": "Announcements", "categoryId": "category-id", "theme": "dark" } }"""
         let config = Reified.Json.deserialize Workspace.siteConfigCodec json
         let expected =
             Giscus
@@ -3227,6 +3341,8 @@ module BlogTests =
                   CategoryId = "category-id"
                   Theme = Some "dark" }
         Assert.Equal(Some "Blog", config.SiteName)
+        Assert.Equal(Some "https://bitbucket.org/org/repo/src/{branch}/{path}", config.SourceUrlPattern)
+        Assert.Equal(Some "master", config.SourceBranch)
         Assert.Equal(Some "open System", config.FSharpPrelude)
         Assert.Equal(Some [ { Label = "Home"; Href = "index.html" } ], config.Navigation)
         Assert.Equal(Some expected, config.CommentsProvider)
@@ -3486,7 +3602,7 @@ module ApiOrganizationTests =
               Organization =
                 { Families = [ family ]
                   PackageSections = [ { PackageName = "Example"; Id = "domain"; Title = "Domain APIs"; Summary = []; Order = 10; EntityIds = [ order.Id; orderType.Id ] } ] } }
-        let config = { RepoUrl = None; SiteName = None; LogoText = None; LogoPath = None; LogoDarkPath = None; ShowSiteName = None; Stylesheet = None; Themes = None; Navigation = None; FSharpPrelude = None; CommentsProvider = None }
+        let config = SiteConfig.empty
         let output = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
 
         SiteBuilder.build { Pages = []; Package = package; Config = config; Versions = []; Theme = "light"; RootPath = ""; SiteRootPath = ""; OutputDir = output }

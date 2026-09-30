@@ -29,6 +29,14 @@ open FsLiveDocs.Core.Effects
 /// </example>
 module ContentProvider =
 
+    type LinkDiagnostics =
+        { Errors: ResizeArray<string>
+          Warnings: ResizeArray<string> }
+
+    let createLinkDiagnostics () =
+        { Errors = ResizeArray<string>()
+          Warnings = ResizeArray<string>() }
+
     type private SourceOutputPath =
         { SourcePath: string
           OutputPath: string }
@@ -42,6 +50,14 @@ module ContentProvider =
     let throwLinkErrors (linkErrors: ResizeArray<string>) =
         if linkErrors.Count > 0 then
             invalidOp (String.concat System.Environment.NewLine linkErrors)
+
+    /// <summary>Fails a build when repository-source link warnings are treated as errors.</summary>
+    let throwLinkWarnings (warnAsError: bool) (linkWarnings: ResizeArray<string>) =
+        if warnAsError && linkWarnings.Count > 0 then
+            invalidOp
+                ("Repository source link warnings were treated as errors because --warn-as-error was passed:"
+                 + System.Environment.NewLine
+                 + String.concat System.Environment.NewLine linkWarnings)
 
     /// <summary>Matches the shortcode that transcludes an XML example into a page.</summary>
     /// <remarks>
@@ -309,6 +325,36 @@ module ContentProvider =
             || relative.StartsWith("../", System.StringComparison.Ordinal)
         Path.GetFullPath targetPath, relative, isOutsideRoot
 
+    let private repositoryTargetPath (repositoryRoot: string) (sourceRootRelative: string) (targetRelativePath: string) =
+        let root = Path.GetFullPath repositoryRoot
+        let target = Path.GetFullPath(Path.Combine(root, sourceRootRelative, targetRelativePath.Replace('/', Path.DirectorySeparatorChar)))
+        let relative = Path.GetRelativePath(root, target).Replace('\\', '/')
+        let outside =
+            Path.IsPathRooted(relative)
+            || relative = ".."
+            || relative.StartsWith("../", System.StringComparison.Ordinal)
+        target, relative, outside
+
+    let private externalLinkTarget
+        (docsDir: string)
+        (currentSourcePath: string)
+        (repositoryRoot: string)
+        (sourceRootRelative: string)
+        (siteConfig: SiteConfig)
+        (hrefPath: string)
+        =
+        let targetFullPath, targetRelativePath, isOutsideDocsRoot = sourceTargetPath docsDir currentSourcePath hrefPath
+        if not isOutsideDocsRoot then None
+        else
+            let _, repoRelativePath, isOutsideRepository = repositoryTargetPath repositoryRoot sourceRootRelative targetRelativePath
+            Some(targetFullPath, repoRelativePath, isOutsideRepository, SourceUrl.forPath siteConfig repoRelativePath None)
+
+    let private externalLinkWarning href repoRelativePath isOutsideRepository =
+        if isOutsideRepository then
+            $"Documentation link [{href}] resolves to `{repoRelativePath}` outside the repository root and cannot use `sourceUrlPattern`. Use a plain path in backticks or a full URL."
+        else
+            $"Documentation link [{href}] resolves to repository path `{repoRelativePath}` outside the docs root. Set `sourceUrlPattern` (and `sourceBranch` when needed) to link to it on the repository host, or use a plain path in backticks or a full URL."
+
     let private sourcePathCandidates (docsDir: string) (currentSourcePath: string) (hrefPath: string) =
         let _, relative, isOutsideRoot = sourceTargetPath docsDir currentSourcePath hrefPath
         if isOutsideRoot then
@@ -475,12 +521,16 @@ module ContentProvider =
 
     let private validateLinks
         (docsDir: string)
+        (repositoryRoot: string)
+        (sourceRootRelative: string)
+        (siteConfig: SiteConfig)
         (currentSourcePath: string)
         (currentOutputPath: string)
         (allowedOutputs: Set<string>)
         (sourceOutputPaths: Map<string, SourceOutputPath>)
         (outputFolderAliases: Map<string, string>)
         (linkErrors: ResizeArray<string>)
+        (linkWarnings: ResizeArray<string>)
         (body: string)
         =
         let linkPattern = @"(?<!\!)\[[^\]]+\]\((?<href>[^)]+)\)"
@@ -491,14 +541,24 @@ module ContentProvider =
                 | None -> ()
                 | Some _ ->
                     let hrefPath, _ = splitHrefPath href
-                    if looksLikePageHref hrefPath
-                       && resolveLocalOutput docsDir currentSourcePath currentOutputPath allowedOutputs sourceOutputPaths outputFolderAliases href |> Option.isNone then
-                        addLinkError linkErrors (brokenLinkMessage docsDir currentSourcePath currentOutputPath sourceOutputPaths href)
+                    match externalLinkTarget docsDir currentSourcePath repositoryRoot sourceRootRelative siteConfig hrefPath with
+                    | Some(_, repoRelativePath, isOutsideRepository, None) ->
+                        linkWarnings.Add(externalLinkWarning href repoRelativePath isOutsideRepository)
+                    | Some(_, repoRelativePath, true, Some _) ->
+                        linkWarnings.Add(externalLinkWarning href repoRelativePath true)
+                    | Some _ -> ()
+                    | None ->
+                        if looksLikePageHref hrefPath
+                           && resolveLocalOutput docsDir currentSourcePath currentOutputPath allowedOutputs sourceOutputPaths outputFolderAliases href |> Option.isNone then
+                            addLinkError linkErrors (brokenLinkMessage docsDir currentSourcePath currentOutputPath sourceOutputPaths href)
             protectedBody)
         |> ignore
 
     let private rewriteLocalLinks
         (docsDir: string)
+        (repositoryRoot: string)
+        (sourceRootRelative: string)
+        (siteConfig: SiteConfig)
         (currentSourcePath: string)
         (currentOutputPath: string)
         (allowedOutputs: Set<string>)
@@ -510,15 +570,20 @@ module ContentProvider =
         withProtectedCodeSegments body "FSLIVEDOCS_REWRITE_LINKS" (fun protectedBody ->
             Regex.Replace(protectedBody, linkPattern, fun (m: Match) ->
                 let href = m.Groups.["href"].Value.Trim().Trim('"')
-                match resolveLocalOutput docsDir currentSourcePath currentOutputPath allowedOutputs sourceOutputPaths outputFolderAliases href with
-                | Some resolved ->
-                    let _, hrefSuffix = splitHrefPath href
-                    let currentDirectory = Path.GetDirectoryName(currentOutputPath)
-                    let relative =
-                        if System.String.IsNullOrWhiteSpace currentDirectory then resolved
-                        else Path.GetRelativePath(currentDirectory, resolved).Replace('\\', '/')
-                    m.Groups.["prefix"].Value + relative + hrefSuffix + m.Groups.["suffix"].Value
-                | None -> m.Value))
+                let hrefPath, hrefSuffix = splitHrefPath href
+                match externalLinkTarget docsDir currentSourcePath repositoryRoot sourceRootRelative siteConfig hrefPath with
+                | Some(_, repoRelativePath, false, Some sourceUrl) ->
+                    m.Groups.["prefix"].Value + sourceUrl + hrefSuffix + m.Groups.["suffix"].Value
+                | Some _ -> m.Value
+                | None ->
+                    match resolveLocalOutput docsDir currentSourcePath currentOutputPath allowedOutputs sourceOutputPaths outputFolderAliases href with
+                    | Some resolved ->
+                        let currentDirectory = Path.GetDirectoryName(currentOutputPath)
+                        let relative =
+                            if System.String.IsNullOrWhiteSpace currentDirectory then resolved
+                            else Path.GetRelativePath(currentDirectory, resolved).Replace('\\', '/')
+                        m.Groups.["prefix"].Value + relative + hrefSuffix + m.Groups.["suffix"].Value
+                    | None -> m.Value))
 
     let private collectEntityIds (entities: EntityModel list) =
         let rec walk acc (items: EntityModel list) =
@@ -768,6 +833,8 @@ module ContentProvider =
         {
             DocsDir: string
             SourceDir: string
+            RepositoryRoot: string
+            SourceRootRelative: string
             Package: PackageModel
             RootPath: string
             CurrentOutputPath: string
@@ -775,6 +842,8 @@ module ContentProvider =
             SourceOutputPaths: Map<string, SourceOutputPath>
             OutputFolderAliases: Map<string, string>
             LinkErrors: ResizeArray<string>
+            LinkWarnings: ResizeArray<string>
+            SiteConfig: SiteConfig
             /// Route prefix ("" or e.g. "internal/") prepended to this page's semantic source path so a
             /// documentation set's persisted blocks stay uniquely keyed across the shared site.
             RoutePrefix: string
@@ -795,6 +864,9 @@ module ContentProvider =
         let rewritten =
             rewriteLocalLinks
                 context.DocsDir
+                context.RepositoryRoot
+                context.SourceRootRelative
+                context.SiteConfig
                 sourcePath
                 context.CurrentOutputPath
                 context.AllowedOutputs
@@ -804,12 +876,16 @@ module ContentProvider =
 
         validateLinks
             context.DocsDir
+            context.RepositoryRoot
+            context.SourceRootRelative
+            context.SiteConfig
             sourcePath
             context.CurrentOutputPath
             context.AllowedOutputs
             context.SourceOutputPaths
             context.OutputFolderAliases
             context.LinkErrors
+            context.LinkWarnings
             rewritten
 
         let semanticSourcePath =
@@ -882,10 +958,13 @@ module ContentProvider =
         let docsDir = Path.GetDirectoryName(Path.GetFullPath filePath)
         let sourceOutputPaths = markdownFilesIn docsDir |> fun files -> sourceOutputPathsForFiles docsDir "" files false
         let linkErrors = ResizeArray<string>()
+        let linkWarnings = ResizeArray<string>()
         let page =
             loadMarkdownPage
                 { DocsDir = docsDir
                   SourceDir = sourceDir
+                  RepositoryRoot = sourceDir
+                  SourceRootRelative = Path.GetRelativePath(sourceDir, docsDir).Replace('\\', '/')
                   Package = package
                   RootPath = rootPath
                   CurrentOutputPath = currentOutputPath
@@ -893,6 +972,8 @@ module ContentProvider =
                   SourceOutputPaths = sourceOutputPaths
                   OutputFolderAliases = outputFolderAliases allowedOutputs
                   LinkErrors = linkErrors
+                  LinkWarnings = linkWarnings
+                  SiteConfig = SiteConfig.empty
                   RoutePrefix = ""
                   ApiRoutes = Map.empty
                   SemanticCode = SemanticCode.defaults }
@@ -907,8 +988,12 @@ module ContentProvider =
         {
             /// <summary>The set's Markdown root directory.</summary>
             SourceDir: string
+            /// <summary>The set's source path relative to the repository root.</summary>
+            SourceRootRelative: string
             /// <summary>Root used to resolve <c>{{&lt; snippet &gt;}}</c> shortcodes (usually the repository root).</summary>
             SnippetSourceDir: string
+            /// <summary>Repository root used to map external source links.</summary>
+            RepositoryRoot: string
             /// <summary>The global package model, shared for cross-references and semantic tooltips.</summary>
             Package: PackageModel
             /// <summary>Route prefix ("" for the site-root default set, otherwise e.g. "internal/").</summary>
@@ -921,6 +1006,8 @@ module ContentProvider =
             AllowedOutputs: Set<string>
             /// <summary>Semantic formatting options carrying this set's prelude and release artifact.</summary>
             SemanticCode: SemanticCode.Options
+            /// <summary>Site settings used to create repository-host links.</summary>
+            SiteConfig: SiteConfig
             /// Entity id to documentation-set route prefix, used to resolve cross-set xrefs.
             ApiRoutes: Map<string, string>
             /// <summary>Absolute Markdown file paths owned by this set (API enrichment files excluded).</summary>
@@ -930,6 +1017,9 @@ module ContentProvider =
     let private scanFileList
         (docsDir: string)
         (sourceDir: string)
+        (repositoryRoot: string)
+        (sourceRootRelative: string)
+        (siteConfig: SiteConfig)
         (package: PackageModel)
         (siteRootPath: string)
         (routePrefix: string)
@@ -938,7 +1028,7 @@ module ContentProvider =
         (apiRoutes: Map<string, string>)
         (semanticCode: SemanticCode.Options)
         (files: string list)
-        (linkErrors: ResizeArray<string>)
+        (diagnostics: LinkDiagnostics)
         =
         // Every file's raw text is read up front as one composed Flow, run once, rather than once
         // per file inside the map below.
@@ -972,13 +1062,17 @@ module ContentProvider =
                 loadMarkdownPage
                     { DocsDir = docsDir
                       SourceDir = sourceDir
+                      RepositoryRoot = repositoryRoot
+                      SourceRootRelative = sourceRootRelative
                       Package = package
                       RootPath = pageRootPath
                       CurrentOutputPath = outputPath
                       AllowedOutputs = allowedOutputs
                       SourceOutputPaths = sourceOutputPaths
                       OutputFolderAliases = outputFolderAliases
-                      LinkErrors = linkErrors
+                      LinkErrors = diagnostics.Errors
+                      LinkWarnings = diagnostics.Warnings
+                      SiteConfig = siteConfig
                       RoutePrefix = semanticPrefix
                       ApiRoutes = apiRoutes
                       SemanticCode = semanticCode }
@@ -998,13 +1092,15 @@ module ContentProvider =
         |> Array.toList
 
     /// <summary>Scans guides and semantically formats F# fences, appending local-link errors to a shared collection.</summary>
-    let scanDocsWithOptionsWithLinkErrors
+    let scanDocsWithOptionsAndLinkDiagnostics
         (docsDir: string)
         (sourceDir: string)
+        (sourceRootRelative: string)
         (package: PackageModel)
         (rootPath: string)
         (semanticCode: SemanticCode.Options)
-        (linkErrors: ResizeArray<string>)
+        (siteConfig: SiteConfig)
+        (diagnostics: LinkDiagnostics)
         =
         let work =
             flow {
@@ -1023,7 +1119,20 @@ module ContentProvider =
         | None -> []
         | Some files ->
             let allowedOutputs = collectAllowedOutputs docsDir package
-            scanFileList docsDir sourceDir package rootPath "" "" allowedOutputs Map.empty semanticCode files linkErrors
+            scanFileList docsDir sourceDir sourceDir sourceRootRelative siteConfig package rootPath "" "" allowedOutputs Map.empty semanticCode files diagnostics
+
+    /// <summary>Scans guides and appends local link errors to the supplied collection.</summary>
+    let scanDocsWithOptionsWithLinkErrors
+        (docsDir: string)
+        (sourceDir: string)
+        (package: PackageModel)
+        (rootPath: string)
+        (semanticCode: SemanticCode.Options)
+        (linkErrors: ResizeArray<string>)
+        =
+        let diagnostics = { Errors = linkErrors; Warnings = ResizeArray<string>() }
+        let sourceRootRelative = Path.GetRelativePath(sourceDir, docsDir).Replace('\\', '/')
+        scanDocsWithOptionsAndLinkDiagnostics docsDir sourceDir sourceRootRelative package rootPath semanticCode SiteConfig.empty diagnostics
 
     /// <summary>Scans guides and semantically formats F# fences using the supplied assembly references.</summary>
     let scanDocsWithOptions (docsDir: string) (sourceDir: string) (package: PackageModel) (rootPath: string) (semanticCode: SemanticCode.Options) =
@@ -1032,11 +1141,27 @@ module ContentProvider =
         throwLinkErrors linkErrors
         pages
 
+    /// <summary>Scans guides with repository source-link rewriting and warning collection.</summary>
+    let scanDocsWithSourceLinks
+        (docsDir: string)
+        (repositoryRoot: string)
+        (sourceRootRelative: string)
+        (package: PackageModel)
+        (rootPath: string)
+        (semanticCode: SemanticCode.Options)
+        (siteConfig: SiteConfig)
+        (diagnostics: LinkDiagnostics)
+        =
+        scanDocsWithOptionsAndLinkDiagnostics docsDir repositoryRoot sourceRootRelative package rootPath semanticCode siteConfig diagnostics
+
     /// <summary>Scans one documentation set's Markdown, honoring its route prefix and shared allowed outputs.</summary>
-    let scanDocsSetWithLinkErrors (linkErrors: ResizeArray<string>) (scan: DocsSetScan) =
+    let scanDocsSetWithDiagnostics (diagnostics: LinkDiagnostics) (scan: DocsSetScan) =
         scanFileList
             scan.SourceDir
             scan.SnippetSourceDir
+            scan.RepositoryRoot
+            scan.SourceRootRelative
+            scan.SiteConfig
             scan.Package
             scan.SiteRootPath
             scan.RoutePrefix
@@ -1045,7 +1170,10 @@ module ContentProvider =
             scan.ApiRoutes
             scan.SemanticCode
             scan.Files
-            linkErrors
+            diagnostics
+
+    let scanDocsSetWithLinkErrors (linkErrors: ResizeArray<string>) (scan: DocsSetScan) =
+        scanDocsSetWithDiagnostics { Errors = linkErrors; Warnings = ResizeArray<string>() } scan
 
     let scanDocsSet (scan: DocsSetScan) =
         let linkErrors = ResizeArray<string>()
@@ -1070,12 +1198,14 @@ module ContentProvider =
     let private applyApiDocsCore
         (apiDocsDir: string)
         (sourceDir: string)
+        (sourceRootRelative: string)
+        (siteConfig: SiteConfig)
         (package: PackageModel)
         (routePrefix: string)
         (allowedOutputs: Set<string>)
         (apiRoutes: Map<string, string>)
         (_semanticCode: SemanticCode.Options)
-        (linkErrors: ResizeArray<string>)
+        (diagnostics: LinkDiagnostics)
         =
         let apiDocsWork =
             flow {
@@ -1212,8 +1342,10 @@ module ContentProvider =
                                 resolveCrossReferencesWithRoutes value package rootPath apiRoutes
 
                     let rewritten =
-                        rewriteLocalLinks docsRoot f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) expanded
-                    validateLinks docsRoot f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) linkErrors rewritten
+                        rewriteLocalLinks
+                            docsRoot sourceDir sourceRootRelative siteConfig f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) expanded
+                    validateLinks
+                        docsRoot sourceDir sourceRootRelative siteConfig f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) diagnostics.Errors diagnostics.Warnings rewritten
                     id, [ Documentation.markdown rewritten ])
                 |> Map.ofList
             
@@ -1241,15 +1373,41 @@ module ContentProvider =
         (semanticCode: SemanticCode.Options)
         (linkErrors: ResizeArray<string>)
         =
+        let diagnostics = { Errors = linkErrors; Warnings = ResizeArray<string>() }
+        let sourceRootRelative = Path.GetRelativePath(sourceDir, docsDir).Replace('\\', '/')
         applyApiDocsCore
             (Path.Combine(docsDir, "api"))
             sourceDir
+            sourceRootRelative
+            SiteConfig.empty
             package
             ""
             (collectAllowedOutputs docsDir package)
             Map.empty
             semanticCode
-            linkErrors
+            diagnostics
+
+    /// <summary>Applies API Markdown with source URL rewriting and link warning collection.</summary>
+    let applyApiDocsWithSourceLinks
+        (docsDir: string)
+        (repositoryRoot: string)
+        (sourceRootRelative: string)
+        (package: PackageModel)
+        (semanticCode: SemanticCode.Options)
+        (siteConfig: SiteConfig)
+        (diagnostics: LinkDiagnostics)
+        =
+        applyApiDocsCore
+            (Path.Combine(docsDir, "api"))
+            repositoryRoot
+            sourceRootRelative
+            siteConfig
+            package
+            ""
+            (collectAllowedOutputs docsDir package)
+            Map.empty
+            semanticCode
+            diagnostics
 
     /// <summary>Applies long-form API documentation with semantic F# formatting.</summary>
     let applyApiDocsWithOptions
@@ -1274,15 +1432,42 @@ module ContentProvider =
         (semanticCode: SemanticCode.Options)
         (linkErrors: ResizeArray<string>)
         =
+        let diagnostics = { Errors = linkErrors; Warnings = ResizeArray<string>() }
         applyApiDocsCore
             (Path.Combine(setSourceDir, "api"))
             snippetSourceDir
+            (Path.GetRelativePath(snippetSourceDir, setSourceDir).Replace('\\', '/'))
+            SiteConfig.empty
             package
             routePrefix
             allowedOutputs
             apiRoutes
             semanticCode
-            linkErrors
+            diagnostics
+
+    let applyApiDocsForSetWithDiagnostics
+        (setSourceDir: string)
+        (snippetSourceDir: string)
+        (sourceRootRelative: string)
+        (package: PackageModel)
+        (routePrefix: string)
+        (allowedOutputs: Set<string>)
+        (apiRoutes: Map<string, string>)
+        (semanticCode: SemanticCode.Options)
+        (siteConfig: SiteConfig)
+        (diagnostics: LinkDiagnostics)
+        =
+        applyApiDocsCore
+            (Path.Combine(setSourceDir, "api"))
+            snippetSourceDir
+            sourceRootRelative
+            siteConfig
+            package
+            routePrefix
+            allowedOutputs
+            apiRoutes
+            semanticCode
+            diagnostics
 
     /// <summary>Applies one documentation set's long-form API pages, honoring its route prefix and shared allowed outputs.</summary>
     let applyApiDocsForSet

@@ -427,9 +427,9 @@ module PageRenderer =
                   let renderMember memberModel =
                       let card =
                           if entityTargets.IsEmpty then
-                              View.apiCard context.Package context.Config.RepoUrl memberModel
+                              View.apiCard context.Package context.Config memberModel
                           else
-                              View.apiCardWithTargets context.Package entityTargets context.Config.RepoUrl memberModel
+                              View.apiCardWithTargets context.Package entityTargets context.Config memberModel
                       let facets =
                           family
                           |> Option.bind (fun value -> value.Placements |> List.tryFind (fun placement -> placement.SymbolId = memberModel.Id))

@@ -13,7 +13,7 @@ This guide takes an existing F# repository from no docs setup to a live local pr
 2. Build the projects before running `dotnet livedocs`, and again after code changes.
 3. `docs/index.md` is the home page.
 4. `init` sets `siteName` from the solution name or repo folder; change it in `.livedocs/config.json`.
-5. Link documentation pages by their real Markdown file names. Links outside the docs root need a source URL setting, or should be plain paths.
+5. Link documentation pages by their real Markdown file names. Links to repository files and folders outside `docs/` use `sourceUrlPattern` and `sourceBranch`, or the legacy GitHub `repoUrl`; without a source URL, the build warns. Use backticks for a plain path.
 6. A leading number in a Markdown file name is dropped from its page URL.
 
 ## Before you start
@@ -62,7 +62,8 @@ A small setup looks like this:
 ```json
 {
   "siteName": "Example Library",
-  "repoUrl": "https://github.com/example/example",
+  "sourceUrlPattern": "https://github.com/example/example/blob/{branch}/{path}#L{line}",
+  "sourceBranch": "main",
   "projects": [
     "src/Example/Example.fsproj"
   ],
@@ -74,7 +75,7 @@ A small setup looks like this:
 }
 ```
 
-`repoUrl` adds source links to generated API members. Project paths are relative to the repository root.
+`sourceUrlPattern` adds API member source links and turns relative links to repository files or folders outside the docs root into repository-host links. It uses `{branch}` and `{path}`; API source links can also use `{line}`. `sourceBranch` defaults to `main`. GitHub, GitLab, Bitbucket, and Azure DevOps can use their own URL patterns. If neither `sourceUrlPattern` nor `repoUrl` is set, links outside the docs root produce warnings; `--warn-as-error` makes those warnings fail the build. `repoUrl` remains supported as the legacy GitHub pattern for API and repository-file links, using `main` by default. Project paths are relative to the repository root.
 `build` warns while `docs/index.md` still contains the unedited starter page.
 
 ## Build the library

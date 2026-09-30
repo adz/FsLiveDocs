@@ -90,6 +90,8 @@ module SiteSchema =
     let siteConfig : Schema<SiteConfig> =
         schema<SiteConfig> {
             fieldAs "RepoUrl" (fun (s: SiteConfig) -> s.RepoUrl) { withSchema (Schema.option Schema.text) }
+            fieldAs "SourceUrlPattern" (fun (s: SiteConfig) -> s.SourceUrlPattern) { withSchema (Schema.option Schema.text) }
+            fieldAs "SourceBranch" (fun (s: SiteConfig) -> s.SourceBranch) { withSchema (Schema.option Schema.text) }
             fieldAs "SiteName" (fun (s: SiteConfig) -> s.SiteName) { withSchema (Schema.option Schema.text) }
             fieldAs "LogoText" (fun (s: SiteConfig) -> s.LogoText) { withSchema (Schema.option Schema.text) }
             fieldAs "LogoPath" (fun (s: SiteConfig) -> s.LogoPath) { withSchema (Schema.option Schema.text) }
@@ -100,8 +102,10 @@ module SiteSchema =
             fieldAs "Navigation" (fun (s: SiteConfig) -> s.Navigation) { withSchema (Schema.option (Schema.listWith navigationItem)) }
             fieldAs "FSharpPrelude" (fun (s: SiteConfig) -> s.FSharpPrelude) { withSchema (Schema.option Schema.text) }
             fieldAs "CommentsProvider" (fun (s: SiteConfig) -> s.CommentsProvider) { withSchema (Schema.option commentsProvider) }
-            construct (fun repoUrl siteName logoText logoPath logoDarkPath showSiteName stylesheet themes navigation fsharpPrelude commentsProvider ->
+            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath showSiteName stylesheet themes navigation fsharpPrelude commentsProvider ->
                 { RepoUrl = repoUrl
+                  SourceUrlPattern = sourceUrlPattern
+                  SourceBranch = sourceBranch
                   SiteName = siteName
                   LogoText = logoText
                   LogoPath = logoPath
@@ -126,6 +130,8 @@ module SiteSchema =
             }
         schema<SiteConfig> {
             field _.RepoUrl
+            field _.SourceUrlPattern
+            field _.SourceBranch
             field _.SiteName
             field _.LogoText
             field _.LogoPath
@@ -136,8 +142,10 @@ module SiteSchema =
             field _.Navigation { withSchema (Schema.option (Schema.listWith navigationFileItem) |> Schema.mayOmit) }
             field (fun (s: SiteConfig) -> s.FSharpPrelude)
             field _.CommentsProvider { withSchema (Schema.option commentsProvider |> Schema.mayOmit) }
-            construct (fun repoUrl siteName logoText logoPath logoDarkPath showSiteName stylesheet themes navigation fsharpPrelude commentsProvider ->
+            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath showSiteName stylesheet themes navigation fsharpPrelude commentsProvider ->
                 { RepoUrl = repoUrl
+                  SourceUrlPattern = sourceUrlPattern
+                  SourceBranch = sourceBranch
                   SiteName = siteName
                   LogoText = logoText
                   LogoPath = logoPath

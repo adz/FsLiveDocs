@@ -127,6 +127,8 @@ Follow these rules:
 - Never regenerate a published artifact under the same product version.
 - Verify every published component and archive with SHA-256 before rendering.
 
+Content schema 4 adds `SourceUrlPattern` and `SourceBranch` to the persisted site configuration. The schema-3 migration writes both fields as `null`, so the legacy `RepoUrl` fallback keeps its previous GitHub behavior. Schema-1 and schema-2 migrations also set the new fields explicitly before strict deserialization.
+
 Compatibility preserves historical content and semantic meaning. It does not require byte-identical HTML.
 
 Renderer pinning, if added, is a separate optional reproducibility feature.

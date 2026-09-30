@@ -44,7 +44,7 @@ livedocs watch --verbosity debug --interactive false
 livedocs build --interactive false --banner false
 ```
 
-Verbosity levels are `warnings`, `info`, and `debug`. `warnings` groups repeated API issues by file and kind, links each file to GitHub when `repoUrl` is configured, and prints completion summaries. `debug` expands full compiler messages and remedies and includes every audited block and watcher directory.
+Verbosity levels are `warnings`, `info`, and `debug`. `warnings` groups repeated API issues by file and kind, links each file to the configured repository host when `sourceUrlPattern` or `repoUrl` is set, and prints completion summaries. `debug` expands full compiler messages and remedies and includes every audited block and watcher directory.
 
 ## Treat API warnings as errors
 

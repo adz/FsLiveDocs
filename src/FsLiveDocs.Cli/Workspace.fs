@@ -108,18 +108,7 @@ module internal Workspace =
 
     let internal siteConfigCodec = Json.compile SiteSchema.siteConfigFile
 
-    let private defaultSiteConfig =
-        { RepoUrl = None
-          SiteName = None
-          LogoText = None
-          LogoPath = None
-          LogoDarkPath = None
-          ShowSiteName = None
-          Stylesheet = None
-          Themes = None
-          Navigation = None
-          FSharpPrelude = None
-          CommentsProvider = None }
+    let private defaultSiteConfig = SiteConfig.empty
 
     /// Reads a config-shaped file's content if it exists, as one Flow. Every function below that
     /// starts from ".livedocs/config.json" (or another config-shaped file) composes this once

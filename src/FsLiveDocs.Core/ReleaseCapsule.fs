@@ -16,12 +16,12 @@ module ReleaseCapsule =
     [<Literal>]
     let ManifestSchemaVersion = 1
 
-    /// Schema 3 adds optional blog metadata. Schema 2 adds documentation-set identity.
+    /// Schema 4 adds configurable source URL patterns and branches.
     [<Literal>]
-    let ContentSchemaVersion = 3
+    let ContentSchemaVersion = 4
 
     /// Content schema versions this renderer reads. Older versions are migrated; unknown versions are rejected.
-    let supportedContentSchemaVersions = set [ 1; 2; 3 ]
+    let supportedContentSchemaVersions = set [ 1; 2; 3; 4 ]
 
     [<Literal>]
     let HistoryIndexSchemaVersion = 1
@@ -29,8 +29,12 @@ module ReleaseCapsule =
     /// The renderer-neutral content artifact exactly as schema 1 persisted it, kept for migration only.
     module private LegacyContent =
 
+        let private addSourceUrlDefaults (site: Nodes.JsonObject) =
+            for name in [ "SourceUrlPattern"; "SourceBranch" ] do
+                if not (site.ContainsKey name) then site[name] <- null
+
         /// Content schemas 1 and 2 predate blog metadata; fill every blog field with its default
-        /// explicitly so the strict schema-3 codec can decode the page metadata.
+        /// explicitly so the strict schema-4 codec can decode the page metadata.
         let private addBlogMetadataDefaults (metadata: Nodes.JsonObject) =
             let defaults: (string * Nodes.JsonNode) list =
                 [ "Date", null
@@ -46,8 +50,8 @@ module ReleaseCapsule =
             for name, value in defaults do
                 if not (metadata.ContainsKey name) then metadata[name] <- value
 
-        /// Schema 2 had documentation sets but predated blog metadata.  Do not depend on
-        /// Json.NET's treatment of absent record fields: write every blog default explicitly.
+        /// Schema 2 had documentation sets but predated blog metadata. Do not depend on
+        /// Json.NET's treatment of absent record fields: write every default before schema-4 decoding.
         let migrateV2 (bytes: byte array) : ReleaseContentArtifact =
             let root =
                 match Nodes.JsonNode.Parse(Encoding.UTF8.GetString bytes) with
@@ -66,9 +70,26 @@ module ReleaseCapsule =
             | _ -> invalidOp "Content schema 2 Pages must be an array."
 
             match root["Site"] with
-            | :? Nodes.JsonObject as site -> site["CommentsProvider"] <- null
+            | :? Nodes.JsonObject as site ->
+                site["CommentsProvider"] <- null
+                addSourceUrlDefaults site
             | _ -> invalidOp "Content schema 2 is missing Site."
 
+            root["SchemaVersion"] <- Nodes.JsonValue.Create(ContentSchemaVersion)
+            Json.deserialize (Json.compile ReleaseSchema.releaseContentArtifact) (root.ToJsonString())
+
+        /// Schema 3 predates configurable source URLs. Add the absent fields explicitly before
+        /// strict schema-4 deserialization, preserving the legacy RepoUrl fallback.
+        let migrateV3 (bytes: byte array) : ReleaseContentArtifact =
+            let root =
+                match Nodes.JsonNode.Parse(Encoding.UTF8.GetString bytes) with
+                | :? Nodes.JsonObject as value -> value
+                | _ -> invalidOp "Content schema 3 payload must be an object."
+            let schema = match root["SchemaVersion"] with | null -> 0 | value -> value.GetValue<int>()
+            if schema <> 3 then invalidOp $"Content schema 3 payload declares schema {schema}."
+            match root["Site"] with
+            | :? Nodes.JsonObject as site -> addSourceUrlDefaults site
+            | _ -> invalidOp "Content schema 3 is missing Site."
             root["SchemaVersion"] <- Nodes.JsonValue.Create(ContentSchemaVersion)
             Json.deserialize (Json.compile ReleaseSchema.releaseContentArtifact) (root.ToJsonString())
 
@@ -123,7 +144,13 @@ module ReleaseCapsule =
                 | _ -> invalidOp "Content schema 1 Pages must be an array."
 
             let assets = Json.deserialize releaseAssetsCodec ((required root "Assets").GetRawText())
-            let site = Json.deserialize siteConfigCodec ((required root "Site").GetRawText())
+            let siteNode =
+                match Nodes.JsonNode.Parse((required root "Site").GetRawText()) with
+                | :? Nodes.JsonObject as value ->
+                    addSourceUrlDefaults value
+                    value
+                | _ -> invalidOp "Content schema 1 Site must be an object."
+            let site = Json.deserialize siteConfigCodec (siteNode.ToJsonString())
 
             { SchemaVersion = schema
               Pages = pages
@@ -637,7 +664,8 @@ module ReleaseCapsule =
         // version's shape, then migrate supported older versions with a small deterministic step.
         let content =
             match manifest.Content.SchemaVersion with
-            | 3 -> deserializeWith contentCodec contentBytes
+            | 4 -> deserializeWith contentCodec contentBytes
+            | 3 -> LegacyContent.migrateV3 contentBytes
             | 2 -> LegacyContent.migrateV2 contentBytes
             | 1 -> LegacyContent.migrate semantic.Prelude api (LegacyContent.deserialize contentBytes)
             | other ->

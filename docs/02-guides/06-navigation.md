@@ -9,7 +9,8 @@ Edit `.livedocs/config.json` to configure the generated site.
 ```json
 {
   "siteName": "Example Library",
-  "repoUrl": "https://github.com/example/library",
+  "sourceUrlPattern": "https://github.com/example/library/blob/{branch}/{path}#L{line}",
+  "sourceBranch": "main",
   "logoText": "EX",
   "logoPath": "content/logo.svg",
   "logoDarkPath": "content/logo-dark.svg",
@@ -141,4 +142,17 @@ FsLiveDocs markup uses DaisyUI component classes and Tailwind utility classes. P
 
 ## Add source links
 
-Set `repoUrl` to a GitHub repository URL. API members with source locations link to the corresponding file and line on the `main` branch.
+Set `sourceUrlPattern` to the repository host's URL shape and `sourceBranch` to the branch to display. The pattern uses `{branch}` and `{path}`. Use `{line}` when the host supports line links for API members. `sourceBranch` defaults to `main`.
+
+For example, Bitbucket Cloud:
+
+```json
+{
+  "sourceUrlPattern": "https://bitbucket.org/org/repo/src/{branch}/{path}",
+  "sourceBranch": "master"
+}
+```
+
+For GitLab, use a pattern such as `https://gitlab.com/org/repo/-/blob/{branch}/{path}#L{line}`. For Azure DevOps, a query-style pattern can use `https://dev.azure.com/org/project/_git/repo?path=/{path}&version=GB{branch}&line={line}&lineEnd={line}`. Leave `{line}` out when linking to repository files from guides, where no source line is available.
+
+Relative Markdown links to repository files and folders outside the docs root use the same pattern. If neither `sourceUrlPattern` nor `repoUrl` is set, FsLiveDocs warns and names `sourceUrlPattern` and `sourceBranch` as the fix; `--warn-as-error` makes those warnings fail the build. `repoUrl` remains supported for existing GitHub configurations and links API members and repository files on `main` by default. A configured `sourceUrlPattern` takes precedence over `repoUrl`.

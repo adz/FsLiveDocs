@@ -23,11 +23,9 @@ module View =
     let private escapeJs (value: string) =
         value.Replace("\\", "\\\\").Replace("'", "\\'")
 
-    let sourceLinkHref (repoUrl: string option) (location: SourceLink) =
-        match repoUrl with
-        | Some repo when not (String.IsNullOrWhiteSpace repo) && not (String.IsNullOrWhiteSpace location.File) && location.Line > 0 ->
-            Some $"{repo.TrimEnd('/')}/blob/main/{location.File}#L{location.Line}"
-        | _ -> None
+    let sourceLinkHref (config: SiteConfig) (location: SourceLink) =
+        if String.IsNullOrWhiteSpace location.File || location.Line <= 0 then None
+        else SourceUrl.forPath config location.File (Some location.Line)
 
     let private anchorIcon (href: string) (label: string) =
         a [
@@ -548,9 +546,9 @@ module View =
                                  |> List.map (fun (name, pageId, entities, anchor, sections) ->
                                      sidebarApiGroup setRouteRoot package.Organization name pageId anchor entities sections)) ] ]
 
-    let private apiCardCore renderDocumentation (repoUrl: string option) (memberModel: MemberModel) =
+    let private apiCardCore renderDocumentation (config: SiteConfig) (memberModel: MemberModel) =
         let sourceLink =
-            sourceLinkHref repoUrl memberModel.Location
+            sourceLinkHref config memberModel.Location
             |> Option.map (fun href ->
                 a
                     [ _href href
@@ -685,11 +683,11 @@ module View =
                      else
                          emptyText) ] ]
 
-    let apiCard package repoUrl memberModel =
-        apiCardCore (Presentation.renderDocumentationHtml package) repoUrl memberModel
+    let apiCard package config memberModel =
+        apiCardCore (Presentation.renderDocumentationHtml package) config memberModel
 
-    let apiCardWithTargets package targets repoUrl memberModel =
-        apiCardCore (Presentation.renderDocumentationHtmlWithTargets package targets) repoUrl memberModel
+    let apiCardWithTargets package targets config memberModel =
+        apiCardCore (Presentation.renderDocumentationHtmlWithTargets package targets) config memberModel
 
     let private layoutCore
         (chrome: SiteChrome option)

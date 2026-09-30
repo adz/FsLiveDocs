@@ -12,7 +12,7 @@ Run commands from the repository root. Project arguments are optional: FsLiveDoc
 - Run `dotnet build` before `dotnet livedocs`, and again after code changes.
 - `docs/index.md` is the home page. `init` asks whether to use `docs/README.md` when no index exists.
 - `init` sets `siteName` from the single root solution name, falling back to the repo folder; edit it in `.livedocs/config.json` to choose another title.
-- Link pages by their source Markdown filenames. Links outside the docs root need a source URL setting, or should be plain paths.
+- Link pages by their source Markdown filenames. Set `sourceUrlPattern` and `sourceBranch` (or legacy GitHub `repoUrl`) to send links outside the docs root to repository files and folders; without a source URL, the build warns. Use backticks for a plain path.
 - Leading numbers in Markdown filenames are removed from generated page URLs.
 
 Every command assumes it runs at the repository root with `.livedocs/` present

@@ -14,6 +14,7 @@ module internal DocumentationSets =
     type Prepared =
         { Sites: SiteBuilder.DocsSetSite list
           Sets: ReleaseDocsSet list
+          Warnings: string list
           StaticFiles: (string * string * string list) list }
 
     let private routePrefix path =
@@ -97,7 +98,8 @@ module internal DocumentationSets =
             Path.GetExtension(path).Equals(".md", StringComparison.OrdinalIgnoreCase)
             && not (relative.StartsWith("api/", StringComparison.OrdinalIgnoreCase)))
 
-    let prepareCurrent
+    let prepareCurrentWithSourceLinks
+        (siteConfig: SiteConfig)
         (usesDocumentationSets: bool)
         (sets: DocsSet list)
         (package: PackageModel)
@@ -139,7 +141,7 @@ module internal DocumentationSets =
                 ContentProvider.setGuideOutputs sourceDir (DocsSet.routePrefix set) (guideFiles sourceDir files))
 
         let allowed = validateAndCollectOutputs capturedSets guideOutputs
-        let linkErrors = ResizeArray<string>()
+        let linkDiagnostics = ContentProvider.createLinkDiagnostics ()
 
         let sites =
             (ownedFiles, capturedSets)
@@ -153,28 +155,33 @@ module internal DocumentationSets =
 
                 let apiPackage =
                     if captured.Api then
-                        ContentProvider.applyApiDocsForSetWithLinkErrors
+                        ContentProvider.applyApiDocsForSetWithDiagnostics
                             sourceDir
                             root
+                            set.Source
                             package
                             (DocsSet.routePrefix set)
                             allowed
                             apiRoutes
                             options
-                            linkErrors
+                            siteConfig
+                            linkDiagnostics
                     else
                         package
 
                 let pages =
-                    ContentProvider.scanDocsSetWithLinkErrors linkErrors
+                    ContentProvider.scanDocsSetWithDiagnostics linkDiagnostics
                         { SourceDir = sourceDir
+                          SourceRootRelative = set.Source
                           SnippetSourceDir = root
+                          RepositoryRoot = root
                           Package = apiPackage
                           RoutePrefix = DocsSet.routePrefix set
                           SemanticPrefix = if usesDocumentationSets then set.Id + "/" else ""
                           SiteRootPath = siteRootPath
                           AllowedOutputs = allowed
                           SemanticCode = options
+                          SiteConfig = siteConfig
                           ApiRoutes = apiRoutes
                           Files = guideFiles sourceDir files }
 
@@ -183,7 +190,7 @@ module internal DocumentationSets =
                    Pages = pages }
                 : SiteBuilder.DocsSetSite))
 
-        ContentProvider.throwLinkErrors linkErrors
+        ContentProvider.throwLinkErrors linkDiagnostics.Errors
 
         let staticFiles =
             ownedFiles
@@ -210,9 +217,13 @@ module internal DocumentationSets =
 
         { Sites = sites
           Sets = capturedSets
+          Warnings = List.ofSeq linkDiagnostics.Warnings
           StaticFiles = staticFiles }
 
-    let prepareCaptured (materializedRoot: string) (content: ReleaseContentArtifact) package artifact siteRootPath =
+    let prepareCurrent usesDocumentationSets sets package artifact siteRootPath =
+        prepareCurrentWithSourceLinks SiteConfig.empty usesDocumentationSets sets package artifact siteRootPath
+
+    let prepareCapturedWithSourceLinks (siteConfig: SiteConfig) (materializedRoot: string) (content: ReleaseContentArtifact) package artifact siteRootPath =
         let guideOutputs =
             [ for set in content.DocsSets do
                   let prefix = routePrefix set.Path
@@ -231,7 +242,8 @@ module internal DocumentationSets =
                   yield! ContentProvider.setGuideOutputs sourceDir prefix files ]
 
         let allowed = validateAndCollectOutputs content.DocsSets guideOutputs
-        let linkErrors = ResizeArray<string>()
+        let linkDiagnostics = ContentProvider.createLinkDiagnostics ()
+        let repositoryRoot = Directory.GetParent(Path.GetFullPath materializedRoot).FullName
 
         let sites =
             content.DocsSets
@@ -250,15 +262,17 @@ module internal DocumentationSets =
 
                 let apiPackage =
                     if set.Api then
-                        ContentProvider.applyApiDocsForSetWithLinkErrors
+                        ContentProvider.applyApiDocsForSetWithDiagnostics
                             sourceDir
-                            materializedRoot
+                            repositoryRoot
+                            set.Source
                             package
                             prefix
                             allowed
                             apiRoutes
                             options
-                            linkErrors
+                            siteConfig
+                            linkDiagnostics
                     else
                         package
 
@@ -271,15 +285,18 @@ module internal DocumentationSets =
                         Path.Combine(sourceDir, page.SourcePath.Replace('/', Path.DirectorySeparatorChar)))
 
                 let pages =
-                    ContentProvider.scanDocsSetWithLinkErrors linkErrors
+                    ContentProvider.scanDocsSetWithDiagnostics linkDiagnostics
                         { SourceDir = sourceDir
-                          SnippetSourceDir = materializedRoot
+                          SourceRootRelative = set.Source
+                          SnippetSourceDir = repositoryRoot
+                          RepositoryRoot = repositoryRoot
                           Package = apiPackage
                           RoutePrefix = prefix
                           SemanticPrefix = set.Id + "/"
                           SiteRootPath = siteRootPath
                           AllowedOutputs = allowed
                           SemanticCode = options
+                          SiteConfig = siteConfig
                           ApiRoutes = apiRoutes
                           Files = files }
 
@@ -288,11 +305,15 @@ module internal DocumentationSets =
                    Pages = pages }
                 : SiteBuilder.DocsSetSite))
 
-        ContentProvider.throwLinkErrors linkErrors
+        ContentProvider.throwLinkErrors linkDiagnostics.Errors
 
         { Sites = sites
           Sets = content.DocsSets
+          Warnings = List.ofSeq linkDiagnostics.Warnings
           StaticFiles = [] }
+
+    let prepareCaptured materializedRoot content package artifact siteRootPath =
+        prepareCapturedWithSourceLinks SiteConfig.empty materializedRoot content package artifact siteRootPath
 
     let captureAssets (prepared: Prepared) =
         let work =

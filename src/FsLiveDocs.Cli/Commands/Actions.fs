@@ -128,7 +128,7 @@ module Actions =
                 else path.Replace('\\', '/')
 
             AnsiConsole.MarkupLine("")
-            let repoUrl = Workspace.loadSiteConfig().RepoUrl |> Option.map (fun value -> value.TrimEnd('/'))
+            let siteConfig = Workspace.loadSiteConfig()
             let files = diagnostics |> List.groupBy (fun d -> relative d.Location.File)
             for file, items in files do
                 AnsiConsole.MarkupLine($"[bold]{Markup.Escape file}[/]")
@@ -146,11 +146,11 @@ module Actions =
                             | "example-does-not-compile" -> "examples do not compile"
                             | _ -> code.Replace('-', ' ')
                         AnsiConsole.MarkupLine($"  {label} {matching.Length} {Markup.Escape(issue)} [grey](lines {Markup.Escape(lines)})[/]")
-                match repoUrl with
-                | Some root when file <> "(unknown source)" ->
-                    let url = $"{root}/blob/HEAD/{file}"
-                    AnsiConsole.MarkupLine($"  [link={Markup.Escape url}]View source on GitHub[/]")
-                | _ -> ()
+                if file <> "(unknown source)" then
+                    let line = items |> List.tryHead |> Option.map _.Location.Line |> Option.filter (fun value -> value > 0)
+                    match SourceUrl.forPath siteConfig file line with
+                    | Some url -> AnsiConsole.MarkupLine($"  [link={Markup.Escape url}]View source on repository host[/]")
+                    | None -> ()
 
             let count = diagnostics.Length
             let noun = if count = 1 then "warning" else "warnings"
@@ -223,6 +223,11 @@ module Actions =
         let analysis = analyzeDocumentation projectPaths (PackageExtraction.inputFingerprint projectPaths) package
         DocAnalysis.semanticArtifact analysis, analysis.Prelude
 
+    let reportSourceLinkWarnings warnAsError reportNote (warnings: string list) =
+        ContentProvider.throwLinkWarnings warnAsError (ResizeArray<string>(warnings))
+        if not warnAsError then
+            for warning in warnings do reportNote $"Warning: {warning}"
+
     let captureAction warnAsError dryRun projectPaths version output =
         let result =
             ReleaseCapture.capture
@@ -237,7 +242,10 @@ module Actions =
                   ReportProgress = (fun _ _ _ -> ())
                   ReportAudit = (fun analysis -> printAudit true analysis |> ignore)
                   ReportApiDiagnostics =
-                    (fun treatAsError diagnostics -> printApiDiagnostics treatAsError diagnostics |> ignore) }
+                    (fun treatAsError diagnostics -> printApiDiagnostics treatAsError diagnostics |> ignore)
+                  ReportLinkWarnings =
+                    (fun treatAsError warnings ->
+                        reportSourceLinkWarnings treatAsError (fun message -> AnsiConsole.MarkupLine($"[yellow]{Markup.Escape message}[/]")) warnings) }
 
         let report = result.Report
         if result.DryRun then
@@ -493,7 +501,8 @@ module Actions =
 
                 match configuredDocsSets projectPaths with
                 | Some sets ->
-                    let prepared = DocumentationSets.prepareCurrent true sets packageRaw semanticArtifact ""
+                    let prepared = DocumentationSets.prepareCurrentWithSourceLinks config true sets packageRaw semanticArtifact ""
+                    reportSourceLinkWarnings warnAsError reportNote prepared.Warnings
 
                     let prepared =
                         { prepared with
@@ -527,7 +536,7 @@ module Actions =
                             let historicalPackage = Json.deserialize packageCodec text
 
                             let historicalPrepared =
-                                DocumentationSets.prepareCurrent true sets historicalPackage semanticArtifact ""
+                                DocumentationSets.prepareCurrentWithSourceLinks config true sets historicalPackage semanticArtifact ""
 
                             let historicalPrepared =
                                 { historicalPrepared with
@@ -548,15 +557,16 @@ module Actions =
                     for source, prefix, files in prepared.StaticFiles do
                         ContentProvider.copyStaticFilesForSet source prefix files "output"
                 | None ->
-                    let linkErrors = ResizeArray<string>()
+                    let linkDiagnostics = ContentProvider.createLinkDiagnostics ()
                     let package =
-                        ContentProvider.applyApiDocsWithOptionsAndLinkErrors "docs" sourceDir packageRaw semanticCode linkErrors
+                        ContentProvider.applyApiDocsWithSourceLinks "docs" sourceDir "docs" packageRaw semanticCode config linkDiagnostics
 
                     let pages =
-                        ContentProvider.scanDocsWithOptionsWithLinkErrors "docs" sourceDir package "" semanticCode linkErrors
+                        ContentProvider.scanDocsWithSourceLinks "docs" sourceDir "docs" package "" semanticCode config linkDiagnostics
                         |> List.filter (fun page -> includeDrafts || not page.Metadata.Draft)
 
-                    ContentProvider.throwLinkErrors linkErrors
+                    ContentProvider.throwLinkErrors linkDiagnostics.Errors
+                    reportSourceLinkWarnings warnAsError reportNote (List.ofSeq linkDiagnostics.Warnings)
                     reportBlogDiagnostics warnAsError reportNote pages
 
                     SiteBuilder.buildAll historyDir package pages config theme "output"
@@ -691,7 +701,7 @@ module Actions =
 
                         let sites =
                             if content.UsesDocumentationSets then
-                                (DocumentationSets.prepareCaptured docsDir content packageRaw semanticArtifact "")
+                                (DocumentationSets.prepareCapturedWithSourceLinks content.Site docsDir content packageRaw semanticArtifact "")
                                     .Sites
                             else
                                 let semanticCode =
@@ -699,11 +709,19 @@ module Actions =
                                         Artifact = Some semanticArtifact
                                         Prelude = semanticArtifact.Prelude }
 
+                                let repositoryRoot = Directory.GetParent(Path.GetFullPath docsDir).FullName
+                                let sourceRootRelative = content.DocsSets.Head.Source
+                                let linkDiagnostics = ContentProvider.createLinkDiagnostics ()
+
                                 let package =
-                                    ContentProvider.applyApiDocsWithOptions docsDir docsDir packageRaw semanticCode
+                                    ContentProvider.applyApiDocsWithSourceLinks
+                                        docsDir repositoryRoot sourceRootRelative packageRaw semanticCode content.Site linkDiagnostics
 
                                 let pages =
-                                    ContentProvider.scanDocsWithOptions docsDir docsDir package contentRootPath semanticCode
+                                    ContentProvider.scanDocsWithSourceLinks
+                                        docsDir repositoryRoot sourceRootRelative package contentRootPath semanticCode content.Site linkDiagnostics
+                                ContentProvider.throwLinkErrors linkDiagnostics.Errors
+                                reportSourceLinkWarnings false (fun message -> AnsiConsole.MarkupLine($"[yellow]{Markup.Escape message}[/]")) (List.ofSeq linkDiagnostics.Warnings)
 
                                 [ { Set = content.DocsSets.Head
                                     Package = package
@@ -756,10 +774,18 @@ module Actions =
                             let artifact = History.loadSemanticArtifact checksum (Path.GetFullPath(Path.Combine(manifestRoot, semanticPath)))
                             { SemanticCode.defaults with Artifact = Some artifact; Prelude = artifact.Prelude }
                         | _ -> SemanticCode.disabled
-                    let package = ContentProvider.applyApiDocsWithOptions docsDir sourceDir packageRaw semanticCode
+                    let sourceRootRelative = Path.GetRelativePath(sourceDir, docsDir).Replace('\\', '/')
+                    let linkDiagnostics = ContentProvider.createLinkDiagnostics ()
+                    let package =
+                        ContentProvider.applyApiDocsWithSourceLinks
+                            docsDir sourceDir sourceRootRelative packageRaw semanticCode config linkDiagnostics
                     // Guide and API links stay inside the version being rendered. SiteBuilder owns
                     // the separate relative path used for shared shell/version navigation.
-                    let pages = ContentProvider.scanDocsWithOptions docsDir sourceDir package "" semanticCode
+                    let pages =
+                        ContentProvider.scanDocsWithSourceLinks
+                            docsDir sourceDir sourceRootRelative package "" semanticCode config linkDiagnostics
+                    ContentProvider.throwLinkErrors linkDiagnostics.Errors
+                    reportSourceLinkWarnings false (fun message -> AnsiConsole.MarkupLine($"[yellow]{Markup.Escape message}[/]")) (List.ofSeq linkDiagnostics.Warnings)
                     entry.Version, package, pages, docsDir)
 
             SiteBuilder.buildHistory manifest.CurrentVersion sites config theme outputDir

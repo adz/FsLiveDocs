@@ -1,6 +1,7 @@
 namespace FsLiveDocs.Core
 
 open System
+open System.Text.RegularExpressions
 
 /// <summary>Build-time configuration for the generated documentation site.</summary>
 type NavigationItem = {
@@ -14,6 +15,10 @@ type NavigationItem = {
 type SiteConfig = {
     /// <summary>Optional repository URL used to build source links for members.</summary>
     RepoUrl: string option
+    /// <summary>Optional repository file URL pattern containing <c>{branch}</c> and <c>{path}</c>; API links may also use <c>{line}</c>.</summary>
+    SourceUrlPattern: string option
+    /// <summary>Branch inserted into <see cref="SourceUrlPattern"/>. Defaults to <c>main</c>.</summary>
+    SourceBranch: string option
     /// <summary>Optional consumer name used in the navbar and page titles.</summary>
     SiteName: string option
     /// <summary>Optional short consumer mark used in the navbar.</summary>
@@ -48,6 +53,59 @@ and CommentsProvider =
     | NoComments
     | Giscus of GiscusSettings
     | Custom of rawHtml: string
+
+module SiteConfig =
+    let empty =
+        { RepoUrl = None
+          SourceUrlPattern = None
+          SourceBranch = None
+          SiteName = None
+          LogoText = None
+          LogoPath = None
+          LogoDarkPath = None
+          ShowSiteName = None
+          Stylesheet = None
+          Themes = None
+          Navigation = None
+          FSharpPrelude = None
+          CommentsProvider = None }
+
+/// Constructs source-control URLs shared by Markdown links and API member links.
+module SourceUrl =
+    let private effectivePattern (config: SiteConfig) =
+        match config.SourceUrlPattern with
+        | Some pattern when not (String.IsNullOrWhiteSpace pattern) -> Some pattern
+        | _ ->
+            config.RepoUrl
+            |> Option.filter (String.IsNullOrWhiteSpace >> not)
+            |> Option.map (fun repo -> repo.TrimEnd('/') + "/blob/{branch}/{path}#L{line}")
+
+    let private encodePath (path: string) =
+        path.Replace('\\', '/')
+        |> fun normalized -> normalized.Split('/')
+        |> Array.map Uri.EscapeDataString
+        |> String.concat "/"
+
+    /// Expands a configured source pattern for a repository-relative path and optional line.
+    let forPath (config: SiteConfig) (path: string) (line: int option) =
+        match effectivePattern config with
+        | None -> None
+        | Some pattern ->
+            let pattern =
+                if line.IsSome then pattern
+                else Regex.Replace(pattern, @"([?#&])[^/?#&=]*=?\{line\}", "")
+            let branch =
+                config.SourceBranch
+                |> Option.filter (String.IsNullOrWhiteSpace >> not)
+                |> Option.defaultValue "main"
+                |> Uri.EscapeDataString
+            let lineText = line |> Option.map string |> Option.defaultValue ""
+            Some(
+                pattern
+                    .Replace("{branch}", branch, StringComparison.Ordinal)
+                    .Replace("{path}", encodePath path, StringComparison.Ordinal)
+                    .Replace("{line}", lineText, StringComparison.Ordinal)
+            )
 
 /// <summary>Selection and presentation defaults for a page that renders a post listing.</summary>
 [<CLIMutable>]
