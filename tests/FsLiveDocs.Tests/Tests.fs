@@ -3092,6 +3092,51 @@ module DocumentationSetTests =
         Assert.Contains("href=\"../api.html\"", File.ReadAllText apiFallback)
 
     [<Fact>]
+    let ``legacy history version links use the written file for generic family members`` () =
+        let root = Path.Combine(Path.GetTempPath(), "fslivedocs-generic-history-" + Guid.NewGuid().ToString("N"))
+        let output = Path.Combine(root, "output")
+        let entity id =
+            { Id = id
+              Name = "Widget"
+              Kind = EntityKind.Type
+              Summary = []
+              Members = []
+              Examples = []
+              Entities = [] }
+        let entities = [ entity "Example.Widget`1"; entity "Example.Widget`2" ]
+        let package version =
+            { Version = version
+              Entities = entities
+              Scenarios = []
+              Organization = ApiOrganizationModel.derive entities
+              Packages = [] }
+        let releaseSet =
+            { Id = "default"
+              Title = "Docs"
+              Source = "docs"
+              Path = ""
+              Projects = []
+              IsDefault = true
+              Sidebar = true
+              Api = true
+              ApiEntityIds = entities |> List.map _.Id
+              FSharpPrelude = None }
+        let versionSite version : SiteBuilder.DocsSetVersionSite =
+            let model = package version
+            { Version = version
+              Package = model
+              Sets = [ { Set = releaseSet; Package = model; Pages = [] } ]
+              StaticRoot = None
+              UsesDocumentationSets = false }
+
+        SiteBuilder.buildDocsSetsHistory "2.0.0" [ versionSite "2.0.0"; versionSite "1.0.0" ] site "light" output
+
+        let oldPage = File.ReadAllText(Path.Combine(output, "history", "1.0.0", "api", "Example.Widget`1.html"))
+        Assert.Contains("href=\"../../../api/Example.Widget`1.html\"", oldPage)
+        Assert.Contains("href=\"../../../history/1.0.0/api/Example.Widget`1.html\"", oldPage)
+        Assert.DoesNotContain("href=\"../../../api/Example.Widget.html\"", oldPage)
+
+    [<Fact>]
     let ``content schema two captures resolved set and page identity`` () =
         let root =
             Path.Combine(Path.GetTempPath(), "fslivedocs-capsule-" + Guid.NewGuid().ToString("N"))

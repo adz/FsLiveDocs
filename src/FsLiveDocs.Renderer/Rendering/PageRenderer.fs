@@ -544,6 +544,10 @@ module PageRenderer =
               | EntityKind.Record -> renderRecordEntity e
               | _ -> renderGenericEntity e ]
 
+        // A family may supply the displayed name and content, but this page is written under
+        // the requested entity's ID. Version links must use that real output identity.
+        let outputPath = "api/" + requestedEntity.Id + ".html"
+
         match chrome with
         | Some value ->
             View.layoutWithChrome
@@ -556,7 +560,7 @@ module PageRenderer =
                 context.Theme
                 context.RootPath
                 context.SiteRootPath
-                ("api/" + e.Id + ".html")
+                outputPath
                 content
         | None ->
             View.layout
@@ -568,7 +572,7 @@ module PageRenderer =
                 context.Theme
                 context.RootPath
                 context.SiteRootPath
-                ("api/" + e.Id + ".html")
+                outputPath
                 content
         |> fun node -> RenderView.AsString.htmlNode node
 
