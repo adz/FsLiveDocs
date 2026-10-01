@@ -408,6 +408,26 @@ module internal DocAnalysis =
                     |> List.map (fun (path, project) -> path, { project with References = aggregateReferences })
                     |> Map.ofList
 
+                // A page that pins a target framework must compile against that framework's
+                // reference assemblies alone. Concatenating the default framework's references
+                // (netstandard2.1 beside net8.0, say) makes inline SRTP overloads resolve
+                // differently, so the framework's own built project assemblies are gathered here.
+                let frameworkBuiltAssemblies = Collections.Generic.Dictionary<string, string list>()
+
+                let builtAssembliesFor framework =
+                    match frameworkBuiltAssemblies.TryGetValue framework with
+                    | true, assemblies -> assemblies
+                    | _ ->
+                        let assemblies =
+                            resolvedProjects
+                            |> List.map (fun projectPath ->
+                                match (ProjectResolver.documentationBuildFor (Some framework) projectPath).TargetPath with
+                                | Some path -> path
+                                | None -> ProjectResolver.resolveAssemblyPath projectPath)
+                            |> List.filter (String.IsNullOrWhiteSpace >> not)
+                        frameworkBuiltAssemblies.[framework] <- assemblies
+                        assemblies
+
                 let writePageCache page artifact =
                     let path = pageCachePath page
                     let work =
@@ -420,10 +440,10 @@ module internal DocAnalysis =
                 let evaluationFor (selectedProject, targetFramework) =
                     match targetFramework with
                     | None -> evaluatedProjects.[selectedProject]
-                    | Some _ ->
-                        let selected = DocumentationCompiler.evaluateProjectFor targetFramework selectedProject
+                    | Some framework ->
+                        let selected = DocumentationCompiler.evaluateProjectFor (Some framework) selectedProject
                         let references =
-                            selected.References @ aggregateReferences
+                            selected.References @ builtAssembliesFor framework
                             |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
                         { selected with References = references }
 
