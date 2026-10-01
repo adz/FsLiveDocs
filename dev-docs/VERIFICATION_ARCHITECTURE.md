@@ -53,8 +53,18 @@ documented project's graph.
 - The request travels as JSON on the worker's stdin and the response on its stdout; both carry
   `Protocol.Version`, and a mismatch is rejected. Evaluated code's stdout is redirected to the worker's stderr so
   printing cannot corrupt the response. That output is not part of the compared transcript, as before the move.
-- One request is one fresh FSI session. `runExamples` sends a project's snapshot examples in one request, preserving
-  the shared-session shadowing they had in process.
+- One worker request carries a session policy. Snapshot examples that shadow each other use `SharedSession`, one FSI
+  session for the whole request. Independent Markdown `run` and `transcript` blocks use `FreshSessionPerExample`:
+  one worker process evaluates several blocks, each in its own FSI session, so definitions cannot leak while the
+  compiler and its JIT are loaded once. A request never mixes documented projects; `FsiTranscriptRunner.runIndependent`
+  groups by project graph, chunks each group, and `FSLIVEDOCS_TRANSCRIPT_BATCH` (default 16) bounds a batch.
+  Evaluation results are reassembled in case order, so concurrency does not reorder output. Batch size also bounds a
+  worker timeout's blast radius, because `Process.timeout` kills the whole process.
+- Batches run with at most `FSLIVEDOCS_TRANSCRIPT_WORKERS` concurrent worker processes (default
+  `min(ProcessorCount, 4)`). Each worker loads its own FSharp.Compiler.Service and its own FSI sessions, so raise the
+  limit only against observed memory. Examples that share a process-wide external resource — a fixed port, a
+  machine-global lock, one database — must be written to tolerate concurrent runs, or set the limit to 1. FsLiveDocs
+  does not detect such sharing.
 - Each worker runs under `Process.timeout` (10 minutes, or `FSLIVEDOCS_TRANSCRIPT_TIMEOUT_SECONDS`), which terminates the
   process tree. Isolation is for dependency identity and cleanup; it is not a security sandbox, and examples remain
   trusted code.

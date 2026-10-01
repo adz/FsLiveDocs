@@ -647,12 +647,26 @@ type IWriter =
         Assert.Equal<string list>([ "val shared: int = 20"; "val it: int = 42" ], outputs)
 
     [<Fact>]
+    let ``independent examples run in fresh sessions and keep input order`` () =
+        let first = annotationsContext "> let leaked = 1;;\nval leaked: int = 1"
+        let second = annotationsContext "> leaked + 1;;\nval it: int = 2"
+        let third = annotationsContext "> 3 + 4;;\nval it: int = 7"
+        let results = FsiTranscriptRunner.runIndependent [ first; second; third ]
+        Assert.Equal(3, results.Length)
+        Assert.Equal("val leaked: int = 1", results.[0].Output)
+        // A fresh session must not see the first example's binding.
+        Assert.Contains("error FS", results.[1].Output)
+        Assert.Equal("val it: int = 7", results.[2].Output)
+        Assert.True(results |> List.forall (fun result -> result.EvalMs >= 0.0 && result.SessionMs >= 0.0))
+
+    [<Fact>]
     let ``a transcript that outlives its time limit stops the worker`` () =
         let stopwatch = Diagnostics.Stopwatch.StartNew()
         let error =
             Assert.Throws<InvalidOperationException>(fun () ->
                 TranscriptHostClient.runWithin
                     (TimeSpan.FromSeconds 3.0)
+                    FsLiveDocs.TranscriptHost.TranscriptSessionPolicy.SharedSession
                     [ { Blocks = [| "System.Threading.Thread.Sleep 60000" |]; SetupCount = 0 } ]
                 |> ignore)
         Assert.Contains("timed out", error.Message)

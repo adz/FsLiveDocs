@@ -42,6 +42,27 @@ module GeneratedVerification =
             block.ExpandedSource, parsed.ExpectedOutput
         | _ -> invalidOp $"{block.Id} is not an executable documentation block."
 
+    let private executionContext (references: string list) (blocks: DocumentationBlock list) (block: DocumentationBlock) : FsiTranscriptRunner.DocTestExecutionContext =
+        let content, expected = executionContent blocks block
+        let projectPath =
+            block.Project
+            |> Option.defaultWith (fun () -> invalidOp $"{block.Id} has no project to execute against.")
+        let project = ProjectResolver.resolve projectPath
+        { Project = project
+          References = references
+          Scenario = None
+          Example = ExampleModel.Create(block.Id, content, expected, None) }
+
+    /// Compares one executed example against its transcript expectation.
+    let private comparison (output: string) (expected: string option) =
+        match expected with
+        | Some expected when output.Trim() <> expected.Trim() ->
+            false,
+            Some $"output mismatch.{Environment.NewLine}Expected:{Environment.NewLine}{expected}{Environment.NewLine}Actual:{Environment.NewLine}{output}"
+        | _ when output.Contains("error FS", StringComparison.OrdinalIgnoreCase) ->
+            false, Some $"execution failed:{Environment.NewLine}{output}"
+        | _ -> true, None
+
     /// <summary>
     /// Executes one already-discovered executable block without recompiling its owning unit.
     /// </summary>
@@ -52,19 +73,41 @@ module GeneratedVerification =
     /// xUnit facts, which may run alone.
     /// </remarks>
     let executeDiscoveredBlock (references: string list) (blocks: DocumentationBlock list) (block: DocumentationBlock) =
-        let content, expected = executionContent blocks block
-        let projectPath =
-            block.Project
-            |> Option.defaultWith (fun () -> invalidOp $"{block.Id} has no project to execute against.")
-        let project = ProjectResolver.resolve projectPath
-        let example = ExampleModel.Create(block.Id, content, expected, None)
         let output, expectedOutput, _ =
-            FsiTranscriptRunner.runExample { Project = project; References = references; Scenario = None; Example = example }
-        match expectedOutput with
-        | Some expected when output.Trim() <> expected.Trim() ->
-            invalidOp $"{block.Id} output mismatch.{Environment.NewLine}Expected:{Environment.NewLine}{expected}{Environment.NewLine}Actual:{Environment.NewLine}{output}"
-        | _ when output.Contains("error FS", StringComparison.OrdinalIgnoreCase) -> invalidOp $"{block.Id} execution failed:{Environment.NewLine}{output}"
+            FsiTranscriptRunner.runExample (executionContext references blocks block)
+        match comparison output expectedOutput with
+        | false, Some message -> invalidOp $"{block.Id} {message}"
         | _ -> ()
+
+    /// <summary>The result of executing one discovered block inside a batch.</summary>
+    type BlockExecutionResult =
+        { Id: string
+          Passed: bool
+          Message: string option
+          /// <summary>Time spent creating this block's FSI session, in milliseconds.</summary>
+          SessionMs: float
+          /// <summary>Time spent evaluating this block's blocks, in milliseconds.</summary>
+          EvalMs: float }
+
+    /// <summary>
+    /// Executes several independent blocks in batched workers, each in a fresh FSI session.
+    /// </summary>
+    /// <remarks>
+    /// Each target carries the page context its <c>run</c> prelude needs. Batches are grouped by
+    /// the block's project, so one worker never loads two documented graphs. This path does not
+    /// recompile: the caller has already run the audit.
+    /// </remarks>
+    let executeDiscoveredBlocks (references: string list) (targets: (DocumentationBlock list * DocumentationBlock) list) : BlockExecutionResult list =
+        let contexts = targets |> List.map (fun (blocks, block) -> executionContext references blocks block)
+        let results = FsiTranscriptRunner.runIndependent contexts
+        (targets, results)
+        ||> List.map2 (fun (_, block) result ->
+            let passed, message = comparison result.Output result.Expected
+            { Id = block.Id
+              Passed = passed
+              Message = message
+              SessionMs = result.SessionMs
+              EvalMs = result.EvalMs })
 
     let private executeBlock projectPath references sourcePath expandedMarkdown blockId =
         let blocks = DocumentationDiscovery.discoverMarkdown sourcePath (Some projectPath) expandedMarkdown

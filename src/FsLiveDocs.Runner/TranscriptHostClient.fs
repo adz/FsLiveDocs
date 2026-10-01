@@ -26,6 +26,14 @@ module TranscriptHostClient =
     [<Literal>]
     let TimeoutVariable = "FSLIVEDOCS_TRANSCRIPT_TIMEOUT_SECONDS"
 
+    /// <summary>Overrides how many worker processes may run at once for independent examples.</summary>
+    [<Literal>]
+    let WorkerLimitVariable = "FSLIVEDOCS_TRANSCRIPT_WORKERS"
+
+    /// <summary>Overrides how many examples one independent batch sends to a worker.</summary>
+    [<Literal>]
+    let BatchSizeVariable = "FSLIVEDOCS_TRANSCRIPT_BATCH"
+
     let private defaultTimeout = TimeSpan.FromMinutes 10.0
 
     // Stderr carries only diagnostics and output from evaluated code; keep enough to explain a failure.
@@ -141,8 +149,8 @@ module TranscriptHostClient =
         invalidOp $"Transcript worker failed: {detail}{tail}"
 
     /// <summary>Evaluates examples in one fresh worker process, killing it and its children after <paramref name="limit" />.</summary>
-    /// <returns>One normalized output per example, in order.</returns>
-    let runWithin (limit: TimeSpan) (examples: TranscriptExample list) : string list =
+    /// <returns>One normalized output and timing per example, in order.</returns>
+    let runWithin (limit: TimeSpan) (sessions: TranscriptSessionPolicy) (examples: TranscriptExample list) : (string * TranscriptExampleTiming) list =
         if examples.IsEmpty then
             []
         else
@@ -152,7 +160,11 @@ module TranscriptHostClient =
 
             let worker = stagedWorkers.GetOrAdd(worker, fun path -> lazy (stage path)).Value
 
-            let request = Protocol.serializeRequest { ProtocolVersion = Protocol.Version; Examples = List.toArray examples }
+            let request =
+                Protocol.serializeRequest
+                    { ProtocolVersion = Protocol.Version
+                      Sessions = sessions
+                      Examples = List.toArray examples }
 
             let specification =
                 Process.commandArgs (dotnetHost ()) [ "exec"; worker ]
@@ -178,13 +190,26 @@ module TranscriptHostClient =
                     failure response.Error result.StdErr
                 elif response.Outputs.Length <> examples.Length then
                     failure $"it returned {response.Outputs.Length} outputs for {examples.Length} examples." result.StdErr
+                elif isNull (box response.Timings) then
+                    failure $"it returned no timings for {examples.Length} examples." result.StdErr
+                elif response.Timings.Length <> examples.Length then
+                    failure $"it returned {response.Timings.Length} timings for {examples.Length} examples." result.StdErr
                 else
-                    List.ofArray response.Outputs
+                    List.ofArray (Array.zip response.Outputs response.Timings)
             | Exit.Failure(Cause.Fail(ProcessError.StageFailed stageFailure)) ->
                 failure $"exit code {stageFailure.Result.ExitCode}." stageFailure.Result.StdErr
             | Exit.Failure(Cause.Fail processError) -> failure (ProcessError.describe processError) ""
             | Exit.Failure cause -> failure (string cause) ""
 
-    /// <summary>Evaluates examples in one fresh worker process and returns one output per example.</summary>
+    /// <summary>Evaluates examples in one worker session and returns one output per example.</summary>
     /// <remarks>The worker is stopped after ten minutes, or after <c>FSLIVEDOCS_TRANSCRIPT_TIMEOUT_SECONDS</c>.</remarks>
-    let run (examples: TranscriptExample list) : string list = runWithin (timeout ()) examples
+    let run (examples: TranscriptExample list) : string list =
+        runWithin (timeout ()) TranscriptSessionPolicy.SharedSession examples |> List.map fst
+
+    /// <summary>Evaluates independent examples in one worker, each in its own fresh FSI session.</summary>
+    /// <remarks>
+    /// The worker process is shared so the compiler and its JIT are loaded once; the sessions stay separate so
+    /// independent examples cannot see each other's definitions. Keep one request to one documented project graph.
+    /// </remarks>
+    let runFresh (examples: TranscriptExample list) : (string * TranscriptExampleTiming) list =
+        runWithin (timeout ()) TranscriptSessionPolicy.FreshSessionPerExample examples

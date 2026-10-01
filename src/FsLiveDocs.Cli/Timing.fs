@@ -25,7 +25,8 @@ module internal Timing =
           Mode: string
           Kind: string
           DurationMs: float
-          Outcome: string }
+          Outcome: string
+          Detail: string option }
 
     type private Report =
         { SchemaVersion: int
@@ -100,7 +101,7 @@ module internal Timing =
                       Detail = phase.Detail }))
 
     /// Records one example execution. Cheap no-op when timing is disabled.
-    let case (id: string) (project: string) (mode: string) (kind: string) (durationMs: float) (outcome: string) =
+    let case (id: string) (project: string) (mode: string) (kind: string) (durationMs: float) (outcome: string) (detail: string option) =
         if enabled then
             lock gate (fun () ->
                 cases.Add
@@ -109,7 +110,8 @@ module internal Timing =
                       Mode = mode
                       Kind = kind
                       DurationMs = durationMs
-                      Outcome = outcome })
+                      Outcome = outcome
+                      Detail = detail })
 
     let private jsonOptions =
         let options = JsonSerializerOptions(WriteIndented = true)
@@ -161,7 +163,8 @@ module internal Timing =
 
                 AnsiConsole.MarkupLine("  Slowest cases:")
                 for item in slowest do
-                    AnsiConsole.MarkupLine($"    [grey]{item.DurationMs / 1000.0,7:N2}s[/] {Markup.Escape item.Id} [grey]({Markup.Escape item.Kind}, {Markup.Escape item.Outcome})[/]")
+                    let detail = item.Detail |> Option.map (fun value -> $" [grey]{Markup.Escape value}[/]") |> Option.defaultValue ""
+                    AnsiConsole.MarkupLine($"    [grey]{item.DurationMs / 1000.0,7:N2}s[/] {Markup.Escape item.Id} [grey]({Markup.Escape item.Kind}, {Markup.Escape item.Outcome})[/]{detail}")
 
             AnsiConsole.MarkupLine($"  Report: [grey]{Markup.Escape(Path.GetFullPath path)}[/] [grey](phase sum {phaseTotal / 1000.0:N1}s)[/]")
             Some(Path.GetFullPath path)

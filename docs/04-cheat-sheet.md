@@ -71,6 +71,7 @@ Links between documentation pages use their source Markdown paths, including the
 | `--verbosity <level>` | Set output detail: `warnings` (default), `info`, or `debug`. |
 | `--interactive <bool>` | Enable or disable animated, stage-aware progress (default: `true`); redirected output uses plain progress automatically. |
 | `--banner <bool>` | Show or hide the LiveDocs banner (default: `true`). |
+| `--timings` | With `test`, `capture`, `audit`, `build`, `build-history`, or `history-check`, write `.livedocs/timings.json` with phase and per-example durations and print a summary. |
 | `--host <address>` | Set the preview bind address. |
 | `--port <number>` | Set the preview port. |
 | `--ignore <names>` | Add watcher directory names to ignore. |

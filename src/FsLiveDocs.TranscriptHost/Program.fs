@@ -19,13 +19,17 @@ let main _ =
             if request.ProtocolVersion <> Protocol.Version then
                 { ProtocolVersion = Protocol.Version
                   Outputs = [||]
+                  Timings = [||]
                   Error = $"Unsupported transcript protocol version {request.ProtocolVersion}; this worker speaks {Protocol.Version}." }
             else
+                let freshSessions = request.Sessions = TranscriptSessionPolicy.FreshSessionPerExample
+                let outputs, timings = Evaluation.run freshSessions request.Examples
                 { ProtocolVersion = Protocol.Version
-                  Outputs = Evaluation.run request.Examples
+                  Outputs = outputs
+                  Timings = timings
                   Error = null }
         with error ->
-            { ProtocolVersion = Protocol.Version; Outputs = [||]; Error = error.ToString() }
+            { ProtocolVersion = Protocol.Version; Outputs = [||]; Timings = [||]; Error = error.ToString() }
 
     protocolOut.Write(Protocol.serializeResponse response)
     protocolOut.Flush()

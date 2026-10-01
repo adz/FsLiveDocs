@@ -45,13 +45,15 @@ The workflow changes remove about 48 minutes from the measured Axial release pat
 
 ## Measured result
 
-Items 1-3 were implemented and measured against Axial's documentation set — 125 pages, 612 F# blocks, 192 executed cases — on 2026-10-01 with a warm `.livedocs/cache`:
+Items 1-5 were implemented and measured against Axial's documentation set — 125 pages, 612 F# blocks, 192 executed cases — on 2026-10-01 with a warm `.livedocs/cache`:
 
-| Command | Before | After |
-| --- | ---: | ---: |
-| `livedocs test` | 24m 21s | 13m 40s |
-| `livedocs capture` | 18m 51s | 13m 15s |
+| Command | Baseline | After items 1-3 | After items 1-5 |
+| --- | ---: | ---: | ---: |
+| `livedocs test` | 24m 21s | 13m 40s | **3m 28s** |
+| `livedocs capture` | 18m 51s | 13m 15s | **3m 33s** |
 
-The release path used to run both commands. It now runs `capture` alone: capture audits and executes examples once and writes the capsule from that result, so 43m 12s becomes 13m 15s. The dispatch that re-ran `livedocs test` for the Pages job removes another 24m 14s. The `capture` output was inspected as a valid capsule with the same inventory the release expects.
+Items 1-3 removed the duplicate pass and the repeated work inside one command. Items 4-5 replaced the one-process-per-example execution with batches grouped by project graph, each example in a fresh FSI session, run by at most four concurrent workers. Example execution on the release path fell from 744.8s to 157.4s.
 
-`--timings` recorded the new release pass as extraction 10.8s, compiler audit 33.5s, and example execution 744.8s over 192 cases. Execution is now about 94% of the pass and averages 3.9s per case, because every independent Markdown case still starts its own worker process and FSI session. Items 4-5 — batching by project graph with a fresh session per example, then bounded concurrency — are the remaining lever. The full Axial release also runs `dotnet test`; Axial's tests are unit tests rather than generated documentation cases, so they do not duplicate this pass.
+The release path used to run `test` then `capture`. It now runs `capture` alone: capture audits and executes examples once and writes the capsule from that result, so the measured release verification is 43m 12s to 3m 33s. The dispatch that re-ran `livedocs test` for the Pages job removes another 24m 14s. The `capture` output was inspected as a valid capsule with the same inventory the release expects.
+
+The worker limit defaults to `min(ProcessorCount, 4)`; `FSLIVEDOCS_TRANSCRIPT_WORKERS` overrides it and `FSLIVEDOCS_TRANSCRIPT_BATCH` overrides the batch size (default 16). `--timings` records the FSI session time per Markdown case, so raising the limit can be judged against memory rather than guessed. Item 6 (cross-invocation caching) remains.

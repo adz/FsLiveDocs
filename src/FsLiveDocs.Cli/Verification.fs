@@ -84,7 +84,7 @@ module internal Verification =
                           | ExampleStatus.FirstCut -> true
                           | _ -> false)
 
-                  Timing.case projectPath projectPath "snapshot" "snapshot-group" groupMs (if passed then "pass" else "fail")
+                  Timing.case projectPath projectPath "snapshot" "snapshot-group" groupMs (if passed then "pass" else "fail") None
 
                   for snapshot in snapshots.Examples do
                       let expected = snapshot.ExpectedOutput |> Option.defaultValue ""
@@ -105,50 +105,54 @@ module internal Verification =
                             DurationMs = 0.0 } ]
 
     /// Independent Markdown `run` and `transcript` blocks. Each is executed without recompiling
-    /// the owning unit: the audit that ran before execution proved every block compiles.
+    /// the owning unit: the audit that ran before execution proved every block compiles. Blocks are
+    /// batched by project graph, one fresh FSI session each, with bounded worker concurrency.
     let private executeMarkdown (pages: DocAnalysis.Page list) (references: string list) =
-        [ for page in pages do
-              let externallyExecuted =
-                  page.Blocks
-                  |> List.choose (fun block ->
-                      match block.Mode, block.Origin with
-                      | (Run | Transcript), XmlExample -> Some block.Id
-                      | _ -> None)
-                  |> Set.ofList
+        let targets =
+            [ for page in pages do
+                  let externallyExecuted =
+                      page.Blocks
+                      |> List.choose (fun block ->
+                          match block.Mode, block.Origin with
+                          | (Run | Transcript), XmlExample -> Some block.Id
+                          | _ -> None)
+                      |> Set.ofList
 
-              let executable =
-                  DocumentationDiscovery.verificationCases page.SelectedProject page.Prelude page.Blocks
-                  |> List.choose (function
-                      | Execute block when not (externallyExecuted.Contains block.Id) -> Some block
-                      | ExecuteTranscript block when not (externallyExecuted.Contains block.Id) -> Some block
-                      | _ -> None)
+                  for verificationCase in DocumentationDiscovery.verificationCases page.SelectedProject page.Prelude page.Blocks do
+                      match verificationCase with
+                      | Execute block when not (externallyExecuted.Contains block.Id) -> yield page, block
+                      | ExecuteTranscript block when not (externallyExecuted.Contains block.Id) -> yield page, block
+                      | _ -> () ]
 
-              for block in executable do
-                  let stopwatch = Stopwatch.StartNew()
+        if targets.IsEmpty then
+            []
+        else
+            let results =
+                GeneratedVerification.executeDiscoveredBlocks
+                    references
+                    (targets |> List.map (fun (page, block) -> page.Blocks, block))
 
-                  let passed, message =
-                      try
-                          GeneratedVerification.executeDiscoveredBlock references page.Blocks block
-                          true, None
-                      with error ->
-                          false, Some error.Message
+            (targets, results)
+            ||> List.map2 (fun (page, block) result ->
+                let mode = modeName block.Mode
+                let durationMs = result.SessionMs + result.EvalMs
 
-                  Timing.case
-                      block.Id
-                      page.SelectedProject
-                      (modeName block.Mode)
-                      "markdown"
-                      stopwatch.Elapsed.TotalMilliseconds
-                      (if passed then "pass" else "fail")
+                Timing.case
+                    block.Id
+                    page.SelectedProject
+                    mode
+                    "markdown"
+                    durationMs
+                    (if result.Passed then "pass" else "fail")
+                    (Some $"session {result.SessionMs:N0}ms")
 
-                  yield
-                      { Id = block.Id
-                        Project = page.SelectedProject
-                        Mode = modeName block.Mode
-                        Kind = "markdown"
-                        Passed = passed
-                        Message = message
-                        DurationMs = stopwatch.Elapsed.TotalMilliseconds } ]
+                { Id = block.Id
+                  Project = page.SelectedProject
+                  Mode = mode
+                  Kind = "markdown"
+                  Passed = result.Passed
+                  Message = result.Message
+                  DurationMs = durationMs })
 
     let private analyze (request: VerificationRequest) (package: PackageModel) projectFingerprint =
         Timing.measure "Compiler audit" None (fun () ->
