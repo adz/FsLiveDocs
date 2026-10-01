@@ -42,77 +42,47 @@ module internal ReleaseCapture =
 
     let private currentRevision () = Git.currentRevision (Directory.GetCurrentDirectory())
 
-    let private verifyExplicitCases projectPaths (package: PackageModel) (pages: DocAnalysis.Page list) references =
-        // Most projects have no snapshot examples. Do not reload every documented assembly after
-        // extraction merely to rediscover that fact: assembly load contexts retain substantial
-        // compiler metadata for the lifetime of capture.
-        if not (DocTestRunner.snapshotExampleNames package).IsEmpty then
-            for projectPath in projectPaths do
-                let projectPackage = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
-                let snapshots = DocTestRunner.collectSnapshots projectPackage projectPath references |> Async.RunSynchronously
-                for snapshot in snapshots.Examples do
-                    match snapshot.Status with
-                    | ExampleStatus.Verified | ExampleStatus.FirstCut -> ()
-                    | ExampleStatus.Mismatch ->
-                        invalidOp $"XML example {snapshot.Name} output did not match its expected release output."
-                    | ExampleStatus.Error ->
-                        invalidOp $"XML example {snapshot.Name} failed during release capture: {snapshot.ActualOutput}"
-
-        for page in pages do
-            let externallyExecuted =
-                page.Blocks
-                |> List.choose (fun block ->
-                    match block.Mode, block.Origin with
-                    | (Run | Transcript), XmlExample -> Some block.Id
-                    | _ -> None)
-                |> Set.ofList
-
-            for case in
-                DocumentationDiscovery.generatedCases
-                    page.SelectedProject
-                    page.Prelude
-                    page.Relative
-                    page.Expanded
-                    externallyExecuted do
-                match case.Action with
-                | ExecuteBlock _ | ExecuteTranscriptBlock _ ->
-                    GeneratedVerification.runCase references case |> Async.RunSynchronously
-                | CompileUnit _ -> ()
-
     /// Runs the complete release-capture policy. Reporting functions may present progress, but
     /// cannot weaken compiler, warning, execution, provenance, or integrity checks.
     let capture (request: Request) =
         if request.ProjectPaths.IsEmpty then invalidOp "Release capture requires at least one project path."
         let prelude = request.Site.FSharpPrelude |> Option.defaultValue ""
-        let extracted, apiDiagnostics, projectFingerprint =
-            PackageExtraction.extractCachedWithProgress request.ReportProgress prelude request.ProjectPaths
-        let package = { extracted with Version = request.Version |> Option.defaultValue extracted.Version }
-        let analysis =
-            match request.DocsSets with
-            | Some sets ->
-                DocAnalysis.analyzeDocsSetsWithProgress
-                    request.ReportProgress
-                    sets
-                    request.ProjectPaths
-                    projectFingerprint
-                    package
-            | None ->
-                DocAnalysis.analyzeWithProgress
-                    request.ReportProgress
-                    prelude
-                    request.ProjectPaths
-                    projectFingerprint
-                    package
 
-        request.ReportAudit analysis
+        // Capture owns the single release verification pass: it audits and executes examples once
+        // and then assembles the capsule from the same result, instead of running `test` first and
+        // executing every example a second time.
+        let verification =
+            Verification.run
+                { ProjectPaths = request.ProjectPaths
+                  Version = request.Version
+                  DocsSets = request.DocsSets
+                  Prelude = prelude
+                  WarnAsError = request.WarnAsError
+                  ReportProgress = request.ReportProgress
+                  ReportAudit = request.ReportAudit
+                  ReportApiDiagnostics = request.ReportApiDiagnostics
+                  ExecuteExamples = true }
+
+        let package = verification.Package
+        let analysis = verification.Analysis
+
         if DocAnalysis.compilerFailureCount analysis <> 0 then
             invalidOp "Documentation contains uncovered or non-compiling F# blocks. Fix the mapped audit failures before capture."
-        request.ReportApiDiagnostics request.WarnAsError apiDiagnostics
-        if request.WarnAsError && not apiDiagnostics.IsEmpty then
+        if request.WarnAsError && not verification.ApiDiagnostics.IsEmpty then
             invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
 
-        // Materialize compiler-derived meaning before snapshot execution so the large check-result
-        // graph is no longer live while FSI verifies examples.
+        let failed = verification.Outcomes |> List.filter (fun outcome -> not outcome.Passed)
+        if not failed.IsEmpty then
+            let detail =
+                failed
+                |> List.truncate 5
+                |> List.map (fun outcome ->
+                    let message = outcome.Message |> Option.defaultValue "failed"
+                    $"  {outcome.Id}: {message}")
+                |> String.concat Environment.NewLine
+            invalidOp $"Documentation examples failed before capture:{Environment.NewLine}{detail}"
+
+        // Materialize compiler-derived meaning before the capsule is assembled.
         let semantic = DocAnalysis.semanticArtifact analysis
 
         let resolvedSets =
@@ -120,19 +90,8 @@ module internal ReleaseCapture =
             |> Option.defaultValue
                 [ DocsSet.implicit request.Site.SiteName request.ProjectPaths request.Site.FSharpPrelude ]
 
-        let pages =
-            match request.DocsSets with
-            | Some sets -> DocAnalysis.pagesForDocsSets sets request.ProjectPaths package
-            | None ->
-                DocAnalysis.pages request.ProjectPaths package
-                |> List.map (fun page -> { page with Prelude = prelude })
-
-        let references =
-            request.ProjectPaths
-            |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
-            |> List.filter (String.IsNullOrWhiteSpace >> not)
-            |> List.distinct
-        verifyExplicitCases request.ProjectPaths package pages references
+        // The audit already resolved these pages; reuse them rather than scanning the tree again.
+        let pages = verification.Pages
 
         let prepared =
             DocumentationSets.prepareCurrentWithSourceLinks

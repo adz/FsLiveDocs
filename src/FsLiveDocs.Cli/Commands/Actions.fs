@@ -68,7 +68,7 @@ module Actions =
             invalidOp $"Pagefind failed with exit code {proc.ExitCode}: {error.Result}"
         output.Result
 
-    let private configuredDocsSets projectPaths =
+    let configuredDocsSets projectPaths =
         Workspace.loadDocsSetConfigs ()
         |> Option.map (fun configured ->
             let site = Workspace.loadSiteConfig ()
@@ -182,7 +182,7 @@ module Actions =
         |> List.map (fun (line, column, message) -> $"{line}:{column} {message}")
         |> String.concat (Environment.NewLine + "          ")
 
-    let private printAudit showSuccess (analysis: DocAnalysis.Analysis) =
+    let internal printAudit showSuccess (analysis: DocAnalysis.Analysis) =
         let diagnosticsByBlock = analysis.Errors |> List.groupBy fst |> Map.ofList
         let mutable failures = 0
         for block in analysis.Blocks do
@@ -213,8 +213,10 @@ module Actions =
 
     let auditAction (warnAsError: bool) (projectPaths: string list) =
         if List.isEmpty projectPaths then invalidOp "Audit requires at least one project path."
-        let package, diagnostics, projectFingerprint = getUnifiedPackageCached projectPaths
-        let analysis = analyzeDocumentation projectPaths projectFingerprint package
+        let package, diagnostics, projectFingerprint =
+            Timing.measure "Extract API documentation" None (fun () -> getUnifiedPackageCached projectPaths)
+        let analysis =
+            Timing.measure "Compiler audit" None (fun () -> analyzeDocumentation projectPaths projectFingerprint package)
         let blockFailures = printAudit true analysis
         let apiFailures = printApiDiagnostics warnAsError diagnostics
         if blockFailures = 0 && apiFailures = 0 then 0 else 1
@@ -477,17 +479,21 @@ module Actions =
             let mutable deferredApiDiagnostics: ApiDiagnostic list = []
             let pipeline reportStage reportProgress reportNote =
                 reportStage "Extracting API documentation"
-                let extracted, apiDiagnostics, projectFingerprint = getUnifiedPackageCachedWithProgress reportProgress projectPaths
+                let extracted, apiDiagnostics, projectFingerprint =
+                    Timing.measure "Extract API documentation" None (fun () ->
+                        getUnifiedPackageCachedWithProgress reportProgress projectPaths)
                 let packageRaw = { extracted with Version = version |> Option.defaultValue extracted.Version }
                 reportStage "Checking documentation examples"
                 let semanticArtifact, prelude =
-                    prepareBuildDocumentation reportProgress reportNote projectPaths projectFingerprint packageRaw
+                    Timing.measure "Compiler audit" None (fun () ->
+                        prepareBuildDocumentation reportProgress reportNote projectPaths projectFingerprint packageRaw)
                 if warnAsError then
                     if printApiDiagnostics true apiDiagnostics <> 0 then
                         invalidOp "API documentation warnings were treated as errors because --warn-as-error was passed."
                 else
                     deferredApiDiagnostics <- apiDiagnostics
                 reportStage "Rendering documentation site"
+                let renderPhase = Timing.beginPhase "Render documentation site" None
                 let sourceDir = Run.orRaise FileSystemError.describe "Could not determine the current directory" FileSystem.getCurrentDirectory
                 let semanticCode =
                     { SemanticCode.defaults with
@@ -572,8 +578,9 @@ module Actions =
                     SiteBuilder.buildAll historyDir package pages config theme "output"
                     ContentProvider.copyStaticFiles "docs" "output"
 
+                Timing.endPhase renderPhase
                 reportStage "Building search index"
-                runPagefind "output" |> ignore
+                Timing.measure "Build search index" None (fun () -> runPagefind "output" |> ignore)
             if ConsoleOutput.interactive then
                 // Wrapper scripts commonly run the preview server as a background job so they can
                 // monitor a stop file. Spectre classifies that process as non-interactive even though

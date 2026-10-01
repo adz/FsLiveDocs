@@ -25,36 +25,54 @@ module GeneratedVerification =
             invalidOp details
     }
 
-    let private executeBlock projectPath references sourcePath expandedMarkdown blockId =
-        let block =
-            DocumentationDiscovery.discoverMarkdown sourcePath (Some projectPath) expandedMarkdown
-            |> List.tryFind (fun candidate -> candidate.Id = blockId)
-            |> Option.defaultWith (fun () -> invalidOp $"Generated execution case no longer exists: {blockId}. Regenerate tests.")
-        let content, expected =
-            match block.Mode with
-            | Run ->
-                let pageSource =
-                    DocumentationDiscovery.discoverMarkdown sourcePath (Some projectPath) expandedMarkdown
-                    |> List.takeWhile (fun candidate -> candidate.Id <> block.Id)
-                    |> fun preceding -> preceding @ [ block ]
-                    |> List.filter (fun candidate ->
-                        match candidate.Mode with Page | Prepare | Run -> true | _ -> false)
-                    |> List.map _.ExpandedSource
-                    |> String.concat "\n\n"
-                pageSource, None
-            | Transcript ->
-                let parsed = ExampleTranscript.parse block.ExpandedSource
-                block.ExpandedSource, parsed.ExpectedOutput
-            | _ -> invalidOp $"{blockId} is not an executable documentation block."
+    let private executionContent (blocks: DocumentationBlock list) (block: DocumentationBlock) =
+        match block.Mode with
+        | Run ->
+            let pageSource =
+                blocks
+                |> List.takeWhile (fun candidate -> candidate.Id <> block.Id)
+                |> fun preceding -> preceding @ [ block ]
+                |> List.filter (fun candidate ->
+                    match candidate.Mode with Page | Prepare | Run -> true | _ -> false)
+                |> List.map _.ExpandedSource
+                |> String.concat "\n\n"
+            pageSource, None
+        | Transcript ->
+            let parsed = ExampleTranscript.parse block.ExpandedSource
+            block.ExpandedSource, parsed.ExpectedOutput
+        | _ -> invalidOp $"{block.Id} is not an executable documentation block."
+
+    /// <summary>
+    /// Executes one already-discovered executable block without recompiling its owning unit.
+    /// </summary>
+    /// <remarks>
+    /// A caller that has already run a successful compiler audit (the native <c>test</c> and
+    /// <c>capture</c> path) owns that guarantee, so recompiling here would repeat work the audit
+    /// just did. <see cref="runCase" /> keeps its compile-before-execute contract for generated
+    /// xUnit facts, which may run alone.
+    /// </remarks>
+    let executeDiscoveredBlock (references: string list) (blocks: DocumentationBlock list) (block: DocumentationBlock) =
+        let content, expected = executionContent blocks block
+        let projectPath =
+            block.Project
+            |> Option.defaultWith (fun () -> invalidOp $"{block.Id} has no project to execute against.")
         let project = ProjectResolver.resolve projectPath
         let example = ExampleModel.Create(block.Id, content, expected, None)
         let output, expectedOutput, _ =
             FsiTranscriptRunner.runExample { Project = project; References = references; Scenario = None; Example = example }
         match expectedOutput with
         | Some expected when output.Trim() <> expected.Trim() ->
-            invalidOp $"{blockId} output mismatch.{Environment.NewLine}Expected:{Environment.NewLine}{expected}{Environment.NewLine}Actual:{Environment.NewLine}{output}"
-        | _ when output.Contains("error FS", StringComparison.OrdinalIgnoreCase) -> invalidOp $"{blockId} execution failed:{Environment.NewLine}{output}"
+            invalidOp $"{block.Id} output mismatch.{Environment.NewLine}Expected:{Environment.NewLine}{expected}{Environment.NewLine}Actual:{Environment.NewLine}{output}"
+        | _ when output.Contains("error FS", StringComparison.OrdinalIgnoreCase) -> invalidOp $"{block.Id} execution failed:{Environment.NewLine}{output}"
         | _ -> ()
+
+    let private executeBlock projectPath references sourcePath expandedMarkdown blockId =
+        let blocks = DocumentationDiscovery.discoverMarkdown sourcePath (Some projectPath) expandedMarkdown
+        let block =
+            blocks
+            |> List.tryFind (fun candidate -> candidate.Id = blockId)
+            |> Option.defaultWith (fun () -> invalidOp $"Generated execution case no longer exists: {blockId}. Regenerate tests.")
+        executeDiscoveredBlock references blocks block
 
     /// Runs one generated case without exposing verification ordering or composition to its caller.
     let runCase references (case: GeneratedVerificationCase) = async {

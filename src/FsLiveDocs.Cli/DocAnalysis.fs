@@ -51,7 +51,9 @@ module internal DocAnalysis =
           Errors: (string * (int * int * string)) list
           Prelude: string
           Artifact: SemanticDocumentationArtifact option
-          CachePath: string }
+          CachePath: string
+          /// <summary>The resolved pages the analysis walked, so callers do not repeat the scan.</summary>
+          Pages: Page list }
 
     type private ApiNameCandidate = { FullName: string; OpenPath: string option }
 
@@ -480,7 +482,8 @@ module internal DocAnalysis =
           Errors = errors
           Prelude = defaultPrelude
           Artifact = artifact
-          CachePath = cachePath }
+          CachePath = cachePath
+          Pages = pages }
 
     let analyzeWithProgress
         reportProgress

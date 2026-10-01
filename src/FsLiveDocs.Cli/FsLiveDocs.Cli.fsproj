@@ -30,12 +30,14 @@
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="LiveDocsBanner.fs" />
     <Compile Include="CommandLine.fs" />
+    <Compile Include="Timing.fs" />
     <Compile Include="Templates.fs" />
     <Compile Include="Workspace.fs" />
     <Compile Include="AnalysisCache.fs" />
     <Compile Include="PackageExtraction.fs" />
     <Compile Include="DocAnalysis.fs" />
     <Compile Include="DocumentationSets.fs" />
+    <Compile Include="Verification.fs" />
     <Compile Include="Git.fs" />
     <Compile Include="ReleaseCapture.fs" />
     <Compile Include="ReleaseHistoryCommands.fs" />

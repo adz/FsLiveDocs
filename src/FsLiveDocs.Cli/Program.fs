@@ -44,6 +44,8 @@ module Program =
                     (results.TryGetResult Verbosity)
                     (results.GetResult(Interactive, defaultValue = true))
                     (results.GetResult(Banner, defaultValue = true))
+                Timing.configure (results.Contains Timings)
+                Timing.label (args |> Array.truncate 3 |> String.concat " ")
                 ConsoleOutput.animateBanner <-
                     ConsoleOutput.interactive && ConsoleOutput.banner && (results.Contains Build || results.Contains Watch)
                 let theme = results.GetResult(Theme, defaultValue = "light")
@@ -106,7 +108,10 @@ module Program =
                     let projectPaths = results.GetResult Capture |> Actions.resolveProjects "capture"
                     let version = results.TryGetResult Arguments.Version
                     let output = results.TryGetResult Output
-                    Actions.captureAction (results.Contains Warn_As_Error) (results.Contains Dry_Run) projectPaths version output
+                    let exitCode =
+                        Actions.captureAction (results.Contains Warn_As_Error) (results.Contains Dry_Run) projectPaths version output
+                    Timing.write Timing.DefaultPath |> ignore
+                    exitCode
 
                 elif results.Contains Inspect then
                     let path = results.GetResult Inspect
@@ -211,87 +216,53 @@ module Program =
                 elif results.Contains Test then
                     Actions.printBanner()
                     let projectPaths = results.GetResult Test |> Actions.resolveProjects "test"
-                    let mutable allPassed = Actions.auditAction (results.Contains Warn_As_Error) projectPaths = 0
-                    // The same references the generated cases receive. Passing none, as the retired
-                    // path did, made any example touching another project fail for want of a
-                    // reference rather than for anything wrong with the example.
-                    let references =
-                        projectPaths
-                        |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
-                        |> List.filter (String.IsNullOrWhiteSpace >> not)
-                        |> List.distinct
-                    for projectPath in projectPaths do
-                        AnsiConsole.MarkupLine($"[bold blue]➜ Testing:[/] {projectPath}")
-                        let snapshots =
-                            AnsiConsole.Status().Start($"Running doc-tests...", fun ctx ->
-                                let package = SymbolLister.extractFromProject projectPath |> Async.RunSynchronously
-                                DocTestRunner.snapshotExampleNames package
-                                |> List.map (fun name ->
-                                    DocTestRunner.collectSnapshotByName package projectPath references name
-                                    |> Async.RunSynchronously))
+                    let site = Workspace.loadSiteConfig ()
+                    let warnAsError = results.Contains Warn_As_Error
+                    // One shared verification implementation selects and executes the same cases
+                    // that capture does, so a change to case policy cannot make test and capture
+                    // disagree about what the release verifies.
+                    let verification =
+                        Verification.run
+                            { ProjectPaths = projectPaths
+                              Version = results.TryGetResult Arguments.Version
+                              DocsSets = Actions.configuredDocsSets projectPaths
+                              Prelude = site.FSharpPrelude |> Option.defaultValue ""
+                              WarnAsError = warnAsError
+                              ReportProgress = (fun _ _ _ -> ())
+                              ReportAudit = (fun analysis -> Actions.printAudit true analysis |> ignore)
+                              ReportApiDiagnostics = (fun treatAsError diagnostics -> Actions.printApiDiagnostics treatAsError diagnostics |> ignore)
+                              ExecuteExamples = true }
 
-                        for snapshot in snapshots do
-                            match snapshot.Status with
-                            | ExampleStatus.Verified | ExampleStatus.FirstCut ->
-                                AnsiConsole.MarkupLine($"  [green]pass[/] {Markup.Escape(snapshot.Name)}")
-                            | ExampleStatus.Mismatch ->
-                                AnsiConsole.MarkupLine($"  [red]fail[/] {Markup.Escape(snapshot.Name)}")
-                                let expected = snapshot.ExpectedOutput |> Option.defaultValue ""
-                                AnsiConsole.MarkupLine($"       [grey]Expected:[/] {Markup.Escape(expected)}")
-                                AnsiConsole.MarkupLine($"       [grey]Actual:[/] {Markup.Escape(snapshot.ActualOutput)}")
-                                allPassed <- false
-                            | ExampleStatus.Error ->
-                                AnsiConsole.MarkupLine($"  [red]fail[/] {Markup.Escape(snapshot.Name)}")
-                                AnsiConsole.MarkupLine($"       [grey]{Markup.Escape(snapshot.ActualOutput)}[/]")
-                                allPassed <- false
-                    // Executable markdown blocks are compiled by the audit above but only run by
-                    // the generated cases; running them here is what makes this command a real
-                    // alternative to generating a test project rather than a subset of one.
-                    let package, _ = Actions.getUnifiedPackage projectPaths |> Async.RunSynchronously
+                    for outcome in verification.Outcomes do
+                        let label = if outcome.Passed then "[green]pass[/]" else "[red]fail[/]"
+                        AnsiConsole.MarkupLine($"  {label} {Markup.Escape outcome.Id}")
+                        match outcome.Message with
+                        | Some message when not outcome.Passed -> AnsiConsole.MarkupLine($"       [grey]{Markup.Escape message}[/]")
+                        | _ -> ()
 
-                    for page in Actions.documentationPages projectPaths package do
-                        let externallyExecuted =
-                            page.Blocks
-                            |> List.choose (fun block ->
-                                match block.Mode, block.Origin with
-                                | (Run | Transcript), XmlExample -> Some block.Id
-                                | _ -> None)
-                            |> Set.ofList
-                        let cases =
-                            DocumentationDiscovery.generatedCases
-                                page.SelectedProject
-                                page.Prelude
-                                page.Relative
-                                page.Expanded
-                                externallyExecuted
+                    let compilerFailed = DocAnalysis.compilerFailureCount verification.Analysis <> 0
+                    let apiFailed = warnAsError && not verification.ApiDiagnostics.IsEmpty
+                    let examplesFailed = verification.Outcomes |> List.exists (fun outcome -> not outcome.Passed)
+                    Timing.write Timing.DefaultPath |> ignore
 
-                        for case in cases do
-                            match case.Action with
-                            | ExecuteBlock _ | ExecuteTranscriptBlock _ ->
-                                try
-                                    GeneratedVerification.runCase references case |> Async.RunSynchronously
-                                    AnsiConsole.MarkupLine($"  [green]pass[/] {Markup.Escape(case.Id)}")
-                                with error ->
-                                    AnsiConsole.MarkupLine($"  [red]fail[/] {Markup.Escape(case.Id)}")
-                                    AnsiConsole.MarkupLine($"       [grey]{Markup.Escape(error.Message)}[/]")
-                                    allPassed <- false
-                            | _ -> ()
-
-                    if allPassed then 
-                        AnsiConsole.MarkupLine("\n[bold green]✔ All doc-tests passed successfully![/]")
-                        0 
-                    else 
+                    if compilerFailed || apiFailed || examplesFailed then
                         AnsiConsole.MarkupLine("\n[bold red]✖ Some doc-tests failed.[/]")
                         1
+                    else
+                        AnsiConsole.MarkupLine("\n[bold green]✔ All doc-tests passed successfully![/]")
+                        0
 
                 elif results.Contains Audit then
                     Actions.printBanner()
-                    Actions.auditAction (results.Contains Warn_As_Error) (results.GetResult Audit |> Actions.resolveProjects "audit")
+                    let exitCode = Actions.auditAction (results.Contains Warn_As_Error) (results.GetResult Audit |> Actions.resolveProjects "audit")
+                    Timing.write Timing.DefaultPath |> ignore
+                    exitCode
 
                 elif results.Contains Build then
                     Actions.printBanner()
                     let projectPaths = results.GetResult Build |> Actions.resolveProjects "build"
                     Actions.buildAction (results.Contains Warn_As_Error) (results.Contains Drafts) projectPaths theme (results.TryGetResult Arguments.Version)
+                    Timing.write Timing.DefaultPath |> ignore
                     0
 
                 elif results.Contains Build_History then
