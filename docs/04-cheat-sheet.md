@@ -89,6 +89,10 @@ At the default `warnings` level, LiveDocs groups API issues by source file and i
 | `fsharp transcript` | Transcript runner | Yes | Yes |
 | `fsharp no-check reason="..."` | No | No | Syntax only |
 
+Append `deterministic` to `fsharp run` or `fsharp transcript` to reuse a passing result across
+invocations. It asserts the example reads no clock, network, filesystem, environment, or process;
+FsLiveDocs does not verify the assertion, and a changed input invalidates the entry.
+
 ## Shortcodes and references
 
 | Syntax | Result |

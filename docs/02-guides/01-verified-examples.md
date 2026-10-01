@@ -1,5 +1,6 @@
 ---
 title: Author and test examples
+project: samples/DeepReference/Acme.Docs/Acme.Docs.fsproj
 ---
 
 # Author and test examples
@@ -57,6 +58,21 @@ val it: int = 42
 ````
 
 Executable examples have the same file, process, network, clock, and environment access as the person running FsLiveDocs. Keep them quick, deterministic, and local.
+
+## Reuse deterministic results
+
+Most executable examples run on every verification pass. When an example is deterministic and reads
+nothing outside its own inputs, mark it so a passing result can be reused across invocations:
+
+```fsharp transcript deterministic
+> List.sum [ 1; 2; 3 ];;
+val it: int = 6
+```
+
+`deterministic` is a promise about the example, and FsLiveDocs does not verify it. It is valid only
+with `run` or `transcript`. On a later run FsLiveDocs skips the example when the source, project,
+references, prelude, compiler, and tool are unchanged; a changed input invalidates the entry. Never
+use it for an example that reads a clock, network, filesystem, environment, or another process.
 
 ## Mark honest pseudocode
 

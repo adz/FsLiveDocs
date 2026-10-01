@@ -25,7 +25,8 @@ module GeneratedVerification =
             invalidOp details
     }
 
-    let private executionContent (blocks: DocumentationBlock list) (block: DocumentationBlock) =
+    /// <summary>The exact source and expected output an execution case would run, for cache identity.</summary>
+    let executionPayload (blocks: DocumentationBlock list) (block: DocumentationBlock) =
         match block.Mode with
         | Run ->
             let pageSource =
@@ -43,7 +44,7 @@ module GeneratedVerification =
         | _ -> invalidOp $"{block.Id} is not an executable documentation block."
 
     let private executionContext (references: string list) (blocks: DocumentationBlock list) (block: DocumentationBlock) : FsiTranscriptRunner.DocTestExecutionContext =
-        let content, expected = executionContent blocks block
+        let content, expected = executionPayload blocks block
         let projectPath =
             block.Project
             |> Option.defaultWith (fun () -> invalidOp $"{block.Id} has no project to execute against.")
@@ -84,6 +85,8 @@ module GeneratedVerification =
         { Id: string
           Passed: bool
           Message: string option
+          /// <summary>The normalized output the example produced, retained so a deterministic pass can be cached.</summary>
+          Output: string
           /// <summary>Time spent creating this block's FSI session, in milliseconds.</summary>
           SessionMs: float
           /// <summary>Time spent evaluating this block's blocks, in milliseconds.</summary>
@@ -106,6 +109,7 @@ module GeneratedVerification =
             { Id = block.Id
               Passed = passed
               Message = message
+              Output = result.Output
               SessionMs = result.SessionMs
               EvalMs = result.EvalMs })
 
@@ -194,6 +198,7 @@ module GeneratedVerification =
                     // Isolated: an example is a standalone illustration, not part of a page's flow.
                     Mode = Isolated
                     Project = Some projectPath
+                    Deterministic = false
                 })
 
             // An example demonstrates the library that declares it, so that library's own

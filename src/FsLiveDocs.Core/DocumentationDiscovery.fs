@@ -31,6 +31,17 @@ type DocumentationBlock = {
     SourceHash: string
     Mode: DocumentationBlockMode
     Project: string option
+    /// <summary>
+    /// The author declared the block deterministic and free of external state (clock, network,
+    /// filesystem, environment, process), so a passing execution may be reused across invocations.
+    /// </summary>
+    Deterministic: bool
+}
+
+/// The parsed policy for one F# fence: its mode plus whether it declared deterministic execution.
+type ParsedBlockMode = {
+    Mode: DocumentationBlockMode
+    Deterministic: bool
 }
 
 /// A synthetic script checked in one evaluated project context.
@@ -167,13 +178,16 @@ module DocumentationDiscovery =
                 |> List.filter (fun value ->
                     not (value.StartsWith("reason=", StringComparison.OrdinalIgnoreCase))
                     && not (value.StartsWith("origin=", StringComparison.OrdinalIgnoreCase)))
-            let known = set [ "prepare"; "isolated"; "run"; "transcript"; "no-check" ]
             let normalizedFlags = flags |> List.map _.ToLowerInvariant()
-            match normalizedFlags |> List.tryFind (known.Contains >> not) with
+            // `deterministic` is a modifier, not a mode: it can accompany `run` or `transcript` only.
+            let deterministic = normalizedFlags |> List.contains "deterministic"
+            let modes = normalizedFlags |> List.filter (fun value -> value <> "deterministic")
+            let known = set [ "prepare"; "isolated"; "run"; "transcript"; "no-check" ]
+            match modes |> List.tryFind (known.Contains >> not) with
             | Some unknown -> invalidOp $"Unknown F# fence mode '{unknown}'."
             | None -> ()
-            if normalizedFlags.Length > 1 then
-                let selected = String.concat " " normalizedFlags
+            if modes.Length > 1 then
+                let selected = String.concat " " modes
                 invalidOp $"Contradictory F# fence modes: {selected}. Choose exactly one mode."
             let reason =
                 options
@@ -181,18 +195,25 @@ module DocumentationDiscovery =
                     if value.StartsWith("reason=", StringComparison.OrdinalIgnoreCase) then
                         Some(value.Substring("reason=".Length).Trim().Trim('"'))
                     else None)
-            match normalizedFlags with
-            | [] when reason.IsSome -> invalidOp "A reason is only valid with the no-check mode."
-            | [] -> Page
-            | [ "prepare" ] -> Prepare
-            | [ "isolated" ] -> Isolated
-            | [ "run" ] -> Run
-            | [ "transcript" ] -> Transcript
-            | [ "no-check" ] ->
-                match reason with
-                | Some value when not (String.IsNullOrWhiteSpace value) -> NoCheck value
-                | _ -> invalidOp "An F# no-check fence requires a non-empty reason=\"...\"."
-            | _ -> invalidOp "Invalid F# fence options."
+            let mode =
+                match modes with
+                | [] when reason.IsSome -> invalidOp "A reason is only valid with the no-check mode."
+                | [] -> Page
+                | [ "prepare" ] -> Prepare
+                | [ "isolated" ] -> Isolated
+                | [ "run" ] -> Run
+                | [ "transcript" ] -> Transcript
+                | [ "no-check" ] ->
+                    match reason with
+                    | Some value when not (String.IsNullOrWhiteSpace value) -> NoCheck value
+                    | _ -> invalidOp "An F# no-check fence requires a non-empty reason=\"...\"."
+                | _ -> invalidOp "Invalid F# fence options."
+            if deterministic then
+                match mode with
+                | Run
+                | Transcript -> ()
+                | _ -> invalidOp "The deterministic option is only valid with the run or transcript mode."
+            { Mode = mode; Deterministic = deterministic }
         | _ -> invalidArg "info" "Expected an fsharp fenced-code info string."
 
     /// Discovers blocks from Markdown after shortcode/API expansion has completed.
@@ -201,7 +222,8 @@ module DocumentationDiscovery =
         scanFsharpFences expandedMarkdown
         |> Seq.mapi (fun ordinal matched ->
             let info = matched.Info
-            let mode = parseMode info
+            let parsed = parseMode info
+            let mode = parsed.Mode
             let origin =
                 if info.Contains("origin=source-snippet", StringComparison.OrdinalIgnoreCase) then SourceSnippet
                 elif info.Contains("origin=xml-example", StringComparison.OrdinalIgnoreCase) then XmlExample
@@ -217,6 +239,7 @@ module DocumentationDiscovery =
                 SourceHash = sourceHash mode source
                 Mode = mode
                 Project = project
+                Deterministic = parsed.Deterministic
             })
         |> Seq.toList
 

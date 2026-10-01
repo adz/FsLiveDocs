@@ -34,6 +34,7 @@
     <Compile Include="Templates.fs" />
     <Compile Include="Workspace.fs" />
     <Compile Include="AnalysisCache.fs" />
+    <Compile Include="ExecutionCache.fs" />
     <Compile Include="PackageExtraction.fs" />
     <Compile Include="DocAnalysis.fs" />
     <Compile Include="DocumentationSets.fs" />

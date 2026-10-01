@@ -74,6 +74,22 @@ module AnalysisCacheTests =
         Assert.Equal<string>(projectBefore, projectAfter)
         Assert.False(String.Equals(verificationBefore, verificationAfter, StringComparison.Ordinal))
 
+module ExecutionCacheTests =
+
+    [<Fact>]
+    let ``execution cache identity changes with any input`` () =
+        let key = ExecutionCache.key [ "tool"; "project-inputs"; "assembly"; "block"; "content" ]
+        Assert.Equal<string>(key, ExecutionCache.key [ "tool"; "project-inputs"; "assembly"; "block"; "content" ])
+        Assert.NotEqual<string>(key, ExecutionCache.key [ "tool"; "project-inputs"; "assembly"; "block"; "changed" ])
+        Assert.Null(ExecutionCache.tryRead (ExecutionCache.key [ Guid.NewGuid().ToString "N" ]))
+
+    [<Fact>]
+    let ``execution cache stores and returns a passing output`` () =
+        let key = ExecutionCache.key [ "test"; Guid.NewGuid().ToString "N" ]
+        Assert.Null(ExecutionCache.tryRead key)
+        ExecutionCache.write key "val it: int = 42"
+        Assert.Equal(Some "val it: int = 42", ExecutionCache.tryRead key)
+
 module BuildStateTests =
 
     let private withTempDirectory action =
@@ -999,6 +1015,29 @@ module ContentProviderTests =
         Assert.Contains("requires a non-empty reason", missing.Message)
         let contradictory = Assert.Throws<InvalidOperationException>(fun () -> DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp run isolated\nx\n```" |> ignore)
         Assert.Contains("Contradictory", contradictory.Message)
+
+    [<Fact>]
+    let ``deterministic is only valid with run or transcript`` () =
+        let run =
+            DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp run deterministic\nprintfn \"x\"\n```"
+            |> List.head
+        Assert.Equal(Run, run.Mode)
+        Assert.True(run.Deterministic)
+
+        let transcript =
+            DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp transcript deterministic\n> 1 + 1;;\nval it: int = 2\n```"
+            |> List.head
+        Assert.Equal(Transcript, transcript.Mode)
+        Assert.True(transcript.Deterministic)
+
+        let plain = DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp\nlet a = 1\n```" |> List.head
+        Assert.False(plain.Deterministic)
+
+        let invalid = Assert.Throws<InvalidOperationException>(fun () -> DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp prepare deterministic\nx\n```" |> ignore)
+        Assert.Contains("run or transcript", invalid.Message)
+
+        let noMode = Assert.Throws<InvalidOperationException>(fun () -> DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp deterministic\nx\n```" |> ignore)
+        Assert.Contains("run or transcript", noMode.Message)
 
     [<Fact>]
     let ``verification compiles page and isolated units but only executes explicit modes`` () =

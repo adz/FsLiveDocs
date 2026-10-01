@@ -4,7 +4,7 @@ open System
 open System.Diagnostics
 open System.IO
 open System.Text.Json
-open System.Text.Json.Serialization
+open System.Text.Json.Nodes
 open Spectre.Console
 
 /// <summary>
@@ -27,15 +27,6 @@ module internal Timing =
           DurationMs: float
           Outcome: string
           Detail: string option }
-
-    type private Report =
-        { SchemaVersion: int
-          Tool: string
-          Command: string
-          StartedAtUtc: string
-          TotalMs: float
-          Phases: Phase[]
-          Cases: Case[] }
 
     [<Literal>]
     let SchemaVersion = 1
@@ -113,10 +104,39 @@ module internal Timing =
                       Outcome = outcome
                       Detail = detail })
 
-    let private jsonOptions =
-        let options = JsonSerializerOptions(WriteIndented = true)
-        options.DefaultIgnoreCondition <- JsonIgnoreCondition.WhenWritingNull
-        options
+    let private writeJson (path: string) (phaseSnapshot: Phase[]) (caseSnapshot: Case[]) =
+        try
+            let phases = JsonArray()
+            for phase in phaseSnapshot do
+                let node = JsonObject()
+                node["Name"] <- JsonValue.Create phase.Name
+                node["DurationMs"] <- JsonValue.Create phase.DurationMs
+                phase.Detail |> Option.iter (fun value -> node["Detail"] <- JsonValue.Create value)
+                phases.Add node
+
+            let cases = JsonArray()
+            for item in caseSnapshot do
+                let node = JsonObject()
+                node["Id"] <- JsonValue.Create item.Id
+                node["Project"] <- JsonValue.Create item.Project
+                node["Mode"] <- JsonValue.Create item.Mode
+                node["Kind"] <- JsonValue.Create item.Kind
+                node["DurationMs"] <- JsonValue.Create item.DurationMs
+                node["Outcome"] <- JsonValue.Create item.Outcome
+                item.Detail |> Option.iter (fun value -> node["Detail"] <- JsonValue.Create value)
+                cases.Add node
+
+            let report = JsonObject()
+            report["SchemaVersion"] <- JsonValue.Create SchemaVersion
+            report["Tool"] <- JsonValue.Create(Reflection.Assembly.GetExecutingAssembly().GetName().Version |> string)
+            report["Command"] <- JsonValue.Create command
+            report["StartedAtUtc"] <- JsonValue.Create(startedAt.ToString("o"))
+            report["TotalMs"] <- JsonValue.Create total.Elapsed.TotalMilliseconds
+            report["Phases"] <- phases
+            report["Cases"] <- cases
+            File.WriteAllText(path, report.ToJsonString(JsonSerializerOptions(WriteIndented = true)))
+        with _ ->
+            ()
 
     let private phaseLabel (phase: Phase) =
         let detail = phase.Detail |> Option.map (fun value -> $" ({Markup.Escape value})") |> Option.defaultValue ""
@@ -137,19 +157,7 @@ module internal Timing =
             if not (String.IsNullOrWhiteSpace directory) then
                 Directory.CreateDirectory directory |> ignore
 
-            let report =
-                { SchemaVersion = SchemaVersion
-                  Tool = Reflection.Assembly.GetExecutingAssembly().GetName().Version |> string
-                  Command = command
-                  StartedAtUtc = startedAt.ToString("o")
-                  TotalMs = total.Elapsed.TotalMilliseconds
-                  Phases = phaseSnapshot
-                  Cases = caseSnapshot }
-
-            try
-                File.WriteAllText(path, JsonSerializer.Serialize(report, jsonOptions))
-            with _ ->
-                ()
+            writeJson path phaseSnapshot caseSnapshot
 
             let phaseTotal = phaseSnapshot |> Array.sumBy _.DurationMs
             AnsiConsole.MarkupLine("")

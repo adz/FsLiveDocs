@@ -68,3 +68,16 @@ documented project's graph.
 - Each worker runs under `Process.timeout` (10 minutes, or `FSLIVEDOCS_TRANSCRIPT_TIMEOUT_SECONDS`), which terminates the
   process tree. Isolation is for dependency identity and cleanup; it is not a security sandbox, and examples remain
   trusted code.
+
+## Reuse only declared-deterministic execution
+
+A `run` or `transcript` block may declare `deterministic`: the author's assertion that the example reads
+no clock, network, filesystem, environment, or process. A passing result for such a block is stored in
+`.livedocs/cache/execution/`, keyed by tool, compiler, project inputs, resolved assembly, references,
+prelude, block id, source hash, executed content, and expected output. A later invocation with the same
+key skips execution and reports the case as cached. A changed input cannot reuse an entry, and failures
+are never cached, so a fixed error re-runs and shows the current message.
+
+FsLiveDocs does not verify the assertion. A wrong declaration can reuse a stale pass, which would let a
+release publish without running the example. The declaration is the correctness boundary; when in
+doubt, leave it off and let the example run on every pass.

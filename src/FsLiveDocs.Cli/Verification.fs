@@ -2,6 +2,7 @@ namespace FsLiveDocs.Cli
 
 open System
 open System.Diagnostics
+open System.IO
 open FsLiveDocs.Core
 open FsLiveDocs.Runner
 
@@ -15,7 +16,9 @@ type internal VerificationOutcome =
       Kind: string
       Passed: bool
       Message: string option
-      DurationMs: float }
+      DurationMs: float
+      /// <summary>True when a deterministic example reused a cached passing result.</summary>
+      Cached: bool }
 
 /// <summary>
 /// The complete result of one documentation verification pass: compiler audit plus every executed
@@ -102,12 +105,38 @@ module internal Verification =
                             Kind = "snapshot"
                             Passed = passed
                             Message = message
-                            DurationMs = 0.0 } ]
+                            DurationMs = 0.0
+                            Cached = false } ]
 
     /// Independent Markdown `run` and `transcript` blocks. Each is executed without recompiling
     /// the owning unit: the audit that ran before execution proved every block compiles. Blocks are
     /// batched by project graph, one fresh FSI session each, with bounded worker concurrency.
-    let private executeMarkdown (pages: DocAnalysis.Page list) (references: string list) =
+    let private fileIdentity (path: string) =
+        if String.IsNullOrWhiteSpace path then ""
+        elif File.Exists path then
+            let info = FileInfo path
+            $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}"
+        else
+            path
+
+    /// Everything that can change an execution result except the block itself.
+    let private executionIdentity (references: string list) (projectFingerprint: string) =
+        let toolIdentity =
+            [ typeof<FsiTranscriptRunner.DocTestExecutionContext>.Assembly.ManifestModule.ModuleVersionId |> string
+              typeof<FsLiveDocs.TranscriptHost.TranscriptRequest>.Assembly.ManifestModule.ModuleVersionId |> string
+              typeof<FSharp.Compiler.CodeAnalysis.FSharpChecker>.Assembly.ManifestModule.ModuleVersionId |> string ]
+            |> String.concat ","
+
+        [ yield $"tool:{toolIdentity}"
+          yield $"project-inputs:{projectFingerprint}"
+          for reference in references do
+              yield "reference:" + fileIdentity reference ]
+
+    /// Independent Markdown `run` and `transcript` blocks. Each is executed without recompiling
+    /// the owning unit: the audit that ran before execution proved every block compiles. Blocks are
+    /// batched by project graph, one fresh FSI session each, with bounded worker concurrency. A
+    /// block that declared `deterministic` reuses a cached passing result when the identity matches.
+    let private executeMarkdown (pages: DocAnalysis.Page list) (references: string list) (projectFingerprint: string) =
         let targets =
             [ for page in pages do
                   let externallyExecuted =
@@ -127,32 +156,109 @@ module internal Verification =
         if targets.IsEmpty then
             []
         else
-            let results =
-                GeneratedVerification.executeDiscoveredBlocks
-                    references
-                    (targets |> List.map (fun (page, block) -> page.Blocks, block))
+            let commonIdentity = executionIdentity references projectFingerprint
 
-            (targets, results)
-            ||> List.map2 (fun (page, block) result ->
-                let mode = modeName block.Mode
-                let durationMs = result.SessionMs + result.EvalMs
+            let projectIdentities =
+                targets
+                |> List.map (fun (page, _) -> page.SelectedProject)
+                |> List.distinct
+                |> List.map (fun projectPath ->
+                    let resolved = ProjectResolver.resolve projectPath
+                    projectPath, $"project:{projectPath}|assembly:{fileIdentity resolved.AssemblyPath}")
+                |> Map.ofList
 
-                Timing.case
-                    block.Id
-                    page.SelectedProject
-                    mode
-                    "markdown"
-                    durationMs
-                    (if result.Passed then "pass" else "fail")
-                    (Some $"session {result.SessionMs:N0}ms")
+            let planned =
+                targets
+                |> List.mapi (fun index (page, block) ->
+                    let cacheKey =
+                        if not block.Deterministic then
+                            None
+                        else
+                            let content, expected = GeneratedVerification.executionPayload page.Blocks block
+                            let expectedText = expected |> Option.defaultValue ""
 
-                { Id = block.Id
-                  Project = page.SelectedProject
-                  Mode = mode
-                  Kind = "markdown"
-                  Passed = result.Passed
-                  Message = result.Message
-                  DurationMs = durationMs })
+                            Some(
+                                ExecutionCache.key
+                                    [ yield! commonIdentity
+                                      yield projectIdentities.[page.SelectedProject]
+                                      yield $"prelude:{page.Prelude}"
+                                      yield $"block:{block.Id}"
+                                      yield $"source:{block.SourceHash}"
+                                      yield $"content:{content}"
+                                      yield $"expected:{expectedText}" ])
+
+                    index, page, block, cacheKey)
+
+            let cached =
+                planned
+                |> List.choose (fun (index, page, block, cacheKey) ->
+                    match cacheKey with
+                    | Some key ->
+                        ExecutionCache.tryRead key
+                        |> Option.map (fun output -> index, page, block, output)
+                    | None -> None)
+
+            let cachedIndexes = cached |> List.map (fun (index, _, _, _) -> index) |> Set.ofList
+            let toRun = planned |> List.filter (fun (index, _, _, _) -> not (cachedIndexes.Contains index))
+
+            let runResults =
+                if toRun.IsEmpty then
+                    []
+                else
+                    GeneratedVerification.executeDiscoveredBlocks
+                        references
+                        (toRun |> List.map (fun (_, page, block, _) -> page.Blocks, block))
+
+            let runOutcomes =
+                (toRun, runResults)
+                ||> List.map2 (fun (index, page, block, cacheKey) result -> index, page, block, cacheKey, result)
+
+            // Cache only passes; a failure must re-run so the next invocation sees the current error.
+            for _, _, _, cacheKey, result in runOutcomes do
+                match cacheKey with
+                | Some key when result.Passed -> ExecutionCache.write key result.Output
+                | _ -> ()
+
+            [ for index, page, block, _output in cached do
+                  let mode = modeName block.Mode
+                  Timing.case block.Id page.SelectedProject mode "markdown" 0.0 "pass" (Some "cached")
+
+                  yield
+                      index,
+                      { Id = block.Id
+                        Project = page.SelectedProject
+                        Mode = mode
+                        Kind = "markdown"
+                        Passed = true
+                        Message = None
+                        DurationMs = 0.0
+                        Cached = true }
+
+              for index, page, block, _, result in runOutcomes do
+                  let mode = modeName block.Mode
+                  let durationMs = result.SessionMs + result.EvalMs
+
+                  Timing.case
+                      block.Id
+                      page.SelectedProject
+                      mode
+                      "markdown"
+                      durationMs
+                      (if result.Passed then "pass" else "fail")
+                      (Some $"session {result.SessionMs:N0}ms")
+
+                  yield
+                      index,
+                      { Id = block.Id
+                        Project = page.SelectedProject
+                        Mode = mode
+                        Kind = "markdown"
+                        Passed = result.Passed
+                        Message = result.Message
+                        DurationMs = durationMs
+                        Cached = false } ]
+            |> List.sortBy fst
+            |> List.map snd
 
     let private analyze (request: VerificationRequest) (package: PackageModel) projectFingerprint =
         Timing.measure "Compiler audit" None (fun () ->
@@ -186,7 +292,7 @@ module internal Verification =
             else
                 Timing.measure "Execute examples" None (fun () ->
                     [ yield! executeSnapshots request.ProjectPaths references
-                      yield! executeMarkdown analysis.Pages references ])
+                      yield! executeMarkdown analysis.Pages references projectFingerprint ])
 
         { Package = package
           ProjectFingerprint = projectFingerprint

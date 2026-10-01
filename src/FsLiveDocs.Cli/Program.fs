@@ -238,7 +238,8 @@ module Program =
 
                     for outcome in verification.Outcomes do
                         let label = if outcome.Passed then "[green]pass[/]" else "[red]fail[/]"
-                        AnsiConsole.MarkupLine($"  {label} {Markup.Escape outcome.Id}")
+                        let suffix = if outcome.Cached then " [grey](cached)[/]" else ""
+                        AnsiConsole.MarkupLine($"  {label} {Markup.Escape outcome.Id}{suffix}")
                         match outcome.Message with
                         | Some message when not outcome.Passed -> AnsiConsole.MarkupLine($"       [grey]{Markup.Escape message}[/]")
                         | _ -> ()
