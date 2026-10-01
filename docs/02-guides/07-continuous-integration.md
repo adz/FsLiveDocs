@@ -49,7 +49,7 @@ dotnet livedocs build --interactive false --banner false
 `livedocs build` invokes the native Pagefind executable bundled with the FsLiveDocs tool package. Node.js, npm, and a separate Pagefind installation are unnecessary. Publish `output/` as the site artifact.
 
 If you commit a generated snapshot test project (see
-[Author and test examples](verified-examples.md#manage-examples-as-normal-tests)), run it
+[Author and test examples](01-verified-examples.md#manage-examples-as-normal-tests)), run it
 as an ordinary test project and add a check that it is up to date:
 
 ```bash
@@ -141,5 +141,5 @@ dotnet livedocs history-sync <owner/repo> --output .livedocs/history.json
 git add .livedocs/history.json && git commit -m "Backfill release history"
 ```
 
-See [Capture and publish releases](releases.md) for each command and the
-[command reference](../cheat-sheet.md) for every flag.
+See [Capture and publish releases](08-releases.md) for each command and the
+[command reference](../04-cheat-sheet.md) for every flag.

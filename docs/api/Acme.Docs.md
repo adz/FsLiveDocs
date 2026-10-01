@@ -12,4 +12,4 @@ The sample deliberately includes:
 - a source snippet reused by a guide;
 - deterministic setup for a stateful example.
 
-Its authored pages live in `docs/api/`, just like the annotations package pages. That makes this API a working example of the authoring approach described in [Write API and guide pages](../guides/api-pages.md).
+Its authored pages live in `docs/api/`, just like the annotations package pages. That makes this API a working example of the authoring approach described in [Write API and guide pages](../02-guides/00-api-pages.md).

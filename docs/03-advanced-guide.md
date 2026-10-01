@@ -99,4 +99,4 @@ dotnet livedocs capture --version 2.0.0 --output artifacts/Example-2.0.0-livedoc
 
 Only page-selected projects require compiler evaluation. Other documented projects contribute their built assemblies to the shared reference context.
 
-See [Capture and publish releases](guides/releases.md) for the complete release workflow.
+See [Capture and publish releases](02-guides/08-releases.md) for the complete release workflow.

@@ -12,6 +12,6 @@ The package contains `DocScenarioAttribute`. It does not bring the CLI, compiler
 
 The similarly named `FsLiveDocs` package is a .NET tool. Install that through a tool manifest and run it as `dotnet livedocs`; do not add it as a library reference.
 
-[Author and test examples](../guides/verified-examples.md#prepare-an-xml-example) covers the complete workflow. The `DocScenarioAttribute` page contains its generated reference.
+[Author and test examples](../02-guides/01-verified-examples.md#prepare-an-xml-example) covers the complete workflow. The `DocScenarioAttribute` page contains its generated reference.
 
 The `Acme.Docs` package shown beside this one is a teaching sample from this repository. It is not published for application use.

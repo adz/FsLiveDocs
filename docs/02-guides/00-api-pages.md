@@ -164,4 +164,4 @@ Use API pages for purpose, invariants, common operations, failure behavior, and 
 
 Use a guide when a task crosses several APIs. Link the two so readers can move between learning and lookup without meeting the same explanation twice.
 
-Next, learn how to [author and test examples](verified-examples.md), [transclude maintained source](transclusion.md), and [link API symbols](cross-references.md).
+Next, learn how to [author and test examples](01-verified-examples.md), [transclude maintained source](03-transclusion.md), and [link API symbols](04-cross-references.md).

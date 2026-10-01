@@ -191,4 +191,4 @@ A simple default works well:
 5. Generate tests when your team benefits from normal test tooling.
 6. Run freshness checks in CI if generated tests are committed.
 
-See [Verify documentation in CI](continuous-integration.md) for a complete pipeline.
+See [Verify documentation in CI](07-continuous-integration.md) for a complete pipeline.

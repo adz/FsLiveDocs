@@ -21,6 +21,6 @@ dotnet run --project src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj -- \
   watch --host 127.0.0.1 --port 5000
 ```
 
-A release goes through the same capture and history workflow described in [Capture and publish releases](guides/releases.md). Historical rendering uses the capsule alone and does not rebuild the tagged source.
+A release goes through the same capture and history workflow described in [Capture and publish releases](02-guides/08-releases.md). Historical rendering uses the capsule alone and does not rebuild the tagged source.
 
 There are no private shortcuts here. If this repository is awkward to document with FsLiveDocs, that is product feedback.

@@ -17,4 +17,4 @@ module CustomerExamples =
 
 The constructor accepts the scenario name. The read-only `Name` property exposes that value to FsLiveDocs during documentation discovery.
 
-[Prepare an XML example](../guides/verified-examples.md#prepare-an-xml-example) has a complete example and the execution rules.
+[Prepare an XML example](../02-guides/01-verified-examples.md#prepare-an-xml-example) has a complete example and the execution rules.

@@ -35,4 +35,4 @@ A newer FsLiveDocs can render that capsule later without restoring the old SDK o
 
 That is the larger idea: docs should stay honest while a project changes, and old docs should remain buildable after its toolchain moves on.
 
-Ready to try it? [Set up your repository](introduction.md).
+Ready to try it? [Set up your repository](01-introduction.md).

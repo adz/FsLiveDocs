@@ -43,11 +43,11 @@ Open `http://127.0.0.1:5000`. Edit a Markdown page or F# source file and the pre
 
 ## Where to go next
 
-1. [Set up your repository](introduction.md).
-2. [Write API and guide pages](guides/api-pages.md).
-3. [Check examples and manage them as tests](guides/verified-examples.md).
-4. [Run documentation checks in CI](guides/continuous-integration.md).
-5. [Configure the site](guides/navigation.md).
-6. [Capture versioned documentation](guides/releases.md).
+1. [Set up your repository](01-introduction.md).
+2. [Write API and guide pages](02-guides/00-api-pages.md).
+3. [Check examples and manage them as tests](02-guides/01-verified-examples.md).
+4. [Run documentation checks in CI](02-guides/07-continuous-integration.md).
+5. [Configure the site](02-guides/06-navigation.md).
+6. [Capture versioned documentation](02-guides/08-releases.md).
 
-Want the background first? Read [Why FsLiveDocs](why-fslivedocs.md). For exact commands and options, use the [command reference](cheat-sheet.md).
+Want the background first? Read [Why FsLiveDocs](00-why-fslivedocs.md). For exact commands and options, use the [command reference](04-cheat-sheet.md).

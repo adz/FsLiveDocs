@@ -139,9 +139,9 @@ When one F# block has several compiler errors, `audit` reports every error with 
 
 ## Next steps
 
-- [Write API and guide pages](guides/api-pages.md).
-- [Author and test examples](guides/verified-examples.md).
-- [Run the checks in CI](guides/continuous-integration.md).
-- [Configure navigation and branding](guides/navigation.md).
+- [Write API and guide pages](02-guides/00-api-pages.md).
+- [Author and test examples](02-guides/01-verified-examples.md).
+- [Run the checks in CI](02-guides/07-continuous-integration.md).
+- [Configure navigation and branding](02-guides/06-navigation.md).
 
-If the repository serves separate audiences, see [documentation sets](guides/navigation.md#split-one-site-into-documentation-sets) after the basic site works.
+If the repository serves separate audiences, see [documentation sets](02-guides/06-navigation.md#split-one-site-into-documentation-sets) after the basic site works.

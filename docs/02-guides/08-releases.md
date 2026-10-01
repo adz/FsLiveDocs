@@ -98,7 +98,7 @@ FsLiveDocs never uploads an asset or moves a Git ref. It may read provider APIs 
 3. commit the updated `.livedocs/history.json`.
 
 The committed index is the source of truth. Anything that satisfies those three steps works —
-[Verify documentation in CI](continuous-integration.md) has ready-made snippets for GitHub and
+[Verify documentation in CI](07-continuous-integration.md) has ready-made snippets for GitHub and
 GitLab.
 
 ## Record a release in history

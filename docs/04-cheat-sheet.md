@@ -29,7 +29,7 @@ Links between documentation pages use their source Markdown paths, including the
 | --- | --- | --- |
 | `livedocs init` | Create starter configuration, history, docs, and ignore entries. Ask whether an existing `docs/README.md` should be the home page when no index exists. | A writable working directory. Never overwrites existing files. |
 | `livedocs init --discover-projects` | Discover `.fsproj` files, record them in configuration, and print the XML documentation setting when it is disabled. | `.fsproj` files exist below the root; benchmarks, probes, and apps may need removing from the list afterward. |
-| `livedocs generate-ci [--provider github]` | Generate a GitHub Actions workflow that verifies docs and publishes releases (provider steps spelled out). | GitHub repository, Pages set to "GitHub Actions", default branch `main`, release tags `v<semver>`. Won't overwrite an existing `livedocs.yml`. Other hosts: follow the recipe in [Verify documentation in CI](guides/continuous-integration.md). |
+| `livedocs generate-ci [--provider github]` | Generate a GitHub Actions workflow that verifies docs and publishes releases (provider steps spelled out). | GitHub repository, Pages set to "GitHub Actions", default branch `main`, release tags `v<semver>`. Won't overwrite an existing `livedocs.yml`. Other hosts: follow the recipe in [Verify documentation in CI](02-guides/07-continuous-integration.md). |
 
 ## Authoring and verification
 
@@ -75,7 +75,7 @@ Links between documentation pages use their source Markdown paths, including the
 | `--port <number>` | Set the preview port. |
 | `--ignore <names>` | Add watcher directory names to ignore. |
 
-At the default `warnings` level, LiveDocs groups API issues by source file and issue kind, links to configured GitHub source, and prints a concise summary. `info` adds normal progress messages. `debug` expands every issue with its compiler message and remedy, and also lists every audited block and watcher directory. Use `--interactive false` for stable line-oriented logs. Build selects plain progress automatically when standard output is redirected. Verbosity, interactivity, and the banner are independent. In CI, pass `--interactive false --banner false` to every invocation — see [Verify documentation in CI](guides/continuous-integration.md).
+At the default `warnings` level, LiveDocs groups API issues by source file and issue kind, links to configured GitHub source, and prints a concise summary. `info` adds normal progress messages. `debug` expands every issue with its compiler message and remedy, and also lists every audited block and watcher directory. Use `--interactive false` for stable line-oriented logs. Build selects plain progress automatically when standard output is redirected. Verbosity, interactivity, and the banner are independent. In CI, pass `--interactive false --banner false` to every invocation — see [Verify documentation in CI](02-guides/07-continuous-integration.md).
 
 ## Fence modes
 
@@ -94,7 +94,7 @@ At the default `warnings` level, LiveDocs groups API issues by source file and i
 | --- | --- |
 | `{{< snippet id="Name" >}}` | Transclude a marked F# source region. |
 | `{{< example id="Name" >}}` | Transclude an XML documentation example. |
-| `{{< posts tag="..." category="..." limit="..." layout="..." show="..." >}}` | List blog posts; see [Publish a blog](guides/blog.md). |
+| `{{< posts tag="..." category="..." limit="..." layout="..." show="..." >}}` | List blog posts; see [Publish a blog](02-guides/09-blog.md). |
 | `{{< series-nav >}}` | List the parts of the current post's series. |
 | `xref:T:Namespace.Type` | Link to a documented entity. |
 | `xref:M:Namespace.Module.member` | Link to a documented member. |
