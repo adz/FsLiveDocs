@@ -147,12 +147,15 @@ module Program =
 
                 elif results.Contains History_Check then
                     let indexPath = results.GetResult(Output, defaultValue = ".livedocs/history.json")
-                    Actions.historyCheckAction
-                        indexPath
-                        (results.TryGetResult Capsule)
-                        (results.TryGetResult Arguments.Version)
-                        theme
-                        (results.GetResult(Retry, defaultValue = 3))
+                    let exitCode =
+                        Actions.historyCheckAction
+                            indexPath
+                            (results.TryGetResult Capsule)
+                            (results.TryGetResult Arguments.Version)
+                            theme
+                            (results.GetResult(Retry, defaultValue = 3))
+                    Timing.write Timing.DefaultPath |> ignore
+                    exitCode
 
                 elif results.Contains History_Sync then
                     let indexPath = results.GetResult(Output, defaultValue = ".livedocs/history.json")
@@ -268,6 +271,7 @@ module Program =
                 elif results.Contains Build_History then
                     Actions.printBanner()
                     Actions.buildHistoryAction (results.GetResult Build_History) theme (results.GetResult(Retry, defaultValue = 3))
+                    Timing.write Timing.DefaultPath |> ignore
                     0
 
                 elif results.Contains Watch then

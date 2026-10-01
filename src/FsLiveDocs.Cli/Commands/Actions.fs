@@ -798,7 +798,8 @@ module Actions =
             SiteBuilder.buildHistory manifest.CurrentVersion sites config theme outputDir
 
     let buildHistoryAction manifestPath theme retryAttempts =
-        renderHistoryInto manifestPath theme retryAttempts "output"
+        Timing.measure "Render release history" None (fun () ->
+            renderHistoryInto manifestPath theme retryAttempts "output")
         runPagefind "output" |> ignore
         AnsiConsole.MarkupLine("[green]✔ History build complete:[/] output/")
 
@@ -837,7 +838,8 @@ module Actions =
         let tempOutput = Path.Combine(workRoot, "output")
         try
             ReleaseCapsule.saveHistoryIndex tempIndex merged
-            renderHistoryInto tempIndex theme retryAttempts tempOutput
+            Timing.measure "Render release history" None (fun () ->
+                renderHistoryInto tempIndex theme retryAttempts tempOutput)
             // The search index is a separate downstream step; `verify` skips `pagefind/` links.
             let pageCount = ReleaseHistoryCommands.verify tempIndex tempOutput
             match candidate with

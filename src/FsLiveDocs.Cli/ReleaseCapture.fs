@@ -118,6 +118,7 @@ module internal ReleaseCapture =
             if request.DryRun then
                 Path.Combine(Path.GetTempPath(), "fslivedocs-dry-run-" + Guid.NewGuid().ToString("N") + ".zip")
             else outputPath
+        let capsulePhase = Timing.beginPhase "Write release capsule" None
         let created =
             match request.DocsSets with
             | Some _ ->
@@ -148,6 +149,7 @@ module internal ReleaseCapture =
 
         let plannedOutputPath = Path.GetFullPath outputPath
         let publicReport = { report with Path = plannedOutputPath }
+        Timing.endPhase capsulePhase
         if request.DryRun then
             run $"Could not remove the dry-run capsule at {actualOutputPath}" (FileSystem.deleteFile actualOutputPath)
             { Report = publicReport; ReportPath = None; PlannedOutputPath = plannedOutputPath; DryRun = true }
