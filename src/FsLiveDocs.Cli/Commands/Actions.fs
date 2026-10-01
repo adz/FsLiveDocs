@@ -711,7 +711,7 @@ module Actions =
 
                                 let repositoryRoot = Directory.GetParent(Path.GetFullPath docsDir).FullName
                                 let sourceRootRelative = content.DocsSets.Head.Source
-                                let linkDiagnostics = ContentProvider.createLinkDiagnostics ()
+                                let linkDiagnostics = ContentProvider.createHistoricalLinkDiagnostics ()
 
                                 let package =
                                     ContentProvider.applyApiDocsWithSourceLinks
@@ -775,7 +775,7 @@ module Actions =
                             { SemanticCode.defaults with Artifact = Some artifact; Prelude = artifact.Prelude }
                         | _ -> SemanticCode.disabled
                     let sourceRootRelative = Path.GetRelativePath(sourceDir, docsDir).Replace('\\', '/')
-                    let linkDiagnostics = ContentProvider.createLinkDiagnostics ()
+                    let linkDiagnostics = ContentProvider.createHistoricalLinkDiagnostics ()
                     let package =
                         ContentProvider.applyApiDocsWithSourceLinks
                             docsDir sourceDir sourceRootRelative packageRaw semanticCode config linkDiagnostics

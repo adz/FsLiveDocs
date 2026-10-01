@@ -31,11 +31,18 @@ module ContentProvider =
 
     type LinkDiagnostics =
         { Errors: ResizeArray<string>
-          Warnings: ResizeArray<string> }
+          Warnings: ResizeArray<string>
+          AcceptHistoricalOutputPaths: bool }
 
     let createLinkDiagnostics () =
         { Errors = ResizeArray<string>()
-          Warnings = ResizeArray<string>() }
+          Warnings = ResizeArray<string>()
+          AcceptHistoricalOutputPaths = false }
+
+    /// Captured pages may contain output-path Markdown links accepted by older releases.
+    /// Their rendered targets still have to pass history output verification.
+    let createHistoricalLinkDiagnostics () =
+        { createLinkDiagnostics () with AcceptHistoricalOutputPaths = true }
 
     type private SourceOutputPath =
         { SourcePath: string
@@ -435,6 +442,7 @@ module ContentProvider =
         (allowedOutputs: Set<string>)
         (sourceOutputPaths: Map<string, SourceOutputPath>)
         (outputFolderAliases: Map<string, string>)
+        (acceptHistoricalOutputPaths: bool)
         (href: string)
         =
         let hrefPath, _ = splitHrefPath href
@@ -447,6 +455,10 @@ module ContentProvider =
             match sourcePathOutput with
             | Some page when allowedOutputs.Contains page.OutputPath -> Some page.OutputPath
             | Some _ -> None
+            | None when acceptHistoricalOutputPaths && hrefPath.EndsWith(".md", System.StringComparison.OrdinalIgnoreCase) ->
+                normalizeOutputPath currentOutputPath hrefPath
+                |> Option.map (fun path -> Path.ChangeExtension(path, ".html").Replace('\\', '/'))
+                |> Option.filter allowedOutputs.Contains
             | None when System.String.IsNullOrEmpty(Path.GetExtension(hrefPath)) ->
                 tryResolveOutputFolderAlias currentOutputPath outputFolderAliases hrefPath
                 |> Option.filter allowedOutputs.Contains
@@ -529,6 +541,7 @@ module ContentProvider =
         (allowedOutputs: Set<string>)
         (sourceOutputPaths: Map<string, SourceOutputPath>)
         (outputFolderAliases: Map<string, string>)
+        (acceptHistoricalOutputPaths: bool)
         (linkErrors: ResizeArray<string>)
         (linkWarnings: ResizeArray<string>)
         (body: string)
@@ -549,7 +562,7 @@ module ContentProvider =
                     | Some _ -> ()
                     | None ->
                         if looksLikePageHref hrefPath
-                           && resolveLocalOutput docsDir currentSourcePath currentOutputPath allowedOutputs sourceOutputPaths outputFolderAliases href |> Option.isNone then
+                           && resolveLocalOutput docsDir currentSourcePath currentOutputPath allowedOutputs sourceOutputPaths outputFolderAliases acceptHistoricalOutputPaths href |> Option.isNone then
                             addLinkError linkErrors (brokenLinkMessage docsDir currentSourcePath currentOutputPath sourceOutputPaths href)
             protectedBody)
         |> ignore
@@ -564,6 +577,7 @@ module ContentProvider =
         (allowedOutputs: Set<string>)
         (sourceOutputPaths: Map<string, SourceOutputPath>)
         (outputFolderAliases: Map<string, string>)
+        (acceptHistoricalOutputPaths: bool)
         (body: string)
         =
         let linkPattern = @"(?<!\!)(?<prefix>\[[^\]]+\]\()(?<href>[^\s\)]+)(?<suffix>[^\)]*\))"
@@ -576,7 +590,7 @@ module ContentProvider =
                     m.Groups.["prefix"].Value + sourceUrl + hrefSuffix + m.Groups.["suffix"].Value
                 | Some _ -> m.Value
                 | None ->
-                    match resolveLocalOutput docsDir currentSourcePath currentOutputPath allowedOutputs sourceOutputPaths outputFolderAliases href with
+                    match resolveLocalOutput docsDir currentSourcePath currentOutputPath allowedOutputs sourceOutputPaths outputFolderAliases acceptHistoricalOutputPaths href with
                     | Some resolved ->
                         let currentDirectory = Path.GetDirectoryName(currentOutputPath)
                         let relative =
@@ -843,6 +857,7 @@ module ContentProvider =
             OutputFolderAliases: Map<string, string>
             LinkErrors: ResizeArray<string>
             LinkWarnings: ResizeArray<string>
+            AcceptHistoricalOutputPaths: bool
             SiteConfig: SiteConfig
             /// Route prefix ("" or e.g. "internal/") prepended to this page's semantic source path so a
             /// documentation set's persisted blocks stay uniquely keyed across the shared site.
@@ -872,6 +887,7 @@ module ContentProvider =
                 context.AllowedOutputs
                 context.SourceOutputPaths
                 context.OutputFolderAliases
+                context.AcceptHistoricalOutputPaths
                 resolved
 
         validateLinks
@@ -884,6 +900,7 @@ module ContentProvider =
             context.AllowedOutputs
             context.SourceOutputPaths
             context.OutputFolderAliases
+            context.AcceptHistoricalOutputPaths
             context.LinkErrors
             context.LinkWarnings
             rewritten
@@ -973,6 +990,7 @@ module ContentProvider =
                   OutputFolderAliases = outputFolderAliases allowedOutputs
                   LinkErrors = linkErrors
                   LinkWarnings = linkWarnings
+                  AcceptHistoricalOutputPaths = false
                   SiteConfig = SiteConfig.empty
                   RoutePrefix = ""
                   ApiRoutes = Map.empty
@@ -1072,6 +1090,7 @@ module ContentProvider =
                       OutputFolderAliases = outputFolderAliases
                       LinkErrors = diagnostics.Errors
                       LinkWarnings = diagnostics.Warnings
+                      AcceptHistoricalOutputPaths = diagnostics.AcceptHistoricalOutputPaths
                       SiteConfig = siteConfig
                       RoutePrefix = semanticPrefix
                       ApiRoutes = apiRoutes
@@ -1130,7 +1149,7 @@ module ContentProvider =
         (semanticCode: SemanticCode.Options)
         (linkErrors: ResizeArray<string>)
         =
-        let diagnostics = { Errors = linkErrors; Warnings = ResizeArray<string>() }
+        let diagnostics = { Errors = linkErrors; Warnings = ResizeArray<string>(); AcceptHistoricalOutputPaths = false }
         let sourceRootRelative = Path.GetRelativePath(sourceDir, docsDir).Replace('\\', '/')
         scanDocsWithOptionsAndLinkDiagnostics docsDir sourceDir sourceRootRelative package rootPath semanticCode SiteConfig.empty diagnostics
 
@@ -1173,7 +1192,7 @@ module ContentProvider =
             diagnostics
 
     let scanDocsSetWithLinkErrors (linkErrors: ResizeArray<string>) (scan: DocsSetScan) =
-        scanDocsSetWithDiagnostics { Errors = linkErrors; Warnings = ResizeArray<string>() } scan
+        scanDocsSetWithDiagnostics { Errors = linkErrors; Warnings = ResizeArray<string>(); AcceptHistoricalOutputPaths = false } scan
 
     let scanDocsSet (scan: DocsSetScan) =
         let linkErrors = ResizeArray<string>()
@@ -1343,9 +1362,9 @@ module ContentProvider =
 
                     let rewritten =
                         rewriteLocalLinks
-                            docsRoot sourceDir sourceRootRelative siteConfig f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) expanded
+                            docsRoot sourceDir sourceRootRelative siteConfig f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) diagnostics.AcceptHistoricalOutputPaths expanded
                     validateLinks
-                        docsRoot sourceDir sourceRootRelative siteConfig f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) diagnostics.Errors diagnostics.Warnings rewritten
+                        docsRoot sourceDir sourceRootRelative siteConfig f apiOutputPath allowedOutputs sourceOutputPaths (outputFolderAliases allowedOutputs) diagnostics.AcceptHistoricalOutputPaths diagnostics.Errors diagnostics.Warnings rewritten
                     id, [ Documentation.markdown rewritten ])
                 |> Map.ofList
             
@@ -1373,7 +1392,7 @@ module ContentProvider =
         (semanticCode: SemanticCode.Options)
         (linkErrors: ResizeArray<string>)
         =
-        let diagnostics = { Errors = linkErrors; Warnings = ResizeArray<string>() }
+        let diagnostics = { Errors = linkErrors; Warnings = ResizeArray<string>(); AcceptHistoricalOutputPaths = false }
         let sourceRootRelative = Path.GetRelativePath(sourceDir, docsDir).Replace('\\', '/')
         applyApiDocsCore
             (Path.Combine(docsDir, "api"))
@@ -1432,7 +1451,7 @@ module ContentProvider =
         (semanticCode: SemanticCode.Options)
         (linkErrors: ResizeArray<string>)
         =
-        let diagnostics = { Errors = linkErrors; Warnings = ResizeArray<string>() }
+        let diagnostics = { Errors = linkErrors; Warnings = ResizeArray<string>(); AcceptHistoricalOutputPaths = false }
         applyApiDocsCore
             (Path.Combine(setSourceDir, "api"))
             snippetSourceDir

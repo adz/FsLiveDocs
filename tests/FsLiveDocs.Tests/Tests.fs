@@ -1365,6 +1365,28 @@ module ContentProviderTests =
         Assert.Equal(3, Regex.Matches(error.Message, "Broken documentation link in").Count)
 
     [<Fact>]
+    let ``captured pages resolve old output-name links while current pages remain strict`` () =
+        let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(docsDir) |> ignore
+        File.WriteAllText(Path.Combine(docsDir, "index.md"), "[guide](guide.md) [missing](missing.md)")
+        File.WriteAllText(Path.Combine(docsDir, "01-guide.md"), "# Guide")
+
+        let scan diagnostics =
+            ContentProvider.scanDocsWithOptionsAndLinkDiagnostics
+                docsDir docsDir "" emptyPackage "" SemanticCode.defaults SiteConfig.empty diagnostics
+
+        let current = ContentProvider.createLinkDiagnostics ()
+        scan current |> ignore
+        Assert.Equal(2, current.Errors.Count)
+
+        let historical = ContentProvider.createHistoricalLinkDiagnostics ()
+        let pages = scan historical
+        let home = pages |> List.find (fun page -> page.OutputPath = "index.html")
+        Assert.Contains("href=\"guide.html\"", home.ContentHtml)
+        Assert.Single historical.Errors |> ignore
+        Assert.Contains("missing.md", historical.Errors.[0])
+
+    [<Fact>]
     let ``shared link diagnostics include API and guide pages`` () =
         let docsDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(Path.Combine(docsDir, "api")) |> ignore

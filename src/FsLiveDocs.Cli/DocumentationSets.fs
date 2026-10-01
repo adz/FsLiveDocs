@@ -242,7 +242,7 @@ module internal DocumentationSets =
                   yield! ContentProvider.setGuideOutputs sourceDir prefix files ]
 
         let allowed = validateAndCollectOutputs content.DocsSets guideOutputs
-        let linkDiagnostics = ContentProvider.createLinkDiagnostics ()
+        let linkDiagnostics = ContentProvider.createHistoricalLinkDiagnostics ()
         let repositoryRoot = Directory.GetParent(Path.GetFullPath materializedRoot).FullName
 
         let sites =
