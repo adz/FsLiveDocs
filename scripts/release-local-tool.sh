@@ -18,7 +18,12 @@ fi
 
 project="$repo_root/src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj"
 package_dir="$repo_root/artifacts/packages"
-product_version="$(grep -oPm1 '(?<=<Version>)[^<]+' "$project")"
+product_version="$(grep -oPm1 '(?<=<Version>)[^<]+' "$project" 2>/dev/null || true)"
+if [[ -z "$product_version" ]]; then
+  # Packable projects inherit their version from Directory.Build.props, so the project file may
+  # not declare one.
+  product_version="$(grep -oPm1 '(?<=<VersionPrefix>)[^<]+' "$repo_root/Directory.Build.props")"
+fi
 IFS=. read -r major minor patch <<<"$product_version"
 package_version="${FSLIVEDOCS_LOCAL_VERSION:-$major.$minor.$((patch + 1))-local.$(date -u +%Y%m%d%H%M%S)}"
 
