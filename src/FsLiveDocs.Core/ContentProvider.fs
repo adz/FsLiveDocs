@@ -838,6 +838,17 @@ module ContentProvider =
                 | Some target -> link.Url <- target.Url
                 | None -> invalidOp $"Cross-reference '{link.Url}' was not found."
 
+        // The longest documented name that begins the inline code, ending at a word boundary.
+        let tryPrefix (content: string) =
+            links
+            |> Map.keys
+            |> Seq.filter (fun alias ->
+                content.StartsWith(alias, System.StringComparison.Ordinal)
+                && (content.Length = alias.Length || System.Char.IsWhiteSpace content.[alias.Length]))
+            |> Seq.sortByDescending _.Length
+            |> Seq.tryHead
+            |> Option.map (fun alias -> alias, content.Substring(alias.Length))
+
         for code in codeNodes do
             if not (code.Parent :? LinkInline) then
                 match links |> Map.tryFind code.Content with
@@ -845,7 +856,16 @@ module ContentProvider =
                     let link = LinkInline(target.Url, null)
                     code.ReplaceBy(link) |> ignore
                     link.AppendChild(code) |> ignore
-                | None -> ()
+                | None ->
+                    match tryPrefix code.Content with
+                    | Some (alias, rest) ->
+                        let target = links[alias]
+                        let linkedCode = CodeInline(alias)
+                        let link = LinkInline(target.Url, null)
+                        link.AppendChild(linkedCode) |> ignore
+                        code.Content <- rest
+                        code.InsertBefore(link) |> ignore
+                    | None -> ()
 
         Markdown.ToHtml(document, pipeline)
 
