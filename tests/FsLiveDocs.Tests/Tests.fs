@@ -388,7 +388,7 @@ module HistoryTests =
         let block = {
             Id = "guide.md#fsharp-0"; SourceHash = "source"; ContextHash = "context"
             Lines = [ { Tokens = [ { Text = "value"; Kind = SemanticTokenKind.Identifier; Tooltip = Some 0 } ] } ]
-            Tooltips = [ { Signature = Some "value: int"; Documentation = Some "A value."; Sections = []; Footer = None } ]
+            Tooltips = [ { Signature = Some "value: int"; Documentation = Some "A value."; Sections = []; Footer = None; Link = None } ]
             Diagnostics = []
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ block ] } ] }
@@ -1121,7 +1121,7 @@ module ContentProviderTests =
     let ``persisted semantic records render accessible encoded tooltips and reject stale source`` () =
         let markdown = "```fsharp\nlet value = List.head [ \"<safe>\" ]\n```"
         let discovered = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown |> List.head
-        let tooltip = { Signature = Some "val value: string"; Documentation = Some "Returns <content>."; Sections = []; Footer = Some "Sample" }
+        let tooltip = { Signature = Some "val value: string"; Documentation = Some "Returns <content>."; Sections = []; Footer = Some "Sample"; Link = None }
         let semantic = {
             Id = discovered.Id
             SourceHash = discovered.SourceHash
@@ -1952,7 +1952,7 @@ module SiteBuilderTests =
         let semanticBlock = {
             Id = discovered.Id; SourceHash = discovered.SourceHash; ContextHash = DocumentationDiscovery.contextHash "" [ discovered ]
             Lines = [ { Tokens = [ { Text = "let"; Kind = Keyword; Tooltip = None }; { Text = " answer = 42"; Kind = Identifier; Tooltip = Some 0 } ] } ]
-            Tooltips = [ { Signature = Some "answer: int"; Documentation = Some "Stored release documentation."; Sections = []; Footer = None } ]
+            Tooltips = [ { Signature = Some "answer: int"; Documentation = Some "Stored release documentation."; Sections = []; Footer = None; Link = None } ]
             Diagnostics = []
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "index.md"; Blocks = [ semanticBlock ] } ] }

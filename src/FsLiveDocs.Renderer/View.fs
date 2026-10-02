@@ -990,6 +990,8 @@ module View =
                     .livedocs-code .tok-union-case,
                     .livedocs-code .tok-active-pattern { color: var(--livedocs-code-union-case); }
                     .livedocs-code .tok-operator { color: var(--livedocs-code-operator); }
+                    .livedocs-code .livedocs-token-link { text-decoration: none; color: inherit; }
+                    .livedocs-code .livedocs-token-link:hover { text-decoration: underline; }
                     .livedocs-checking-context {
                         display: inline-block;
                         margin-bottom: 1rem;

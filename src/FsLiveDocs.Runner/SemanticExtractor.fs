@@ -118,6 +118,24 @@ module SemanticExtractor =
 
     let private tokenPattern = Regex("""//.*$|@?"(?:""|\\.|[^"])*"|\d+(?:\.\d+)?|[A-Za-z_'\p{L}][\w'\p{L}]*|[!%&*+\-./<=>?@^|~:]+|\s+|.""", RegexOptions.Compiled)
 
+    /// The fully-qualified F# name for a documented symbol, or None for locals, synthetic
+    /// generated modules, and compiler infrastructure.
+    let private symbolLink (symbol: FSharpSymbol) =
+        let qualified (name: string) =
+            not (String.IsNullOrWhiteSpace name)
+            && name.Contains('.')
+            && not (name.StartsWith("FsLiveDocsGeneratedPage", StringComparison.Ordinal))
+            && not (name.Contains(".md", StringComparison.OrdinalIgnoreCase))
+            && not (name.Contains(".fsx", StringComparison.OrdinalIgnoreCase))
+            && not (name.Contains(".fs", StringComparison.OrdinalIgnoreCase))
+
+        match symbol with
+        | :? FSharpMemberOrFunctionOrValue as value ->
+            if qualified value.FullName then Some value.FullName else None
+        | :? FSharpEntity as entity ->
+            entity.TryFullName |> Option.filter qualified
+        | _ -> None
+
     let private buildTooltip (use': FSharpSymbolUse) =
         {
             Signature = symbolSignature use'
@@ -126,6 +144,7 @@ module SemanticExtractor =
             // Assembly ownership is compiler implementation detail, especially for
             // namespaces contributed by several references. It is never user-facing hover content.
             Footer = None
+            Link = symbolLink use'.Symbol
         }
 
     let extractBlock contextHash (range: CompilationSourceRange) (uses: FSharpSymbolUse array) diagnostics =
@@ -136,7 +155,7 @@ module SemanticExtractor =
         let tooltipIndexes = Collections.Generic.Dictionary<string, int>()
         let tooltipFor use' =
             let tooltip = buildTooltip use'
-            let key = defaultArg tooltip.Signature "" + "\n" + defaultArg tooltip.Documentation ""
+            let key = defaultArg tooltip.Signature "" + "\n" + defaultArg tooltip.Documentation "" + "\n" + defaultArg tooltip.Link ""
             match tooltipIndexes.TryGetValue key with
             | true, index -> index
             | _ ->

@@ -14,6 +14,8 @@ type SemanticTooltip = {
     Documentation: string option
     Sections: SemanticTooltipSection list
     Footer: string option
+    /// <summary>Fully-qualified F# symbol name, resolved to an API link when the symbol is documented.</summary>
+    Link: string option
 }
 type SemanticDiagnosticSeverity = | Warning | Error
 type SemanticDiagnostic = {

@@ -14,9 +14,11 @@ module SemanticCode =
         Enabled: bool
         Artifact: SemanticDocumentationArtifact option
         Prelude: string
+        /// <summary>Maps a fully-qualified F# symbol name to a relative API URL, or None when it is not documented.</summary>
+        LinkResolver: string -> string option
     }
 
-    let defaults = { Enabled = true; Artifact = None; Prelude = "" }
+    let defaults = { Enabled = true; Artifact = None; Prelude = ""; LinkResolver = fun _ -> None }
     let disabled = { defaults with Enabled = false }
 
     let private tokenClass = function
@@ -118,19 +120,31 @@ module SemanticCode =
             |> String.concat "\n"
         codeFrame "livedocs-lexical-code" lines ""
 
-    let private renderPersistedBlock (block: SemanticCodeBlock) =
+    let private renderPersistedBlock (resolveLink: string -> string option) (block: SemanticCodeBlock) =
         let tooltipId index = $"livedocs-tip-{safeId block.Id}-{index}"
+        let tooltipLink index =
+            block.Tooltips
+            |> List.tryItem index
+            |> Option.bind _.Link
+            |> Option.bind resolveLink
+
         let lines =
             block.Lines
             |> List.map (fun line ->
                 line.Tokens
                 |> List.map (fun token ->
                     let encoded = WebUtility.HtmlEncode token.Text
-                    match token.Tooltip with
-                    | Some index ->
-                        let id = tooltipId index
-                        $"<span class=\"{tokenClass token.Kind}\" tabindex=\"0\" data-fsdocs-tip=\"{id}\" aria-describedby=\"{id}\">{encoded}</span>"
-                    | None -> $"<span class=\"{tokenClass token.Kind}\">{encoded}</span>")
+
+                    let inner =
+                        match token.Tooltip with
+                        | Some index ->
+                            let id = tooltipId index
+                            $"<span class=\"{tokenClass token.Kind}\" tabindex=\"0\" data-fsdocs-tip=\"{id}\" aria-describedby=\"{id}\">{encoded}</span>"
+                        | None -> $"<span class=\"{tokenClass token.Kind}\">{encoded}</span>"
+
+                    match token.Tooltip |> Option.bind tooltipLink with
+                    | Some url -> $"<a href=\"{WebUtility.HtmlEncode url}\" class=\"livedocs-token-link\">{inner}</a>"
+                    | None -> inner)
                 |> String.concat "")
             |> String.concat "\n"
         let tooltips =
@@ -148,8 +162,8 @@ module SemanticCode =
             |> String.concat ""
         codeFrame "livedocs-semantic-code" lines $"<div class=\"livedocs-tooltips\">{tooltips}</div>"
 
-    let private renderPreparation (block: SemanticCodeBlock) =
-        $"<details class=\"livedocs-shared-setup not-prose\"><summary>Shared setup</summary>{renderPersistedBlock block}</details>"
+    let private renderPreparation resolveLink (block: SemanticCodeBlock) =
+        $"<details class=\"livedocs-shared-setup not-prose\"><summary>Shared setup</summary>{renderPersistedBlock resolveLink block}</details>"
 
     let private renderPrelude (prelude: string) =
         $"<details class=\"livedocs-shared-setup livedocs-repository-setup not-prose\"><summary>Repository F# setup</summary>{renderLexicalSource prelude}</details>"
@@ -173,7 +187,7 @@ module SemanticCode =
                         let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
                         if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}: expected {persisted.SourceHash}, got {block.SourceHash}."
                         if persisted.ContextHash <> pageContextHash then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
-                        htmlStartMarker + renderPreparation persisted + htmlEndMarker
+                        htmlStartMarker + renderPreparation options.LinkResolver persisted + htmlEndMarker
                     | NoCheck _ ->
                         htmlStartMarker + renderLexicalSource fence.Code + htmlEndMarker
                     | Transcript ->
@@ -183,7 +197,7 @@ module SemanticCode =
                         if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}: expected {persisted.SourceHash}, got {block.SourceHash}."
                         let expectedContext = if block.Mode = Isolated then DocumentationDiscovery.contextHash options.Prelude [ block ] else pageContextHash
                         if persisted.ContextHash <> expectedContext then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
-                        htmlStartMarker + renderPersistedBlock persisted + htmlEndMarker
+                        htmlStartMarker + renderPersistedBlock options.LinkResolver persisted + htmlEndMarker
                 builder.Append(replacement) |> ignore
                 cursor <- fence.Start + fence.Length)
             fences
