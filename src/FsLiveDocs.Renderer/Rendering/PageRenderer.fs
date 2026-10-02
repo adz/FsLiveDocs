@@ -585,11 +585,13 @@ module PageRenderer =
     /// <example name="GenerateLlmsTxtExample" data-livedocs="snapshot">
     /// > open FsLiveDocs.Core;;
     ///
-    /// > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] };;
+    /// > let package = { Version = "1.0"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty };;
     /// val package: PackageModel = { Version = "1.0"
     ///   Entities = []
     ///   Scenarios = []
-    ///   Packages = [] }
+    ///   Packages = []
+    ///   Organization = { Families = []
+    ///                    PackageSections = [] } }
     ///
     /// > let summary = SiteBuilder.generateLlmsTxt package;;
     /// val summary: string = "# API Reference for LLMs

@@ -105,8 +105,47 @@ module Evaluation =
         |> List.collect id
         |> String.concat "\n"
 
-    /// <summary>Evaluates examples in one fresh session. Later definitions shadow earlier ones; output is per example.</summary>
-    let run (examples: TranscriptExample array) : string array =
+    let private createSessionTimed () =
+        let stopwatch = Diagnostics.Stopwatch.StartNew()
         let session, outStream, errStream = createSession ()
-        use session = session
-        examples |> Array.map (evalExample session outStream errStream)
+        stopwatch.Stop()
+        session, outStream, errStream, stopwatch.Elapsed.TotalMilliseconds
+
+    let private evalExampleTimed session outStream errStream (example: TranscriptExample) =
+        let stopwatch = Diagnostics.Stopwatch.StartNew()
+        let output = evalExample session outStream errStream example
+        stopwatch.Stop()
+        output, stopwatch.Elapsed.TotalMilliseconds
+
+    /// <summary>Evaluates examples and reports how long each session and evaluation took.</summary>
+    /// <remarks>
+    /// Shared mode creates one session and runs every example in it; later definitions shadow earlier ones. Fresh mode
+    /// creates and disposes a session per example so independent examples cannot see each other's definitions, while
+    /// still loading the compiler once per worker process.
+    /// </remarks>
+    let run (freshSessions: bool) (examples: TranscriptExample array) : string array * TranscriptExampleTiming array =
+        if examples.Length = 0 then
+            [||], [||]
+        elif freshSessions then
+            examples
+            |> Array.map (fun example ->
+                let session, outStream, errStream, sessionMs = createSessionTimed ()
+                use session = session
+                let output, evalMs = evalExampleTimed session outStream errStream example
+                output, { SessionMs = sessionMs; EvalMs = evalMs })
+            |> Array.unzip
+        else
+            let session, outStream, errStream, sessionMs = createSessionTimed ()
+            use session = session
+            let mutable first = true
+            examples
+            |> Array.map (fun example ->
+                let output, evalMs = evalExampleTimed session outStream errStream example
+                let sessionForExample =
+                    if first then
+                        first <- false
+                        sessionMs
+                    else
+                        0.0
+                output, { SessionMs = sessionForExample; EvalMs = evalMs })
+            |> Array.unzip

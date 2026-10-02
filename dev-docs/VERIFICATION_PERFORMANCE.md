@@ -42,3 +42,24 @@ This gives one release three complete execution passes and many process/session 
 - Timing reports show each pass and its case count, so another duplicate pass is visible.
 
 The workflow changes remove about 48 minutes from the measured Axial release path before worker optimization. The worker and compiler changes need a timed benchmark to establish their actual gain.
+
+## Measured result
+
+Items 1-5 were implemented and measured against Axial's documentation set — 125 pages, 612 F# blocks, 192 executed cases — on 2026-10-01 with a warm `.livedocs/cache`:
+
+| Command | Baseline | After items 1-3 | After items 1-5 |
+| --- | ---: | ---: | ---: |
+| `livedocs test` | 24m 21s | 13m 40s | **3m 28s** |
+| `livedocs capture` | 18m 51s | 13m 15s | **3m 33s** |
+
+Items 1-3 removed the duplicate pass and the repeated work inside one command. Items 4-5 replaced the one-process-per-example execution with batches grouped by project graph, each example in a fresh FSI session, run by at most four concurrent workers. Example execution on the release path fell from 744.8s to 157.4s.
+
+The release path used to run `test` then `capture`. It now runs `capture` alone: capture audits and executes examples once and writes the capsule from that result, so the measured release verification is 43m 12s to 3m 33s. The dispatch that re-ran `livedocs test` for the Pages job removes another 24m 14s. The `capture` output was inspected as a valid capsule with the same inventory the release expects.
+
+The worker limit defaults to `min(ProcessorCount, 4)`; `FSLIVEDOCS_TRANSCRIPT_WORKERS` overrides it and `FSLIVEDOCS_TRANSCRIPT_BATCH` overrides the batch size (default 16). `--timings` records the FSI session time per Markdown case, so raising the limit can be judged against memory rather than guessed.
+
+Item 6 is implemented as an explicit opt-in. A `run` or `transcript` fence may declare `deterministic`, and only a passing result is cached, keyed by tool, compiler, project inputs, resolved assembly, references, prelude, block id, source hash, executed content, and expected output. A failure is never cached, and a changed input cannot hit an older entry. The gain is author-dependent because FsLiveDocs does not verify the declaration, so only examples that are deterministic in fact may use it.
+
+## Reified
+
+Reified 0.10.0's documentation set (96 pages, 472 F# blocks, no executable Markdown blocks) exposed a 0.11.1 regression: pages that pinned `targetFramework: net8.0` compiled their own project for net8.0 but then appended the default framework's netstandard2.1 reference assemblies, which changed inline SRTP overload resolution and failed four blocks with `No overloads match`. The audit now gathers each documented project's assembly for the page's framework, falling back to that project's default build when it does not declare the framework. Reified `test` and `capture` pass, and capture peaks at about 1.4 GB resident instead of the historical 9.8 GB capture OOM. Peak memory is FSharp.Compiler.Service (`keepAssemblyContents = true`, typed check results retained until semantic projection), not the Markdown renderer: Axial's whole content layer is ~6 MB uncompressed.

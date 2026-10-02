@@ -19,6 +19,10 @@ The documentation build has three stages, in order:
 `test` and `build` both perform the full audit, so a pull request that only needs
 verification can stop after `test`.
 
+A release does not run `test` first. `livedocs capture` performs one verification pass —
+the audit and every executable example — and then assembles the capsule from that result,
+so tagging a commit never executes the same examples twice.
+
 ## CI-friendly output
 
 Pass these on every `livedocs` invocation in an automated environment:
@@ -91,7 +95,7 @@ writes `.github/workflows/livedocs.yml` with the provider steps (`gh release cre
 | --- | --- |
 | every pull request | `dotnet build`, `livedocs test` |
 | push to `main` | the above, then `livedocs build` + `build-history` + `verify-output`, then deploy to GitHub Pages |
-| a `v*` tag | `capture`, `history-check`, **`gh release create`**, `history-add`, `history-check`, **commit `history.json` to `main`** |
+| a `v*` tag | `capture` (which audits and executes before writing the capsule), `history-check`, **`gh release create`**, `history-add`, `history-check`, **commit `history.json` to `main`** |
 
 Assumptions:
 

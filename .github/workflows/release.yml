@@ -91,10 +91,10 @@ jobs:
       - name: Install the packed tool
         run: dotnet tool install FsLiveDocs --tool-path .tools --version "$VERSION" --add-source artifacts/packages
 
-      - name: Verify and build documentation
-        run: |
-          .tools/livedocs test
-          .tools/livedocs build
+      - name: Build documentation
+        # Capture owns the release verification pass: it audits and executes the examples once when
+        # it builds the capsule, so the release does not run `livedocs test` first.
+        run: .tools/livedocs build
 
       - name: Capture release documentation
         run: .tools/livedocs capture --version "$VERSION" --output "artifacts/FsLiveDocs-$VERSION-livedocs.zip"

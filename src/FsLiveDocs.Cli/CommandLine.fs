@@ -87,6 +87,8 @@ type Arguments =
     | [<Inherit>] Dry_Run
     /// <summary>Includes pages marked draft when building or watching a site.</summary>
     | [<Inherit>] Drafts
+    /// <summary>Writes a machine-readable report of verification phases and per-example timings.</summary>
+    | [<Inherit>] Timings
     interface IArgParserTemplate with
         member s.Usage =
             match s with
@@ -126,6 +128,7 @@ type Arguments =
             | Discover_Projects -> "With init, discover project files, save them in .livedocs/config.json, and report missing XML documentation settings."
             | Dry_Run -> "With capture, validate and report expected output without writing a capsule."
             | Drafts -> "With build or watch, include pages whose frontmatter sets draft: true."
+            | Timings -> "With test, capture, audit, or build, write .livedocs/timings.json with phase and per-example durations."
 
 type internal VerbosityLevel =
     | Warnings

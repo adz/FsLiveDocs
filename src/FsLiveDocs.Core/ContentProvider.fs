@@ -721,6 +721,13 @@ module ContentProvider =
 
     type private ApiLink = { Label: string; Url: string }
 
+    let private fSharpEntityFullName (entity: EntityModel) =
+        let withoutArity = Regex.Replace(entity.Id, @"`\d+$", "")
+        if entity.Kind = EntityKind.Module && withoutArity.EndsWith("Module", System.StringComparison.Ordinal) then
+            withoutArity.Substring(0, withoutArity.Length - "Module".Length)
+        else
+            withoutArity
+
     let private apiLinksWithRoutes (package: PackageModel) (rootPath: string) (apiRoutes: Map<string, string>) =
         let links = ResizeArray<string * ApiLink>()
         let add alias label url =
@@ -736,6 +743,8 @@ module ContentProvider =
                     let entityUrl = $"{rootPath}{routeValue}api/{entity.Id}.html"
                     add entity.Id entity.Name entityUrl
                     add entity.Name entity.Name entityUrl
+                    // F# module full names drop the "Module" suffix FsLiveDocs keeps in ids.
+                    add (fSharpEntityFullName entity) entity.Name entityUrl
                     let ownerName = entity.Name.Split('<').[0]
 
                     for member' in entity.Members do
@@ -754,6 +763,11 @@ module ContentProvider =
             | [ link ] -> Some(alias, link)
             | _ -> None)
         |> Map.ofSeq
+
+    /// Maps a fully-qualified F# symbol name to a relative API URL for semantic code links.
+    let semanticLinkResolver (package: PackageModel) (rootPath: string) (apiRoutes: Map<string, string>) : string -> string option =
+        let links = apiLinksWithRoutes package rootPath apiRoutes
+        fun fullName -> links |> Map.tryFind fullName |> Option.map _.Url
 
     let private apiLinks (package: PackageModel) (rootPath: string) =
         apiLinksWithRoutes package rootPath Map.empty
@@ -824,6 +838,17 @@ module ContentProvider =
                 | Some target -> link.Url <- target.Url
                 | None -> invalidOp $"Cross-reference '{link.Url}' was not found."
 
+        // The longest documented name that begins the inline code, ending at a word boundary.
+        let tryPrefix (content: string) =
+            links
+            |> Map.keys
+            |> Seq.filter (fun alias ->
+                content.StartsWith(alias, System.StringComparison.Ordinal)
+                && (content.Length = alias.Length || System.Char.IsWhiteSpace content.[alias.Length]))
+            |> Seq.sortByDescending _.Length
+            |> Seq.tryHead
+            |> Option.map (fun alias -> alias, content.Substring(alias.Length))
+
         for code in codeNodes do
             if not (code.Parent :? LinkInline) then
                 match links |> Map.tryFind code.Content with
@@ -831,7 +856,16 @@ module ContentProvider =
                     let link = LinkInline(target.Url, null)
                     code.ReplaceBy(link) |> ignore
                     link.AppendChild(code) |> ignore
-                | None -> ()
+                | None ->
+                    match tryPrefix code.Content with
+                    | Some (alias, rest) ->
+                        let target = links[alias]
+                        let linkedCode = CodeInline(alias)
+                        let link = LinkInline(target.Url, null)
+                        link.AppendChild(linkedCode) |> ignore
+                        code.Content <- rest
+                        code.InsertBefore(link) |> ignore
+                    | None -> ()
 
         Markdown.ToHtml(document, pipeline)
 
@@ -909,8 +943,12 @@ module ContentProvider =
             context.RoutePrefix
             + Path.GetRelativePath(context.DocsDir, sourcePath).Replace('\\', '/')
 
+        let semanticCode =
+            { context.SemanticCode with
+                LinkResolver = semanticLinkResolver context.Package context.RootPath context.ApiRoutes }
+
         let formatted =
-            SemanticCode.formatFences context.SemanticCode semanticSourcePath rewritten
+            SemanticCode.formatFences semanticCode semanticSourcePath rewritten
 
         let semanticSegments = ResizeArray<string>()
         let semanticPattern =

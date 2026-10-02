@@ -25,36 +25,101 @@ module GeneratedVerification =
             invalidOp details
     }
 
+    /// <summary>The exact source and expected output an execution case would run, for cache identity.</summary>
+    let executionPayload (blocks: DocumentationBlock list) (block: DocumentationBlock) =
+        match block.Mode with
+        | Run ->
+            let pageSource =
+                blocks
+                |> List.takeWhile (fun candidate -> candidate.Id <> block.Id)
+                |> fun preceding -> preceding @ [ block ]
+                |> List.filter (fun candidate ->
+                    match candidate.Mode with Page | Prepare | Run -> true | _ -> false)
+                |> List.map _.ExpandedSource
+                |> String.concat "\n\n"
+            pageSource, None
+        | Transcript ->
+            let parsed = ExampleTranscript.parse block.ExpandedSource
+            block.ExpandedSource, parsed.ExpectedOutput
+        | _ -> invalidOp $"{block.Id} is not an executable documentation block."
+
+    let private executionContext (references: string list) (blocks: DocumentationBlock list) (block: DocumentationBlock) : FsiTranscriptRunner.DocTestExecutionContext =
+        let content, expected = executionPayload blocks block
+        let projectPath =
+            block.Project
+            |> Option.defaultWith (fun () -> invalidOp $"{block.Id} has no project to execute against.")
+        let project = ProjectResolver.resolve projectPath
+        { Project = project
+          References = references
+          Scenario = None
+          Example = ExampleModel.Create(block.Id, content, expected, None) }
+
+    /// Compares one executed example against its transcript expectation.
+    let private comparison (output: string) (expected: string option) =
+        match expected with
+        | Some expected when output.Trim() <> expected.Trim() ->
+            false,
+            Some $"output mismatch.{Environment.NewLine}Expected:{Environment.NewLine}{expected}{Environment.NewLine}Actual:{Environment.NewLine}{output}"
+        | _ when output.Contains("error FS", StringComparison.OrdinalIgnoreCase) ->
+            false, Some $"execution failed:{Environment.NewLine}{output}"
+        | _ -> true, None
+
+    /// <summary>
+    /// Executes one already-discovered executable block without recompiling its owning unit.
+    /// </summary>
+    /// <remarks>
+    /// A caller that has already run a successful compiler audit (the native <c>test</c> and
+    /// <c>capture</c> path) owns that guarantee, so recompiling here would repeat work the audit
+    /// just did. <see cref="runCase" /> keeps its compile-before-execute contract for generated
+    /// xUnit facts, which may run alone.
+    /// </remarks>
+    let executeDiscoveredBlock (references: string list) (blocks: DocumentationBlock list) (block: DocumentationBlock) =
+        let output, expectedOutput, _ =
+            FsiTranscriptRunner.runExample (executionContext references blocks block)
+        match comparison output expectedOutput with
+        | false, Some message -> invalidOp $"{block.Id} {message}"
+        | _ -> ()
+
+    /// <summary>The result of executing one discovered block inside a batch.</summary>
+    type BlockExecutionResult =
+        { Id: string
+          Passed: bool
+          Message: string option
+          /// <summary>The normalized output the example produced, retained so a deterministic pass can be cached.</summary>
+          Output: string
+          /// <summary>Time spent creating this block's FSI session, in milliseconds.</summary>
+          SessionMs: float
+          /// <summary>Time spent evaluating this block's blocks, in milliseconds.</summary>
+          EvalMs: float }
+
+    /// <summary>
+    /// Executes several independent blocks in batched workers, each in a fresh FSI session.
+    /// </summary>
+    /// <remarks>
+    /// Each target carries the page context its <c>run</c> prelude needs. Batches are grouped by
+    /// the block's project, so one worker never loads two documented graphs. This path does not
+    /// recompile: the caller has already run the audit.
+    /// </remarks>
+    let executeDiscoveredBlocks (references: string list) (targets: (DocumentationBlock list * DocumentationBlock) list) : BlockExecutionResult list =
+        let contexts = targets |> List.map (fun (blocks, block) -> executionContext references blocks block)
+        let results = FsiTranscriptRunner.runIndependent contexts
+        (targets, results)
+        ||> List.map2 (fun (_, block) result ->
+            let passed, message = comparison result.Output result.Expected
+            { Id = block.Id
+              Passed = passed
+              Message = message
+              Output = result.Output
+              SessionMs = result.SessionMs
+              EvalMs = result.EvalMs })
+
     let private executeBlock projectPath references sourcePath expandedMarkdown blockId =
+        let blocks = DocumentationDiscovery.discoverMarkdown sourcePath (Some projectPath) expandedMarkdown
         let block =
-            DocumentationDiscovery.discoverMarkdown sourcePath (Some projectPath) expandedMarkdown
+            blocks
             |> List.tryFind (fun candidate -> candidate.Id = blockId)
             |> Option.defaultWith (fun () -> invalidOp $"Generated execution case no longer exists: {blockId}. Regenerate tests.")
-        let content, expected =
-            match block.Mode with
-            | Run ->
-                let pageSource =
-                    DocumentationDiscovery.discoverMarkdown sourcePath (Some projectPath) expandedMarkdown
-                    |> List.takeWhile (fun candidate -> candidate.Id <> block.Id)
-                    |> fun preceding -> preceding @ [ block ]
-                    |> List.filter (fun candidate ->
-                        match candidate.Mode with Page | Prepare | Run -> true | _ -> false)
-                    |> List.map _.ExpandedSource
-                    |> String.concat "\n\n"
-                pageSource, None
-            | Transcript ->
-                let parsed = ExampleTranscript.parse block.ExpandedSource
-                block.ExpandedSource, parsed.ExpectedOutput
-            | _ -> invalidOp $"{blockId} is not an executable documentation block."
-        let project = ProjectResolver.resolve projectPath
-        let example = ExampleModel.Create(block.Id, content, expected, None)
-        let output, expectedOutput, _ =
-            FsiTranscriptRunner.runExample { Project = project; References = references; Scenario = None; Example = example }
-        match expectedOutput with
-        | Some expected when output.Trim() <> expected.Trim() ->
-            invalidOp $"{blockId} output mismatch.{Environment.NewLine}Expected:{Environment.NewLine}{expected}{Environment.NewLine}Actual:{Environment.NewLine}{output}"
-        | _ when output.Contains("error FS", StringComparison.OrdinalIgnoreCase) -> invalidOp $"{blockId} execution failed:{Environment.NewLine}{output}"
-        | _ -> ()
+        executeDiscoveredBlock references blocks block
 
     /// Runs one generated case without exposing verification ordering or composition to its caller.
     let runCase references (case: GeneratedVerificationCase) = async {
@@ -133,6 +198,7 @@ module GeneratedVerification =
                     // Isolated: an example is a standalone illustration, not part of a page's flow.
                     Mode = Isolated
                     Project = Some projectPath
+                    Deterministic = false
                 })
 
             // An example demonstrates the library that declares it, so that library's own

@@ -71,6 +71,7 @@ Links between documentation pages use their source Markdown paths, including the
 | `--verbosity <level>` | Set output detail: `warnings` (default), `info`, or `debug`. |
 | `--interactive <bool>` | Enable or disable animated, stage-aware progress (default: `true`); redirected output uses plain progress automatically. |
 | `--banner <bool>` | Show or hide the LiveDocs banner (default: `true`). |
+| `--timings` | With `test`, `capture`, `audit`, `build`, `build-history`, or `history-check`, write `.livedocs/timings.json` with phase and per-example durations and print a summary. |
 | `--host <address>` | Set the preview bind address. |
 | `--port <number>` | Set the preview port. |
 | `--ignore <names>` | Add watcher directory names to ignore. |
@@ -87,6 +88,10 @@ At the default `warnings` level, LiveDocs groups API issues by source file and i
 | `fsharp run` | Page unit | Yes | Yes |
 | `fsharp transcript` | Transcript runner | Yes | Yes |
 | `fsharp no-check reason="..."` | No | No | Syntax only |
+
+Append `deterministic` to `fsharp run` or `fsharp transcript` to reuse a passing result across
+invocations. It asserts the example reads no clock, network, filesystem, environment, or process;
+FsLiveDocs does not verify the assertion, and a changed input invalidates the entry.
 
 ## Shortcodes and references
 

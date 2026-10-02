@@ -95,3 +95,16 @@ module WorkerIsolationTests =
         finally
             Environment.CurrentDirectory <- workingDirectory
             Directory.Delete(directory, true)
+
+    [<Fact>]
+    let ``exported namespaces come from assembly metadata, not the file name`` () =
+        let directory = Path.Combine(Path.GetTempPath(), "fslivedocs-tests", Guid.NewGuid().ToString "N")
+        Directory.CreateDirectory directory |> ignore
+        try
+            // The assembly is named MyPackage, but its source declares namespace FsLiveDocs.
+            let library = compileLibrary directory "MyPackage" "namespace FsLiveDocs\nmodule Api = let value = 42" []
+            let namespaces = ProjectResolver.exportedRootNamespaces library
+            Assert.Contains("FsLiveDocs", namespaces)
+            Assert.DoesNotContain("MyPackage", namespaces)
+        finally
+            Directory.Delete(directory, true)

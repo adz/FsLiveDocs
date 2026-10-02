@@ -51,7 +51,9 @@ module internal DocAnalysis =
           Errors: (string * (int * int * string)) list
           Prelude: string
           Artifact: SemanticDocumentationArtifact option
-          CachePath: string }
+          CachePath: string
+          /// <summary>The resolved pages the analysis walked, so callers do not repeat the scan.</summary>
+          Pages: Page list }
 
     type private ApiNameCandidate = { FullName: string; OpenPath: string option }
 
@@ -406,6 +408,34 @@ module internal DocAnalysis =
                     |> List.map (fun (path, project) -> path, { project with References = aggregateReferences })
                     |> Map.ofList
 
+                // A page that pins a target framework must compile against that framework's
+                // reference assemblies alone. Concatenating the default framework's references
+                // (netstandard2.1 beside net8.0, say) makes inline SRTP overloads resolve
+                // differently, so the framework's own built project assemblies are gathered here.
+                let frameworkBuiltAssemblies = Collections.Generic.Dictionary<string, string list>()
+
+                let builtAssembliesFor framework =
+                    match frameworkBuiltAssemblies.TryGetValue framework with
+                    | true, assemblies -> assemblies
+                    | _ ->
+                        let assemblies =
+                            resolvedProjects
+                            |> List.map (fun projectPath ->
+                                // A project may not declare the page's framework; its default build is
+                                // still compatible with it, so fall back rather than reject the page.
+                                let target =
+                                    try
+                                        (ProjectResolver.documentationBuildFor (Some framework) projectPath).TargetPath
+                                    with :? InvalidOperationException ->
+                                        None
+
+                                match target with
+                                | Some path -> path
+                                | None -> ProjectResolver.resolveAssemblyPath projectPath)
+                            |> List.filter (String.IsNullOrWhiteSpace >> not)
+                        frameworkBuiltAssemblies.[framework] <- assemblies
+                        assemblies
+
                 let writePageCache page artifact =
                     let path = pageCachePath page
                     let work =
@@ -418,10 +448,10 @@ module internal DocAnalysis =
                 let evaluationFor (selectedProject, targetFramework) =
                     match targetFramework with
                     | None -> evaluatedProjects.[selectedProject]
-                    | Some _ ->
-                        let selected = DocumentationCompiler.evaluateProjectFor targetFramework selectedProject
+                    | Some framework ->
+                        let selected = DocumentationCompiler.evaluateProjectFor (Some framework) selectedProject
                         let references =
-                            selected.References @ aggregateReferences
+                            selected.References @ builtAssembliesFor framework
                             |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
                         { selected with References = references }
 
@@ -453,9 +483,15 @@ module internal DocAnalysis =
                                           |> Option.map (fun id ->
                                               id,
                                               (item.StartLine, item.StartColumn, addApiNameHint package item.ErrorNumber item.Message)))
+                                  // Transcripts run in FSI rather than compiling, so check their
+                                  // interactions separately for hover/link data only; their
+                                  // diagnostics do not fail the audit.
+                                  let transcriptUnits =
+                                      DocumentationCompiler.checkTranscriptsWithProject selectedEvaluation page.Prelude page.Blocks
+                                      |> Async.RunSynchronously
                                   let semantic =
                                       if errors.IsEmpty then
-                                          let artifact = SemanticExtractor.artifact checkedUnits
+                                          let artifact = SemanticExtractor.artifact (checkedUnits @ transcriptUnits)
                                           writePageCache page artifact
                                           Some artifact
                                       else None
@@ -480,7 +516,8 @@ module internal DocAnalysis =
           Errors = errors
           Prelude = defaultPrelude
           Artifact = artifact
-          CachePath = cachePath }
+          CachePath = cachePath
+          Pages = pages }
 
     let analyzeWithProgress
         reportProgress

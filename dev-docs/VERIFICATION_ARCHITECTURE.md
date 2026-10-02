@@ -53,8 +53,41 @@ documented project's graph.
 - The request travels as JSON on the worker's stdin and the response on its stdout; both carry
   `Protocol.Version`, and a mismatch is rejected. Evaluated code's stdout is redirected to the worker's stderr so
   printing cannot corrupt the response. That output is not part of the compared transcript, as before the move.
-- One request is one fresh FSI session. `runExamples` sends a project's snapshot examples in one request, preserving
-  the shared-session shadowing they had in process.
+- One worker request carries a session policy. Snapshot examples that shadow each other use `SharedSession`, one FSI
+  session for the whole request. Independent Markdown `run` and `transcript` blocks use `FreshSessionPerExample`:
+  one worker process evaluates several blocks, each in its own FSI session, so definitions cannot leak while the
+  compiler and its JIT are loaded once. A request never mixes documented projects; `FsiTranscriptRunner.runIndependent`
+  groups by project graph, chunks each group, and `FSLIVEDOCS_TRANSCRIPT_BATCH` (default 16) bounds a batch.
+  Evaluation results are reassembled in case order, so concurrency does not reorder output. Batch size also bounds a
+  worker timeout's blast radius, because `Process.timeout` kills the whole process.
+- Batches run with at most `FSLIVEDOCS_TRANSCRIPT_WORKERS` concurrent worker processes (default
+  `min(ProcessorCount, 4)`). Each worker loads its own FSharp.Compiler.Service and its own FSI sessions, so raise the
+  limit only against observed memory. Examples that share a process-wide external resource — a fixed port, a
+  machine-global lock, one database — must be written to tolerate concurrent runs, or set the limit to 1. FsLiveDocs
+  does not detect such sharing.
 - Each worker runs under `Process.timeout` (10 minutes, or `FSLIVEDOCS_TRANSCRIPT_TIMEOUT_SECONDS`), which terminates the
   process tree. Isolation is for dependency identity and cleanup; it is not a security sandbox, and examples remain
   trusted code.
+- Transcript blocks are also checked as standalone scripts during the audit, purely to produce hover and link data.
+  The check keeps the raw fence's id and source hash but checks the prompt-stripped interaction script, and its
+  diagnostics are discarded because FSI verifies transcripts at runtime.
+
+## Reuse only declared-deterministic execution
+
+A `run` or `transcript` block may declare `deterministic`: the author's assertion that the example reads
+no clock, network, filesystem, environment, or process. A passing result for such a block is stored in
+`.livedocs/cache/execution/`, keyed by tool, compiler, project inputs, resolved assembly, references,
+prelude, block id, source hash, executed content, and expected output. A later invocation with the same
+key skips execution and reports the case as cached. A changed input cannot reuse an entry, and failures
+are never cached, so a fixed error re-runs and shows the current message.
+
+FsLiveDocs does not verify the assertion. A wrong declaration can reuse a stale pass, which would let a
+release publish without running the example. The declaration is the correctness boundary; when in
+doubt, leave it off and let the example run on every pass.
+
+## FSI load-script namespaces
+
+The transcript load script opens the assembly's declared top-level namespaces, read from metadata
+via `System.Reflection.Metadata`, rather than a namespace guessed from the project file name. This
+handles packages whose assembly name differs from their namespace, such as `FsLiveDocs.Annotations`
+(which declares `namespace FsLiveDocs`).

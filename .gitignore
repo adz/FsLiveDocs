@@ -4,6 +4,7 @@ output/
 artifacts/
 .livedocs/cache/
 .livedocs/releases/
+.livedocs/timings.json
 *.user
 
 .fake

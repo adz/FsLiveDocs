@@ -74,6 +74,22 @@ module AnalysisCacheTests =
         Assert.Equal<string>(projectBefore, projectAfter)
         Assert.False(String.Equals(verificationBefore, verificationAfter, StringComparison.Ordinal))
 
+module ExecutionCacheTests =
+
+    [<Fact>]
+    let ``execution cache identity changes with any input`` () =
+        let key = ExecutionCache.key [ "tool"; "project-inputs"; "assembly"; "block"; "content" ]
+        Assert.Equal<string>(key, ExecutionCache.key [ "tool"; "project-inputs"; "assembly"; "block"; "content" ])
+        Assert.NotEqual<string>(key, ExecutionCache.key [ "tool"; "project-inputs"; "assembly"; "block"; "changed" ])
+        Assert.Null(ExecutionCache.tryRead (ExecutionCache.key [ Guid.NewGuid().ToString "N" ]))
+
+    [<Fact>]
+    let ``execution cache stores and returns a passing output`` () =
+        let key = ExecutionCache.key [ "test"; Guid.NewGuid().ToString "N" ]
+        Assert.Null(ExecutionCache.tryRead key)
+        ExecutionCache.write key "val it: int = 42"
+        Assert.Equal(Some "val it: int = 42", ExecutionCache.tryRead key)
+
 module BuildStateTests =
 
     let private withTempDirectory action =
@@ -372,7 +388,7 @@ module HistoryTests =
         let block = {
             Id = "guide.md#fsharp-0"; SourceHash = "source"; ContextHash = "context"
             Lines = [ { Tokens = [ { Text = "value"; Kind = SemanticTokenKind.Identifier; Tooltip = Some 0 } ] } ]
-            Tooltips = [ { Signature = Some "value: int"; Documentation = Some "A value."; Sections = []; Footer = None } ]
+            Tooltips = [ { Signature = Some "value: int"; Documentation = Some "A value."; Sections = []; Footer = None; Link = None } ]
             Diagnostics = []
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ block ] } ] }
@@ -1001,6 +1017,29 @@ module ContentProviderTests =
         Assert.Contains("Contradictory", contradictory.Message)
 
     [<Fact>]
+    let ``deterministic is only valid with run or transcript`` () =
+        let run =
+            DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp run deterministic\nprintfn \"x\"\n```"
+            |> List.head
+        Assert.Equal(Run, run.Mode)
+        Assert.True(run.Deterministic)
+
+        let transcript =
+            DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp transcript deterministic\n> 1 + 1;;\nval it: int = 2\n```"
+            |> List.head
+        Assert.Equal(Transcript, transcript.Mode)
+        Assert.True(transcript.Deterministic)
+
+        let plain = DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp\nlet a = 1\n```" |> List.head
+        Assert.False(plain.Deterministic)
+
+        let invalid = Assert.Throws<InvalidOperationException>(fun () -> DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp prepare deterministic\nx\n```" |> ignore)
+        Assert.Contains("run or transcript", invalid.Message)
+
+        let noMode = Assert.Throws<InvalidOperationException>(fun () -> DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp deterministic\nx\n```" |> ignore)
+        Assert.Contains("run or transcript", noMode.Message)
+
+    [<Fact>]
     let ``verification compiles page and isolated units but only executes explicit modes`` () =
         let markdown = "```fsharp\nlet a = 1\n```\n```fsharp run\nprintfn \"run\"\n```\n```fsharp isolated\nlet a = 2\n```\n```fsharp transcript\n> 1 + 1;;\nval it: int = 2\n```\n```fsharp no-check reason=\"pseudocode\"\n...\n```"
         let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown
@@ -1082,7 +1121,7 @@ module ContentProviderTests =
     let ``persisted semantic records render accessible encoded tooltips and reject stale source`` () =
         let markdown = "```fsharp\nlet value = List.head [ \"<safe>\" ]\n```"
         let discovered = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown |> List.head
-        let tooltip = { Signature = Some "val value: string"; Documentation = Some "Returns <content>."; Sections = []; Footer = Some "Sample" }
+        let tooltip = { Signature = Some "val value: string"; Documentation = Some "Returns <content>."; Sections = []; Footer = Some "Sample"; Link = None }
         let semantic = {
             Id = discovered.Id
             SourceHash = discovered.SourceHash
@@ -1913,7 +1952,7 @@ module SiteBuilderTests =
         let semanticBlock = {
             Id = discovered.Id; SourceHash = discovered.SourceHash; ContextHash = DocumentationDiscovery.contextHash "" [ discovered ]
             Lines = [ { Tokens = [ { Text = "let"; Kind = Keyword; Tooltip = None }; { Text = " answer = 42"; Kind = Identifier; Tooltip = Some 0 } ] } ]
-            Tooltips = [ { Signature = Some "answer: int"; Documentation = Some "Stored release documentation."; Sections = []; Footer = None } ]
+            Tooltips = [ { Signature = Some "answer: int"; Documentation = Some "Stored release documentation."; Sections = []; Footer = None; Link = None } ]
             Diagnostics = []
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "index.md"; Blocks = [ semanticBlock ] } ] }
@@ -2088,11 +2127,11 @@ module SiteBuilderTests =
         Assert.Contains("const isManagedFSharp = code.closest('.livedocs-code') !== null", nestedPage)
         Assert.Contains("if (!isManagedFSharp)", nestedPage)
         Assert.DoesNotContain("code-copy-button", nestedPage)
-        Assert.DoesNotContain("navigator.clipboard", nestedPage)
+        Assert.Contains("navigator.clipboard", nestedPage)
         Assert.Contains("--livedocs-code-background: #f6f8fa;", nestedPage)
         Assert.Contains("html[data-theme=\"dark\"] pre.code-frame", nestedPage)
         Assert.Contains("--livedocs-code-background: #161b22;", nestedPage)
-        Assert.Contains(".livedocs-code { margin: 1.7142857em -1.5rem; }", nestedPage)
+        Assert.Contains(".livedocs-code { position: relative; margin: 1.7142857em -1.5rem; }", nestedPage)
         Assert.Contains("window.Prism.manual = true", nestedPage)
         Assert.True(nestedPage.IndexOf("window.Prism.manual = true", StringComparison.Ordinal) < nestedPage.IndexOf("prism.min.js", StringComparison.Ordinal))
         Assert.Contains(".livedocs-code .tok-keyword { color: var(--livedocs-code-keyword); }", nestedPage)

@@ -81,6 +81,9 @@ jobs:
       - run: dotnet build --nologo
 
       - name: Verify documentation
+        # On a tag, `livedocs capture` below audits and executes the same cases, so source
+        # verification runs only for pull requests and ordinary main pushes.
+        if: github.ref_type != 'tag'
         run: dotnet livedocs test --interactive false --banner false
 
       - name: Render the current site and release history

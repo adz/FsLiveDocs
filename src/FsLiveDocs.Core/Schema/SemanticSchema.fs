@@ -89,8 +89,9 @@ module SemanticSchema =
             fieldAs "Documentation" (fun (t: SemanticTooltip) -> t.Documentation) { withSchema (Schema.option Schema.text) }
             fieldAs "Sections" (fun (t: SemanticTooltip) -> t.Sections) { withSchema (Schema.listWith semanticTooltipSection) }
             fieldAs "Footer" (fun (t: SemanticTooltip) -> t.Footer) { withSchema (Schema.option Schema.text) }
-            construct (fun signature documentation sections footer ->
-                { Signature = signature; Documentation = documentation; Sections = sections; Footer = footer })
+            fieldAs "Link" (fun (t: SemanticTooltip) -> t.Link) { withSchema (Schema.option Schema.text) }
+            construct (fun signature documentation sections footer link ->
+                { Signature = signature; Documentation = documentation; Sections = sections; Footer = footer; Link = link })
         }
 
     let semanticDiagnostic : Schema<SemanticDiagnostic> =
