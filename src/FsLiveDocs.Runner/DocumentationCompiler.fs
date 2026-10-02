@@ -196,6 +196,48 @@ module DocumentationCompiler =
         return { Unit = unit; SyntheticSource = source; Diagnostics = diagnostics; BlockRanges = ranges; CheckResults = checkResults }
     }
 
+    /// <summary>
+    /// Checks one transcript's interactions as a standalone script, purely to produce hover and
+    /// link data.
+    /// </summary>
+    /// <remarks>
+    /// Transcripts are verified by FSI at runtime, so diagnostics here are discarded and an aborted
+    /// check is skipped rather than treated as a failure.
+    /// </remarks>
+    let checkTranscriptUnit (project: EvaluatedProject) (prelude: string) (block: DocumentationBlock) = async {
+        let parsed = ExampleTranscript.parse block.ExpandedSource
+        if String.IsNullOrWhiteSpace parsed.Script then
+            return None
+        else
+            // Reuse the block's id and source hash so the persisted record matches the raw fence,
+            // while the checked source is the prompt-stripped interaction script.
+            let synthetic = { block with ExpandedSource = parsed.Script; Mode = Isolated }
+
+            let unit =
+                { Id = block.Id
+                  ProjectPath = project.ProjectPath
+                  Prelude = prelude
+                  Blocks = [ synthetic ] }
+
+            let! result = checkUnit project unit
+            return
+                match result.CheckResults with
+                | None -> None
+                | Some _ -> Some { result with Diagnostics = [] }
+    }
+
+    /// <summary>Checks every transcript block in a page and returns semantic-only units for them.</summary>
+    let checkTranscriptsWithProject (project: EvaluatedProject) (prelude: string) (blocks: DocumentationBlock list) = async {
+        let results = ResizeArray<CheckedCompilationUnit>()
+        for block in blocks do
+            match block.Mode with
+            | Transcript ->
+                let! checkedUnit = checkTranscriptUnit project prelude block
+                checkedUnit |> Option.iter results.Add
+            | _ -> ()
+        return List.ofSeq results
+    }
+
     let private checkSequentially project units = async {
         // A check result retains typed syntax and symbol graphs. Starting every isolated example
         // concurrently creates all of those graphs before a caller can project or discard any of

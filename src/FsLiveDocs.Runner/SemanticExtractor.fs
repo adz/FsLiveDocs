@@ -131,7 +131,21 @@ module SemanticExtractor =
 
         match symbol with
         | :? FSharpMemberOrFunctionOrValue as value ->
-            if qualified value.FullName then Some value.FullName else None
+            let name =
+                match value.DeclaringEntity with
+                | Some owner ->
+                    let ownerName =
+                        match owner.TryFullName with
+                        | Some full when full.EndsWith("Module", System.StringComparison.Ordinal) ->
+                            Some(full.Substring(0, full.Length - "Module".Length))
+                        | other -> other
+
+                    match ownerName with
+                    | Some full when not (System.String.IsNullOrWhiteSpace full) && not (System.String.IsNullOrWhiteSpace value.DisplayName) ->
+                        full + "." + value.DisplayName
+                    | _ -> value.FullName
+                | None -> value.FullName
+            if qualified name then Some name else None
         | :? FSharpEntity as entity ->
             entity.TryFullName |> Option.filter qualified
         | _ -> None

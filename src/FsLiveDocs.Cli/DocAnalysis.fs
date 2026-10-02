@@ -483,9 +483,15 @@ module internal DocAnalysis =
                                           |> Option.map (fun id ->
                                               id,
                                               (item.StartLine, item.StartColumn, addApiNameHint package item.ErrorNumber item.Message)))
+                                  // Transcripts run in FSI rather than compiling, so check their
+                                  // interactions separately for hover/link data only; their
+                                  // diagnostics do not fail the audit.
+                                  let transcriptUnits =
+                                      DocumentationCompiler.checkTranscriptsWithProject selectedEvaluation page.Prelude page.Blocks
+                                      |> Async.RunSynchronously
                                   let semantic =
                                       if errors.IsEmpty then
-                                          let artifact = SemanticExtractor.artifact checkedUnits
+                                          let artifact = SemanticExtractor.artifact (checkedUnits @ transcriptUnits)
                                           writePageCache page artifact
                                           Some artifact
                                       else None

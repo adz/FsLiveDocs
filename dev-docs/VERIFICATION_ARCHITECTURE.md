@@ -68,6 +68,9 @@ documented project's graph.
 - Each worker runs under `Process.timeout` (10 minutes, or `FSLIVEDOCS_TRANSCRIPT_TIMEOUT_SECONDS`), which terminates the
   process tree. Isolation is for dependency identity and cleanup; it is not a security sandbox, and examples remain
   trusted code.
+- Transcript blocks are also checked as standalone scripts during the audit, purely to produce hover and link data.
+  The check keeps the raw fence's id and source hash but checks the prompt-stripped interaction script, and its
+  diagnostics are discarded because FSI verifies transcripts at runtime.
 
 ## Reuse only declared-deterministic execution
 
