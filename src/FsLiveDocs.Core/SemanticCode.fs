@@ -60,6 +60,54 @@ module SemanticCode =
             |> String.concat ""
         prefix + tokens
 
+    let private transcriptPromptPattern =
+        Regex(@"^(?<indent>[ \t]*)(?<prompt>iex\(\d+\)>|iex>|fsi>|\.{3}>|>|-)(?<space>[ \t]?)(?<rest>.*)$", RegexOptions.Compiled)
+
+    let private renderTranscriptInputLine (line: string) =
+        let prompt = transcriptPromptPattern.Match(line)
+        if prompt.Success then
+            let indent = prompt.Groups.["indent"].Value
+            let promptText = indent + prompt.Groups.["prompt"].Value + prompt.Groups.["space"].Value
+            let source = prompt.Groups.["rest"].Value
+            let tokens =
+                lexicalTokenPattern.Matches(source)
+                |> Seq.cast<Match>
+                |> Seq.map (fun matched -> $"<span class=\"{lexicalClass matched.Value}\">{WebUtility.HtmlEncode matched.Value}</span>")
+                |> String.concat ""
+            $"<span class=\"prompt-unselectable\">{WebUtility.HtmlEncode promptText}</span>{tokens}"
+        else
+            renderLexicalLine line
+
+    /// <summary>Renders a transcript as a faithful FSI session: prompts in a non-selectable
+    /// gutter, the runnable interactions in a code frame, and the result in its own tinted band.</summary>
+    let private renderTranscriptSource (source: string) =
+        let parsed = ExampleTranscript.parse source
+        let normalized = DocumentationDiscovery.normalizeSource source
+        let inputLines = ResizeArray<string>()
+        let resultLines = ResizeArray<string>()
+
+        for line in normalized.Split('\n') do
+            let trimmed = line.TrimStart()
+            if trimmed.StartsWith("> ", StringComparison.Ordinal) || trimmed.StartsWith("- ", StringComparison.Ordinal) then
+                inputLines.Add(renderTranscriptInputLine line)
+            elif not (String.IsNullOrWhiteSpace line) then
+                resultLines.Add(renderLexicalLine line)
+
+        let copySource = WebUtility.HtmlEncode parsed.Script
+        let input = String.concat "\n" (List.ofSeq inputLines)
+        let result = String.concat "\n" (List.ofSeq resultLines)
+
+        let toolbar =
+            $"<div class=\"livedocs-code-toolbar\"><button class=\"livedocs-copy\" type=\"button\" aria-label=\"Copy the runnable F# transcript\">Copy</button><span class=\"livedocs-copy-source\" hidden>{copySource}</span></div>"
+
+        let resultFrame =
+            if resultLines.Count = 0 then
+                ""
+            else
+                $"<pre class=\"code-frame livedocs-result\"><code class=\"language-fsharp\">{result}</code></pre>"
+
+        $"<div class=\"livedocs-code livedocs-transcript not-prose\">{toolbar}<pre class=\"code-frame\"><code class=\"language-fsharp\">{input}</code></pre>{resultFrame}</div>"
+
     let private codeFrame extraClass lines tooltips =
         $"<div class=\"livedocs-code {extraClass} not-prose\"><pre class=\"code-frame\"><code class=\"language-fsharp\">{lines}</code></pre>{tooltips}</div>"
 
@@ -126,8 +174,10 @@ module SemanticCode =
                         if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}: expected {persisted.SourceHash}, got {block.SourceHash}."
                         if persisted.ContextHash <> pageContextHash then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
                         htmlStartMarker + renderPreparation persisted + htmlEndMarker
-                    | NoCheck _ | Transcript ->
+                    | NoCheck _ ->
                         htmlStartMarker + renderLexicalSource fence.Code + htmlEndMarker
+                    | Transcript ->
+                        htmlStartMarker + renderTranscriptSource fence.Code + htmlEndMarker
                     | _ ->
                         let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
                         if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}: expected {persisted.SourceHash}, got {block.SourceHash}."

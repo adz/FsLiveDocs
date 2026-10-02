@@ -923,6 +923,31 @@ module View =
                         pointer-events: none;
                         opacity: 0.72;
                     }
+                    .livedocs-code-toolbar {
+                        position: absolute;
+                        top: 0.6rem;
+                        right: 0.6rem;
+                        z-index: 2;
+                        display: flex;
+                        gap: 0.5rem;
+                    }
+                    .livedocs-copy {
+                        cursor: pointer;
+                        border: 1px solid color-mix(in srgb, var(--livedocs-code-foreground) 40%, transparent);
+                        background: var(--livedocs-code-background);
+                        color: var(--livedocs-code-foreground);
+                        border-radius: 0.4rem;
+                        padding: 0.2rem 0.6rem;
+                        font: 600 0.72rem/1.4 'Fira Code', monospace;
+                        opacity: 0.75;
+                    }
+                    .livedocs-copy:hover { opacity: 1; }
+                    .livedocs-code .livedocs-result {
+                        margin-top: 0.75rem;
+                        border-top: 1px dashed color-mix(in srgb, var(--livedocs-code-foreground) 35%, transparent);
+                        border-radius: 0.3em;
+                        background: color-mix(in srgb, var(--livedocs-code-union-case) 10%, var(--livedocs-code-background)) !important;
+                    }
                     table.pre {
                         display: block;
                         width: 100%;
@@ -947,7 +972,7 @@ module View =
                         text-decoration: underline dotted color-mix(in srgb, currentColor 45%, transparent);
                         text-underline-offset: 0.2em;
                     }
-                    .livedocs-code { margin: 1.7142857em -1.5rem; }
+                    .livedocs-code { position: relative; margin: 1.7142857em -1.5rem; }
                     @media (min-width: 768px) {
                         .livedocs-code { margin-inline: -2rem; }
                         .livedocs-code pre.code-frame { padding-inline: 2rem !important; }
@@ -1316,6 +1341,26 @@ module View =
                             trigger.addEventListener('mouseleave', hide);
                             trigger.addEventListener('focus', show);
                             trigger.addEventListener('blur', hide);
+                        });
+                    });
+                """ ])
+                    yield (script
+                        []
+                        [ rawText
+                              """
+                    window.addEventListener('DOMContentLoaded', () => {
+                        document.querySelectorAll('.livedocs-copy').forEach(button => {
+                            button.addEventListener('click', async () => {
+                                const container = button.closest('.livedocs-code');
+                                const source = container && container.querySelector('.livedocs-copy-source');
+                                if (!source) return;
+                                try {
+                                    await navigator.clipboard.writeText(source.textContent);
+                                    const original = button.textContent;
+                                    button.textContent = 'Copied';
+                                    setTimeout(() => { button.textContent = original; }, 1200);
+                                } catch (_) {}
+                            });
                         });
                     });
                 """ ])
