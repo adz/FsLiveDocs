@@ -421,7 +421,15 @@ module internal DocAnalysis =
                         let assemblies =
                             resolvedProjects
                             |> List.map (fun projectPath ->
-                                match (ProjectResolver.documentationBuildFor (Some framework) projectPath).TargetPath with
+                                // A project may not declare the page's framework; its default build is
+                                // still compatible with it, so fall back rather than reject the page.
+                                let target =
+                                    try
+                                        (ProjectResolver.documentationBuildFor (Some framework) projectPath).TargetPath
+                                    with :? InvalidOperationException ->
+                                        None
+
+                                match target with
                                 | Some path -> path
                                 | None -> ProjectResolver.resolveAssemblyPath projectPath)
                             |> List.filter (String.IsNullOrWhiteSpace >> not)
