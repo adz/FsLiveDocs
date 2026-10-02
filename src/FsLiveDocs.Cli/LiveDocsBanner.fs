@@ -7,15 +7,15 @@ open Spectre.Console.Rendering
 
 /// Animated Live Docs wordmark revealed by rising, fading blocks.
 module internal LiveDocsBanner =
-    let private width = 72
+    let private width = 74
     let private runSeed = Guid.NewGuid().GetHashCode()
-    // Generated from Spectre's default Figlet font for the exact text "Live Docs".
+    // Generated from Spectre's default Figlet font for the exact text "Fs Live Docs".
     let private wordmark = [|
-        "  _       _                    ____                       "
-        " | |     (_) __   __   ___    |  _ \\    ___     ___   ___ "
-        " | |     | | \\ \\ / /  / _ \\   | | | |  / _ \\   / __| / __|"
-        " | |___  | |  \\ V /  |  __/   | |_| | | (_) | | (__  \\__ \\"
-        " |_____| |_|   \\_/    \\___|   |____/   \\___/   \\___| |___/"
+        "  _____           _       _                    ____                       "
+        " |  ___|  ___    | |     (_) __   __   ___    |  _ \\    ___     ___   ___ "
+        " | |_    / __|   | |     | | \\ \\ / /  / _ \\   | | | |  / _ \\   / __| / __|"
+        " |  _|   \\__ \\   | |___  | |  \\ V /  |  __/   | |_| | | (_) | | (__  \\__ \\"
+        " |_|     |___/   |_____| |_|   \\_/    \\___|   |____/   \\___/   \\___| |___/"
     |]
 
     type private CellStyle =

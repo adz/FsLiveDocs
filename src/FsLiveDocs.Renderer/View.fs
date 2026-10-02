@@ -733,8 +733,10 @@ module View =
             |> Option.defaultWith (fun () -> if siteName.Length <= 2 then siteName else siteName.Substring(0, 2))
         let logoPath = config.LogoPath |> Option.filter (not << String.IsNullOrWhiteSpace)
         let logoDarkPath = config.LogoDarkPath |> Option.filter (not << String.IsNullOrWhiteSpace)
+        let logoThemes = config.LogoThemes |> Option.defaultValue []
         let showSiteName = config.ShowSiteName |> Option.defaultValue true
         let stylesheet = config.Stylesheet |> Option.filter (not << String.IsNullOrWhiteSpace)
+        let headHtml = config.HeadHtml |> Option.filter (not << String.IsNullOrWhiteSpace)
         let themes =
             config.Themes
             |> Option.map (List.filter (not << String.IsNullOrWhiteSpace))
@@ -1093,7 +1095,10 @@ module View =
                     .fsdocs-tip-detail { margin-top: 0.4rem; line-height: 1.45; color: #dbeafe; }
                     .fsdocs-tip-detail strong { color: #f8fafc; }
                 """ ]
-                    title [] [ str $"{pageTitle} - {siteName}" ] ]
+                    title [] [ str $"{pageTitle} - {siteName}" ]
+                    headHtml
+                    |> Option.map rawText
+                    |> Option.defaultValue emptyText ]
               body
                   [ _class "min-h-screen bg-base-200/30 flex flex-col" ]
                   [
@@ -1140,6 +1145,15 @@ module View =
                                                   [ _class
                                                         "bg-primary text-primary-content w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl shadow-xl shadow-primary/20 group-hover:rotate-12 transition-transform" ]
                                                   [ str logoText ]
+                                      yield!
+                                          logoThemes
+                                          |> List.map (fun tl ->
+                                              img
+                                                  [ _src (navigationHref tl.Path)
+                                                    _alt siteName
+                                                    attr "data-theme-variant" tl.Theme
+                                                    _style "display: none;"
+                                                    _class "site-logo-theme h-14 w-auto max-w-52 object-contain" ])
                                       if showSiteName then
                                           yield span [ _class "text-2xl font-black tracking-tighter" ] [ str siteName ] ] ]
                           div [ _id "search-ui"; _class "hidden md:block not-prose" ] []

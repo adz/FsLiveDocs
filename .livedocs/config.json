@@ -1,5 +1,17 @@
 {
   "siteName": "FsLiveDocs",
+  "logoPath": "content/fslivedocs-logo-light.png",
+  "logoDarkPath": "content/fslivedocs-logo-dark.png",
+  "logoThemes": [
+    { "theme": "cupcake", "path": "content/fslivedocs-logo-cupcake.png" },
+    { "theme": "dracula", "path": "content/fslivedocs-logo-dracula.png" },
+    { "theme": "emerald", "path": "content/fslivedocs-logo-light.png" },
+    { "theme": "corporate", "path": "content/fslivedocs-logo-light.png" },
+    { "theme": "retro", "path": "content/fslivedocs-logo-retro.png" },
+    { "theme": "cyberpunk", "path": "content/fslivedocs-logo-cyberpunk.png" }
+  ],
+  "showSiteName": false,
+  "headHtml": "<style>.site-logo-light,.site-logo-dark,.site-logo-theme{height:48px!important;width:auto!important;max-width:480px!important}</style><script>(function(){var K='fslivedocs.identity.lastShown';function pad(n){return String(n).padStart(2,'0')}function today(){var d=new Date();return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())}window.addEventListener('DOMContentLoaded',function(){setTimeout(function(){var t=today(),shown=null;try{shown=localStorage.getItem(K)}catch(e){}if(shown===t)return;var img=Array.prototype.slice.call(document.querySelectorAll('img[data-theme-variant]')).filter(function(el){return el.style.display!=='none'})[0];if(!img)return;try{localStorage.setItem(K,t)}catch(e){}var a=new Image();a.onload=function(){var s=img.getAttribute('src');img.setAttribute('src',s.replace('.png','.webp'));setTimeout(function(){img.setAttribute('src',s)},1500)};a.src=img.getAttribute('src').replace('.png','.webp')},0)})})();</script>",
   "repoUrl": "https://github.com/adz/FsLiveDocs",
   "projects": [
     "src/FsLiveDocs.Annotations/FsLiveDocs.Annotations.fsproj",

@@ -91,7 +91,7 @@ module Actions =
 
     let printBanner () =
         if ConsoleOutput.banner && not ConsoleOutput.animateBanner then
-            let figlet = FigletText("LiveDocs")
+            let figlet = FigletText("FsLiveDocs")
             figlet.Color <- Color.Blue
             AnsiConsole.Write(figlet)
             AnsiConsole.MarkupLine("[grey]Verified Documentation for F#[/]\n")

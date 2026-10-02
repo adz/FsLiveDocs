@@ -16,6 +16,20 @@ module SiteSchema =
             construct (fun label href -> { Label = label; Href = href })
         }
 
+    let themeLogo : Schema<ThemeLogo> =
+        schema<ThemeLogo> {
+            fieldAs "Theme" (fun (t: ThemeLogo) -> t.Theme) { withSchema Schema.text }
+            fieldAs "Path" (fun (t: ThemeLogo) -> t.Path) { withSchema Schema.text }
+            construct (fun theme path -> { Theme = theme; Path = path })
+        }
+
+    let themeLogoFile : Schema<ThemeLogo> =
+        schema<ThemeLogo> {
+            field (fun (t: ThemeLogo) -> t.Theme)
+            field (fun (t: ThemeLogo) -> t.Path)
+            construct (fun theme path -> { Theme = theme; Path = path })
+        }
+
     type private CommentsProviderWire =
         { Kind: string
           Html: string option
@@ -96,13 +110,15 @@ module SiteSchema =
             fieldAs "LogoText" (fun (s: SiteConfig) -> s.LogoText) { withSchema (Schema.option Schema.text) }
             fieldAs "LogoPath" (fun (s: SiteConfig) -> s.LogoPath) { withSchema (Schema.option Schema.text) }
             fieldAs "LogoDarkPath" (fun (s: SiteConfig) -> s.LogoDarkPath) { withSchema (Schema.option Schema.text) }
+            fieldAs "LogoThemes" (fun (s: SiteConfig) -> s.LogoThemes) { withSchema (Schema.option (Schema.listWith themeLogo)) }
             fieldAs "ShowSiteName" (fun (s: SiteConfig) -> s.ShowSiteName) { withSchema (Schema.option Schema.bool) }
             fieldAs "Stylesheet" (fun (s: SiteConfig) -> s.Stylesheet) { withSchema (Schema.option Schema.text) }
+            fieldAs "HeadHtml" (fun (s: SiteConfig) -> s.HeadHtml) { withSchema (Schema.option Schema.text) }
             fieldAs "Themes" (fun (s: SiteConfig) -> s.Themes) { withSchema (Schema.option (Schema.listWith Schema.text)) }
             fieldAs "Navigation" (fun (s: SiteConfig) -> s.Navigation) { withSchema (Schema.option (Schema.listWith navigationItem)) }
             fieldAs "FSharpPrelude" (fun (s: SiteConfig) -> s.FSharpPrelude) { withSchema (Schema.option Schema.text) }
             fieldAs "CommentsProvider" (fun (s: SiteConfig) -> s.CommentsProvider) { withSchema (Schema.option commentsProvider) }
-            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath showSiteName stylesheet themes navigation fsharpPrelude commentsProvider ->
+            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath logoThemes showSiteName stylesheet headHtml themes navigation fsharpPrelude commentsProvider ->
                 { RepoUrl = repoUrl
                   SourceUrlPattern = sourceUrlPattern
                   SourceBranch = sourceBranch
@@ -110,8 +126,10 @@ module SiteSchema =
                   LogoText = logoText
                   LogoPath = logoPath
                   LogoDarkPath = logoDarkPath
+                  LogoThemes = logoThemes
                   ShowSiteName = showSiteName
                   Stylesheet = stylesheet
+                  HeadHtml = headHtml
                   Themes = themes
                   Navigation = navigation
                   FSharpPrelude = fsharpPrelude
@@ -136,13 +154,15 @@ module SiteSchema =
             field _.LogoText
             field _.LogoPath
             field _.LogoDarkPath
+            field _.LogoThemes { withSchema (Schema.option (Schema.listWith themeLogoFile) |> Schema.mayOmit) }
             field _.ShowSiteName
             field _.Stylesheet
+            field _.HeadHtml
             field _.Themes
             field _.Navigation { withSchema (Schema.option (Schema.listWith navigationFileItem) |> Schema.mayOmit) }
             field (fun (s: SiteConfig) -> s.FSharpPrelude)
             field _.CommentsProvider { withSchema (Schema.option commentsProvider |> Schema.mayOmit) }
-            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath showSiteName stylesheet themes navigation fsharpPrelude commentsProvider ->
+            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath logoThemes showSiteName stylesheet headHtml themes navigation fsharpPrelude commentsProvider ->
                 { RepoUrl = repoUrl
                   SourceUrlPattern = sourceUrlPattern
                   SourceBranch = sourceBranch
@@ -150,8 +170,10 @@ module SiteSchema =
                   LogoText = logoText
                   LogoPath = logoPath
                   LogoDarkPath = logoDarkPath
+                  LogoThemes = logoThemes
                   ShowSiteName = showSiteName
                   Stylesheet = stylesheet
+                  HeadHtml = headHtml
                   Themes = themes
                   Navigation = navigation
                   FSharpPrelude = fsharpPrelude

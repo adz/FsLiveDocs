@@ -11,6 +11,14 @@ type NavigationItem = {
     Href: string
 }
 
+/// <summary>A theme-specific logo override.</summary>
+type ThemeLogo = {
+    /// <summary>DaisyUI theme name this logo applies to.</summary>
+    Theme: string
+    /// <summary>Root-relative or absolute image path.</summary>
+    Path: string
+}
+
 /// <summary>Build-time configuration for the generated documentation site.</summary>
 type SiteConfig = {
     /// <summary>Optional repository URL used to build source links for members.</summary>
@@ -27,10 +35,14 @@ type SiteConfig = {
     LogoPath: string option
     /// <summary>Optional dark-theme variant of <c>LogoPath</c>.</summary>
     LogoDarkPath: string option
+    /// <summary>Optional per-theme logo images keyed by DaisyUI theme name.</summary>
+    LogoThemes: ThemeLogo list option
     /// <summary>Whether to display the site name beside the navbar mark. Defaults to true.</summary>
     ShowSiteName: bool option
     /// <summary>Optional root-relative or absolute consumer stylesheet loaded after FsLiveDocs styles.</summary>
     Stylesheet: string option
+    /// <summary>Optional raw HTML appended to the <c>&lt;head&gt;</c> of every page (analytics, custom scripts, and the like).</summary>
+    HeadHtml: string option
     /// <summary>Optional DaisyUI themes exposed by the theme picker. Defaults to the built-in theme set.</summary>
     Themes: string list option
     /// <summary>Optional top-level navigation. Defaults to Home and API.</summary>
@@ -63,8 +75,10 @@ module SiteConfig =
           LogoText = None
           LogoPath = None
           LogoDarkPath = None
+          LogoThemes = None
           ShowSiteName = None
           Stylesheet = None
+          HeadHtml = None
           Themes = None
           Navigation = None
           FSharpPrelude = None
