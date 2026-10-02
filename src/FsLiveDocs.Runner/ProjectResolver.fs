@@ -3,6 +3,8 @@ namespace FsLiveDocs.Runner
 open System
 open System.IO
 open System.Xml.Linq
+open System.Reflection.Metadata
+open System.Reflection.PortableExecutable
 open Axial
 open Axial.FileSystem
 open FsLiveDocs.Core
@@ -189,3 +191,44 @@ module ProjectResolver =
             AssemblyPath = assemblyPath
             ProjectNamespace = projectNamespace
         }
+
+    let private namespaceCache = Collections.Concurrent.ConcurrentDictionary<string, Lazy<string list>>()
+
+    let private computeRootNamespaces (assemblyPath: string) =
+        try
+            use stream = File.OpenRead assemblyPath
+            use pe = new PEReader(stream)
+            if not pe.HasMetadata then
+                []
+            else
+                let reader = pe.GetMetadataReader()
+
+                reader.TypeDefinitions
+                |> Seq.map (fun handle -> reader.GetString (reader.GetTypeDefinition handle).Namespace)
+                |> Seq.filter (String.IsNullOrWhiteSpace >> not)
+                |> Seq.map (fun namespaceName -> namespaceName.Split('.')[0])
+                |> Seq.filter (fun root ->
+                    root.Length > 0
+                    && root |> Seq.forall (fun character -> System.Char.IsLetterOrDigit character || character = '_' || character = '\''))
+                |> Seq.distinct
+                |> Seq.toList
+        with _ ->
+            []
+
+    /// <summary>
+    /// The assembly's declared top-level namespaces, read from metadata. The FSI load script
+    /// opens these instead of a name guessed from the project file, because package and assembly
+    /// names are not namespace names (FsLiveDocs.Annotations declares namespace FsLiveDocs).
+    /// </summary>
+    let exportedRootNamespaces (assemblyPath: string) =
+        if String.IsNullOrWhiteSpace assemblyPath || not (File.Exists assemblyPath) then
+            []
+        else
+            let key =
+                assemblyPath
+                + "|"
+                + string (File.GetLastWriteTimeUtc assemblyPath).Ticks
+
+            namespaceCache
+                .GetOrAdd(key, fun _ -> lazy (computeRootNamespaces assemblyPath))
+                .Value

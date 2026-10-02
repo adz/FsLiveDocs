@@ -85,12 +85,9 @@ FsLiveDocs does not verify the assertion. A wrong declaration can reuse a stale 
 release publish without running the example. The declaration is the correctness boundary; when in
 doubt, leave it off and let the example run on every pass.
 
-## Known limitation: derived project namespace in the FSI load script
+## FSI load-script namespaces
 
-The transcript load script opens `ProjectNamespace`, which `ProjectResolver.resolve` derives from the
-project file name. Assembly names are not namespace names, so a project like `FsLiveDocs.Annotations`
-(whose source declares `namespace FsLiveDocs`) produces an `open FsLiveDocs.Annotations` that fails. The
-repository's own guide works around this by pinning its executable example to `Acme.Docs`, whose
-assembly and namespace names agree. A proper fix is to read the assembly's exported namespaces (via
-`System.Reflection.Metadata`) and open those, or to let a configured `fSharpPrelude` take over; the
-current derived open remains a foot-gun for any consumer whose package name differs from its namespace.
+The transcript load script opens the assembly's declared top-level namespaces, read from metadata
+via `System.Reflection.Metadata`, rather than a namespace guessed from the project file name. This
+handles packages whose assembly name differs from their namespace, such as `FsLiveDocs.Annotations`
+(which declares `namespace FsLiveDocs`).

@@ -1,6 +1,5 @@
 ---
 title: Author and test examples
-project: samples/DeepReference/Acme.Docs/Acme.Docs.fsproj
 ---
 
 # Author and test examples

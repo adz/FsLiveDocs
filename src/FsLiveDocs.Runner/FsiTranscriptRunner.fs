@@ -33,13 +33,17 @@ module FsiTranscriptRunner =
             |> List.filter (fun path -> not (String.IsNullOrWhiteSpace path))
             |> List.map (fun path -> $"#r @\"{Path.GetFullPath path}\"")
 
+        let projectNamespaces =
+            match ProjectResolver.exportedRootNamespaces project.AssemblyPath with
+            | [] when not (String.IsNullOrWhiteSpace project.ProjectNamespace) -> [ project.ProjectNamespace ]
+            | namespaces -> namespaces
+
         let opens =
             [
                 "open System"
-                if not (String.IsNullOrWhiteSpace project.ProjectNamespace) then $"open {project.ProjectNamespace}"
-                // Assembly names are not namespace names. Opening each reference worked only
-                // by accident until FsLiveDocs.Annotations became an F# assembly whose package
-                // name differs from its FsLiveDocs namespace.
+                // Open the assembly's declared namespaces rather than a name guessed from the
+                // project file: package and assembly names are not namespace names.
+                yield! projectNamespaces |> List.map (fun namespaceName -> $"open {namespaceName}")
                 yield! extraOpens
             ]
             |> List.distinct
