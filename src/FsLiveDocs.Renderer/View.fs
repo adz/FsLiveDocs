@@ -768,6 +768,15 @@ module View =
                     | None -> href
                 Url.resolve safeRoot target
 
+        // Site-level assets (logo, stylesheet) live at the shared site root, not inside each
+        // version's directory, so they resolve against the site root path rather than the
+        // version root path used by page navigation links.
+        let siteAssetHref href =
+            if Uri.IsWellFormedUriString(href, UriKind.Absolute) || href.StartsWith("#") then
+                href
+            else
+                Url.resolve safeSiteRoot (href.TrimStart('/'))
+
         html
             ([ _lang "en"; attr "data-theme" theme; _class "scroll-smooth" ]
              @ (chrome
@@ -798,7 +807,7 @@ module View =
                           _href "https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" ]
                     link [ _rel "stylesheet"; _href (Url.resolve safeSiteRoot "pagefind/pagefind-ui.css") ]
                     stylesheet
-                    |> Option.map (fun href -> link [ _rel "stylesheet"; _href (navigationHref href) ])
+                    |> Option.map (fun href -> link [ _rel "stylesheet"; _href (siteAssetHref href) ])
                     |> Option.defaultValue emptyText
                     script
                         []
@@ -1119,7 +1128,7 @@ module View =
                                     [ match logoPath with
                                       | Some path ->
                                           let lightAttributes =
-                                              [ _src (navigationHref path)
+                                              [ _src (siteAssetHref path)
                                                 _alt siteName
                                                 _class "site-logo-light h-14 w-auto max-w-52 object-contain" ]
                                               @ (if logoDarkPath.IsSome then
@@ -1133,7 +1142,7 @@ module View =
                                           | Some darkPath ->
                                               yield
                                                   img
-                                                      [ _src (navigationHref darkPath)
+                                                      [ _src (siteAssetHref darkPath)
                                                         _alt siteName
                                                         attr "data-theme-variant" "dark"
                                                         _style "display: none;"
@@ -1149,7 +1158,7 @@ module View =
                                           logoThemes
                                           |> List.map (fun tl ->
                                               img
-                                                  [ _src (navigationHref tl.Path)
+                                                  [ _src (siteAssetHref tl.Path)
                                                     _alt siteName
                                                     attr "data-theme-variant" tl.Theme
                                                     _style "display: none;"
