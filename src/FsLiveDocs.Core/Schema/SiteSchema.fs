@@ -118,7 +118,8 @@ module SiteSchema =
             fieldAs "Navigation" (fun (s: SiteConfig) -> s.Navigation) { withSchema (Schema.option (Schema.listWith navigationItem)) }
             fieldAs "FSharpPrelude" (fun (s: SiteConfig) -> s.FSharpPrelude) { withSchema (Schema.option Schema.text) }
             fieldAs "CommentsProvider" (fun (s: SiteConfig) -> s.CommentsProvider) { withSchema (Schema.option commentsProvider) }
-            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath logoThemes showSiteName stylesheet headHtml themes navigation fsharpPrelude commentsProvider ->
+            fieldAs "ExampleContext" (fun (s: SiteConfig) -> s.ExampleContext) { withSchema (Schema.option Schema.bool) }
+            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath logoThemes showSiteName stylesheet headHtml themes navigation fsharpPrelude commentsProvider exampleContext ->
                 { RepoUrl = repoUrl
                   SourceUrlPattern = sourceUrlPattern
                   SourceBranch = sourceBranch
@@ -133,7 +134,8 @@ module SiteSchema =
                   Themes = themes
                   Navigation = navigation
                   FSharpPrelude = fsharpPrelude
-                  CommentsProvider = commentsProvider })
+                  CommentsProvider = commentsProvider
+                  ExampleContext = exampleContext })
         }
 
     /// The `.livedocs/config.json` spelling of `SiteConfig`: camelCase keys, every one optional.
@@ -162,7 +164,8 @@ module SiteSchema =
             field _.Navigation { withSchema (Schema.option (Schema.listWith navigationFileItem) |> Schema.mayOmit) }
             field (fun (s: SiteConfig) -> s.FSharpPrelude)
             field _.CommentsProvider { withSchema (Schema.option commentsProvider |> Schema.mayOmit) }
-            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath logoThemes showSiteName stylesheet headHtml themes navigation fsharpPrelude commentsProvider ->
+            field (fun (s: SiteConfig) -> s.ExampleContext) { withSchema (Schema.option Schema.bool |> Schema.mayOmit) }
+            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath logoThemes showSiteName stylesheet headHtml themes navigation fsharpPrelude commentsProvider exampleContext ->
                 { RepoUrl = repoUrl
                   SourceUrlPattern = sourceUrlPattern
                   SourceBranch = sourceBranch
@@ -177,7 +180,8 @@ module SiteSchema =
                   Themes = themes
                   Navigation = navigation
                   FSharpPrelude = fsharpPrelude
-                  CommentsProvider = commentsProvider })
+                  CommentsProvider = commentsProvider
+                  ExampleContext = exampleContext })
         }
 
     let contentMetadata : Schema<ContentMetadata> =
@@ -197,7 +201,8 @@ module SiteSchema =
             fieldAs "SeriesOrder" (fun (m: ContentMetadata) -> m.SeriesOrder) { withSchema (Schema.option Schema.int) }
             fieldAs "Comments" (fun (m: ContentMetadata) -> m.Comments) { withSchema Schema.bool }
             fieldAs "BlogList" (fun (m: ContentMetadata) -> m.BlogList) { withSchema (Schema.option blogListingOptions) }
-            construct (fun title type_ project targetFramework platform date tags category draft summary slug series seriesOrder comments blogList ->
+            fieldAs "ExampleContext" (fun (m: ContentMetadata) -> m.ExampleContext) { withSchema (Schema.option Schema.bool) }
+            construct (fun title type_ project targetFramework platform date tags category draft summary slug series seriesOrder comments blogList exampleContext ->
                 { Title = title
                   Type = type_
                   Project = project
@@ -212,5 +217,6 @@ module SiteSchema =
                   Series = series
                   SeriesOrder = seriesOrder
                   Comments = comments
-                  BlogList = blogList })
+                  BlogList = blogList
+                  ExampleContext = exampleContext })
         }

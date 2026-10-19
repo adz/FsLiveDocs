@@ -59,6 +59,72 @@ module IntegrationTests =
     }
 
     [<Fact>]
+    let ``requirements select used symbols and package provenance without extra opens`` () =
+        let available = [ "System"; "Axial"; "Axial.Layers"; "Unused" ]
+        let package assembly = if assembly = "Axial.Layers" then Some "Axial.Layers" elif assembly = "Axial" then Some "Axial" else None
+        let uses = [ "Axial.Flow", "Axial", false
+                     "Axial.Layers.Resource", "Axial.Layers", false
+                     "Axial.Layers.Resource", "Axial.Layers", true
+                     "System.Console", "System.Console", false ]
+        let actual = SemanticExtractor.deriveRequirements available package uses
+        Assert.Equal<ExampleRequirement list>(
+            [ { Open = ""; Package = Some "Axial.Layers" }
+              { Open = "Axial"; Package = Some "Axial" }
+              { Open = "Axial.Layers"; Package = Some "Axial.Layers" }
+              { Open = "System"; Package = None } ], actual)
+
+    [<Fact>]
+    let ``qualified references do not require unused opens`` () = async {
+        let markdown = "```fsharp prepare\nopen System\n```\n```fsharp\nlet epoch = System.DateTimeOffset.UnixEpoch\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "qualified.md" (Some coreProject) markdown
+        let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
+        Assert.Empty(results |> List.collect _.Diagnostics |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error))
+        let context = (SemanticExtractor.artifact (fun _ -> None) results).Pages.Head.Blocks.[1].ExampleContext.Value
+        Assert.Empty(context.Requires)
+    }
+
+    [<Fact>]
+    let ``operator and extension member use their defining modules`` () = async {
+        let markdown = "```fsharp\nmodule Operators =\n    let (|||) left right = left + right\nmodule Extensions =\n    type System.String with\n        member this.Suffix = this + \"!\"\nopen Operators\nopen Extensions\nlet combined = 1 ||| 2\nlet suffixed = \"hi\".Suffix\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "operators.md" (Some coreProject) markdown
+        let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
+        Assert.Empty(results |> List.collect _.Diagnostics |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error))
+        let requires = (SemanticExtractor.artifact (fun _ -> None) results).Pages.Head.Blocks.Head.ExampleContext.Value.Requires
+        Assert.Contains(requires, fun requirement -> requirement.Open = "Operators")
+        Assert.Contains(requires, fun requirement -> requirement.Open = "Extensions")
+    }
+
+    [<Fact>]
+    let ``compiler formats generic function record and unit signatures`` () = async {
+        let markdown = "```fsharp\n[<Measure>] type kg\ntype Point = { X: int; Y: int }\nlet identity value = value\nlet rec even n = n = 0 || odd (n - 1)\nand odd n = n <> 0 && even (n - 1)\nlet apply (f: int -> string) value = f value\nlet point = { X = 1; Y = 2 }\nlet mass = 2.0<kg>\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "types.md" (Some coreProject) markdown
+        let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
+        Assert.Empty(results |> List.collect _.Diagnostics |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error))
+        let signatures = (SemanticExtractor.artifact (fun _ -> None) results).Pages.Head.Blocks.Head.ExampleContext.Value.Types
+        Assert.Contains(signatures, fun signature -> signature.StartsWith("val identity: ") && signature.Contains("'a -> 'a"))
+        Assert.Contains(signatures, fun signature -> signature.StartsWith("val even: "))
+        Assert.Contains(signatures, fun signature -> signature.StartsWith("val odd: "))
+        Assert.Contains(signatures, fun signature -> signature.StartsWith("val apply: ") && signature.Contains("int -> string"))
+        Assert.Contains(signatures, fun signature -> signature.StartsWith("val point: ") && signature.Contains("Point"))
+        Assert.Contains(signatures, fun signature -> signature.StartsWith("val mass: ") && signature.Contains("float<kg>"))
+    }
+
+    [<Fact>]
+    let ``prepare opens feed checked example context and signatures stay compact`` () = async {
+        let markdown = "```fsharp prepare\nopen System\nopen System.IO\n```\n```fsharp\nlet greet name = String.Concat(\"Hello \" , name)\nlet epoch = DateTimeOffset.UnixEpoch\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" (Some coreProject) markdown
+        let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
+        let errors = results |> List.collect _.Diagnostics |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error)
+        Assert.Empty(errors)
+        let artifact = SemanticExtractor.artifact (fun _ -> None) results
+        let context = artifact.Pages.Head.Blocks.[1].ExampleContext.Value
+        Assert.Contains(context.Requires, fun requirement -> requirement.Open = "System")
+        Assert.DoesNotContain(context.Requires, fun requirement -> requirement.Open = "System.IO")
+        Assert.Contains(context.Types, fun signature -> signature.StartsWith("val greet: ") && signature.Contains("string -> string"))
+        Assert.Contains(context.Types, fun signature -> signature.StartsWith("val epoch: ") && signature.Contains("DateTimeOffset"))
+    }
+
+    [<Fact>]
     let ``documentation compiler uses project references and page scope without executing`` () = async {
         let blocks =
             DocumentationDiscovery.discoverMarkdown
@@ -69,9 +135,11 @@ module IntegrationTests =
         let result = Assert.Single(results)
         let errors = result.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error)
         Assert.Empty(errors)
-        let artifact = SemanticExtractor.artifact results
+        let artifact = SemanticExtractor.artifact (fun _ -> None) results
         let semanticBlocks = artifact.Pages |> List.collect _.Blocks
         let semanticBlock = List.head semanticBlocks
+        Assert.Contains("val package: PackageModel", semanticBlock.ExampleContext.Value.Types)
+        Assert.Contains("val version: string", semanticBlocks.[1].ExampleContext.Value.Types)
         let signatures = semanticBlock.Tooltips |> List.choose _.Signature
         Assert.Contains(signatures, fun signature -> signature.Contains("package:") && signature.Contains("PackageModel"))
         Assert.Contains(semanticBlock.Tooltips, fun tooltip ->
@@ -106,8 +174,8 @@ module IntegrationTests =
 
         let firstBatch = batched |> Map.find "first"
         let secondBatch = batched |> Map.find "second"
-        let standaloneArtifact = SemanticExtractor.artifact standalone
-        let batchedArtifact = SemanticExtractor.artifact firstBatch
+        let standaloneArtifact = SemanticExtractor.artifact (fun _ -> None) standalone
+        let batchedArtifact = SemanticExtractor.artifact (fun _ -> None) firstBatch
 
         Assert.Equal<SemanticPage list>(standaloneArtifact.Pages, batchedArtifact.Pages)
         Assert.Empty(firstBatch |> List.collect _.Diagnostics |> List.filter (fun item -> item.Severity = SemanticDiagnosticSeverity.Error))

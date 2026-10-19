@@ -18,13 +18,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../src/FsLiveDocs.Annotations/FsLiveDocs.Annotations.fsproj" />
     <ProjectReference Include="../../samples/DeepReference/Acme.Docs/Acme.Docs.fsproj" />
-    <ProjectReference Include="../../src/FsLiveDocs.Cli/FsLiveDocs.Cli.fsproj" />
-    <ProjectReference Include="../../src/FsLiveDocs.Core/FsLiveDocs.Core.fsproj" />
-    <ProjectReference Include="../../src/FsLiveDocs.Renderer/FsLiveDocs.Renderer.fsproj" />
-    <ProjectReference Include="../../src/FsLiveDocs.Runner/FsLiveDocs.Runner.fsproj" />
     <Reference Include="FsLiveDocs.Core"><HintPath>/home/adam/projects/FsLiveDocs/main/artifacts/bin/FsLiveDocs.Cli/release/FsLiveDocs.Core.dll</HintPath></Reference>
     <Reference Include="FsLiveDocs.Runner"><HintPath>/home/adam/projects/FsLiveDocs/main/artifacts/bin/FsLiveDocs.Cli/release/FsLiveDocs.Runner.dll</HintPath></Reference>
+    <None Include="/home/adam/projects/FsLiveDocs/main/artifacts/bin/FsLiveDocs.Cli/release/FsLiveDocs.TranscriptHost.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <None Include="/home/adam/projects/FsLiveDocs/main/artifacts/bin/FsLiveDocs.Cli/release/FsLiveDocs.TranscriptHost.deps.json" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <None Include="/home/adam/projects/FsLiveDocs/main/artifacts/bin/FsLiveDocs.Cli/release/FsLiveDocs.TranscriptHost.runtimeconfig.json" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
 
 </Project>

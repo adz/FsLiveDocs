@@ -21,6 +21,8 @@ let total = subtotal * 1.2M
 ```
 ````
 
+Checked page and `run` examples include a collapsed **Requires & types** panel. It lists only the opens used by symbols in that block, the documented NuGet package when known, and the F# signatures of top-level `let` bindings. Opens supplied by earlier blocks or hidden `prepare` setup appear here when used, making each example easier to paste. Generated `.md` mirrors and `llms-full.txt` put the same lines in an F# comment fence directly after the example. Locally defined values from previous blocks may still be needed; the panel does not copy those definitions.
+
 Use `prepare` for setup that readers need less often:
 
 ````markdown
@@ -28,6 +30,8 @@ Use `prepare` for setup that readers need less often:
 open System
 ```
 ````
+
+To hide context for one checked page or run fence, add `no-context` to its info string (for example, `fsharp no-context`). Set `exampleContext: false` in page front matter to hide it for that page, or set `"exampleContext": false` in `.livedocs/config.json` for the site. No-check, prepare, transcript, and isolated-illustration fences never receive example context.
 
 Use `isolated` when a snippet should stand on its own:
 

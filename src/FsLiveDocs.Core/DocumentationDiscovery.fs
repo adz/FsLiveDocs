@@ -181,11 +181,13 @@ module DocumentationDiscovery =
             let normalizedFlags = flags |> List.map _.ToLowerInvariant()
             // `deterministic` is a modifier, not a mode: it can accompany `run` or `transcript` only.
             let deterministic = normalizedFlags |> List.contains "deterministic"
-            let modes = normalizedFlags |> List.filter (fun value -> value <> "deterministic")
+            let modes = normalizedFlags |> List.filter (fun value -> value <> "deterministic" && value <> "no-context")
             let known = set [ "prepare"; "isolated"; "run"; "transcript"; "no-check" ]
             match modes |> List.tryFind (known.Contains >> not) with
             | Some unknown -> invalidOp $"Unknown F# fence mode '{unknown}'."
             | None -> ()
+            if List.contains "no-context" normalizedFlags && List.exists (fun mode -> mode = "no-check" || mode = "isolated" || mode = "transcript" || mode = "prepare") modes then
+                invalidOp "The no-context option applies only to checked page or run blocks."
             if modes.Length > 1 then
                 let selected = String.concat " " modes
                 invalidOp $"Contradictory F# fence modes: {selected}. Choose exactly one mode."

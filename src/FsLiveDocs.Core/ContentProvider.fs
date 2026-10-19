@@ -901,7 +901,7 @@ module ContentProvider =
             SemanticCode: SemanticCode.Options
         }
 
-    let private resolveMarkdown (context: MarkdownContext) (sourcePath: string) (body: string) =
+    let private resolveMarkdown (context: MarkdownContext) (sourcePath: string) (body: string) (pageContext: bool option) =
         let resolved =
             expandTransclusions body context.SourceDir context.Package
             |> fun expanded ->
@@ -945,7 +945,8 @@ module ContentProvider =
 
         let semanticCode =
             { context.SemanticCode with
-                LinkResolver = semanticLinkResolver context.Package context.RootPath context.ApiRoutes }
+                LinkResolver = semanticLinkResolver context.Package context.RootPath context.ApiRoutes
+                ExampleContext = context.SemanticCode.ExampleContext && context.SiteConfig.ExampleContext <> Some false && pageContext <> Some false }
 
         let formatted =
             SemanticCode.formatFences semanticCode semanticSourcePath rewritten
@@ -977,9 +978,13 @@ module ContentProvider =
         |> Seq.fold (fun (current: string) (placeholder, html) -> current.Replace(placeholder, html)) rendered
 
     let private loadMarkdownPage (context: MarkdownContext) (filePath: string) (outputPath: string) (raw: string) =
+        let plainMarkdown body pageContext =
+            let sourcePath = context.RoutePrefix + Path.GetRelativePath(context.DocsDir, filePath).Replace('\\', '/')
+            let options = { context.SemanticCode with ExampleContext = context.SemanticCode.ExampleContext && context.SiteConfig.ExampleContext <> Some false && pageContext <> Some false }
+            SemanticCode.formatMarkdownFences options sourcePath body
         match parseFrontMatter raw with
         | Some (metadata, body) ->
-            let contentHtml = resolveMarkdown context filePath body
+            let contentHtml = resolveMarkdown context filePath body metadata.ExampleContext
             let labels =
                 [ metadata.Platform |> Option.map (fun value -> $"Platform: {System.Net.WebUtility.HtmlEncode value}")
                   metadata.TargetFramework |> Option.map (fun value -> $"Target: {System.Net.WebUtility.HtmlEncode value}") ]
@@ -989,12 +994,12 @@ module ContentProvider =
                 else
                     let labelText = String.concat " · " labels
                     $"<aside class=\"livedocs-checking-context not-prose\" aria-label=\"Example checking context\">{labelText}</aside>" + contentHtml
-            { Metadata = metadata; ContentHtml = contentHtml; Markdown = body; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
+            { Metadata = metadata; ContentHtml = contentHtml; Markdown = plainMarkdown body metadata.ExampleContext; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
         | None ->
-            let contentHtml = resolveMarkdown context filePath raw
+            let contentHtml = resolveMarkdown context filePath raw None
             { Metadata = ContentMetadata.empty (defaultTitle filePath)
               ContentHtml = contentHtml
-              Markdown = raw
+              Markdown = plainMarkdown raw None
               FilePath = filePath
               OutputPath = outputPath
               SectionOrder = System.Int32.MaxValue }

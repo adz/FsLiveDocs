@@ -51,6 +51,8 @@ type SiteConfig = {
     FSharpPrelude: string option
     /// <summary>Optional settings for comments embedded on posts that opt in.</summary>
     CommentsProvider: CommentsProvider option
+    /// <summary>Disable compiler-derived example context across the site when false.</summary>
+    ExampleContext: bool option
 }
 
 and GiscusSettings = {
@@ -82,7 +84,8 @@ module SiteConfig =
           Themes = None
           Navigation = None
           FSharpPrelude = None
-          CommentsProvider = None }
+          CommentsProvider = None
+          ExampleContext = None }
 
 /// Constructs source-control URLs shared by Markdown links and API member links.
 module SourceUrl =
@@ -174,6 +177,8 @@ type ContentMetadata = {
     Comments: bool
     /// <summary>Optional defaults consumed by a <c>{{&lt; posts &gt;}}</c> shortcode on this page.</summary>
     BlogList: BlogListingOptions option
+    /// <summary>Disable example context on this page when false.</summary>
+    ExampleContext: bool option
 }
 
 /// Defaults for pages without frontmatter and explicit schema migrations.
@@ -193,7 +198,8 @@ module ContentMetadata =
           Series = None
           SeriesOrder = None
           Comments = false
-          BlogList = None }
+          BlogList = None
+          ExampleContext = None }
 
 /// <summary>A processed documentation page.</summary>
 type ContentPage = {

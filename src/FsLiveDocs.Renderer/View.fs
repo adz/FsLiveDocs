@@ -1074,6 +1074,15 @@ module View =
                         margin: 0 !important;
                         border-top: 1px solid oklch(var(--b3));
                     }
+                    .livedocs-example-context { margin-top: -0.75rem; }
+                    .livedocs-example-context > div {
+                        padding: 0.6rem 1rem;
+                        overflow-x: auto;
+                        font-size: 0.75rem;
+                        line-height: 1.6;
+                        color: oklch(var(--bc) / 0.8);
+                    }
+                    .livedocs-example-context code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
                     .livedocs-tooltips { display: contents; }
                     .fsdocs-tip {
                         position: fixed;

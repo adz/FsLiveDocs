@@ -17,7 +17,7 @@ module History =
     let supportedApiModelSchemaVersions = set [ 3; 4; 5 ]
 
     [<Literal>]
-    let SemanticSchemaVersion = 2
+    let SemanticSchemaVersion = 3
 
     [<Literal>]
     let ManifestSchemaVersion = 1
@@ -95,13 +95,35 @@ module History =
             invalidOp $"History API model version mismatch in {path}: expected {expectedVersion}, got {artifact.Package.Version}."
         artifact.Package
 
+    /// Schema 2 predates example context. Migrate its blocks explicitly before strict decoding.
+    let readSemanticArtifact (json: string) : SemanticDocumentationArtifact =
+        let root =
+            match System.Text.Json.Nodes.JsonNode.Parse json with
+            | :? System.Text.Json.Nodes.JsonObject as value -> value
+            | _ -> invalidOp "Semantic payload must be an object."
+        let version = match root["SchemaVersion"] with | null -> 0 | value -> value.GetValue<int>()
+        match version with
+        | 2 ->
+            match root["Pages"] with
+            | :? System.Text.Json.Nodes.JsonArray as pages ->
+                for page in pages do
+                    match page["Blocks"] with
+                    | :? System.Text.Json.Nodes.JsonArray as blocks ->
+                        for block in blocks do block["ExampleContext"] <- null
+                    | _ -> invalidOp "Semantic page has no Blocks."
+            | _ -> invalidOp "Semantic payload has no Pages."
+            root["SchemaVersion"] <- System.Text.Json.Nodes.JsonValue.Create(SemanticSchemaVersion)
+            Json.deserialize semanticCodec (root.ToJsonString())
+        | 3 -> Json.deserialize semanticCodec json
+        | _ -> invalidOp $"Unsupported semantic documentation schema {version}; supported versions are 2, 3."
+
     /// <summary>Loads renderer-neutral semantic documentation after checksum and schema validation.</summary>
     let loadSemanticArtifact expectedSha256 path =
         if not (File.Exists(path)) then invalidOp $"History semantic artifact is missing: {path}"
         let actualSha256 = sha256 path
         if not (actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase)) then
             invalidOp $"History semantic artifact checksum mismatch: expected {expectedSha256}, got {actualSha256}."
-        let artifact = deserializeWith semanticCodec path
+        let artifact = readSemanticArtifact (File.ReadAllText path)
         if artifact.SchemaVersion <> SemanticSchemaVersion then
             invalidOp $"Unsupported semantic documentation schema {artifact.SchemaVersion} in {path}; expected {SemanticSchemaVersion}."
         artifact.Pages

@@ -111,6 +111,20 @@ module SemanticSchema =
                   EndColumn = endColumn })
         }
 
+    let exampleRequirement : Schema<ExampleRequirement> =
+        schema<ExampleRequirement> {
+            fieldAs "Open" (fun (r: ExampleRequirement) -> r.Open) { withSchema Schema.text }
+            fieldAs "Package" (fun (r: ExampleRequirement) -> r.Package) { withSchema (Schema.option Schema.text) }
+            construct (fun name package -> { Open = name; Package = package })
+        }
+
+    let exampleContext : Schema<ExampleContext> =
+        schema<ExampleContext> {
+            fieldAs "Requires" (fun (c: ExampleContext) -> c.Requires) { withSchema (Schema.listWith exampleRequirement) }
+            fieldAs "Types" (fun (c: ExampleContext) -> c.Types) { withSchema (Schema.listWith Schema.text) }
+            construct (fun requires types -> { Requires = requires; Types = types })
+        }
+
     let semanticCodeBlock : Schema<SemanticCodeBlock> =
         schema<SemanticCodeBlock> {
             fieldAs "Id" (fun (b: SemanticCodeBlock) -> b.Id) { withSchema Schema.text }
@@ -119,13 +133,15 @@ module SemanticSchema =
             fieldAs "Lines" (fun (b: SemanticCodeBlock) -> b.Lines) { withSchema (Schema.listWith semanticLine) }
             fieldAs "Tooltips" (fun (b: SemanticCodeBlock) -> b.Tooltips) { withSchema (Schema.listWith semanticTooltip) }
             fieldAs "Diagnostics" (fun (b: SemanticCodeBlock) -> b.Diagnostics) { withSchema (Schema.listWith semanticDiagnostic) }
-            construct (fun id sourceHash contextHash lines tooltips diagnostics ->
+            fieldAs "ExampleContext" (fun (b: SemanticCodeBlock) -> b.ExampleContext) { withSchema (Schema.option exampleContext) }
+            construct (fun id sourceHash contextHash lines tooltips diagnostics exampleContext ->
                 { Id = id
                   SourceHash = sourceHash
                   ContextHash = contextHash
                   Lines = lines
                   Tooltips = tooltips
-                  Diagnostics = diagnostics })
+                  Diagnostics = diagnostics
+                  ExampleContext = exampleContext })
         }
 
     let semanticPage : Schema<SemanticPage> =

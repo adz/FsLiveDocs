@@ -301,6 +301,21 @@ module SiteBuilder =
             if not (targetPath.StartsWith(apiRoot, StringComparison.Ordinal)) || not targetExists.[targetPath] then
                 invalidOp $"Broken generated API link in {Path.GetFileName(pagePath)}: {href}"
 
+    let private markdownMirrors outputDir (pages: ContentPage list) =
+        pages
+        |> List.filter (fun page -> page.OutputPath.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+        |> List.map (fun page ->
+            let path = Path.ChangeExtension(page.OutputPath, ".md")
+            Path.Combine(outputDir, path), "# " + page.Metadata.Title + "\n\n" + page.Markdown)
+
+    let private markdownOutputs outputDir (pages: ContentPage list) =
+        let full =
+            pages
+            |> List.sortBy _.OutputPath
+            |> List.map (fun page -> "# " + page.Metadata.Title + "\n\n" + page.Markdown)
+            |> String.concat "\n\n---\n\n"
+        (Path.Combine(outputDir, "llms-full.txt"), full) :: markdownMirrors outputDir pages
+
     /// <summary>Builds the primary documentation site.</summary>
     let build (context: SiteBuildContext) =
         let renderContext : SiteRenderContext = {
@@ -427,8 +442,8 @@ module SiteBuilder =
         ensureDirectory apiDir
 
         writeAll (
-            (Path.Combine(context.OutputDir, "llms.txt"), generateLlmsTxt context.Package)
-            :: pageWrites @ entityWrites @ packageWrites
+            (Path.Combine(context.OutputDir, "llms.txt"), generateLlmsTxt context.Package + "\n\n- [Full guides and examples](llms-full.txt)\n")
+            :: pageWrites @ markdownOutputs context.OutputDir context.Pages @ entityWrites @ packageWrites
         )
 
         validateGeneratedApiLinks apiDir
@@ -683,6 +698,7 @@ module SiteBuilder =
         (site: DocsSetVersionSite)
         =
         let links = setLinks site
+        writeAll (markdownOutputs destination (site.Sets |> List.collect _.Pages))
 
         for docsSet in site.Sets do
             let set = docsSet.Set
@@ -880,7 +896,7 @@ module SiteBuilder =
                 else
                     []
 
-            writeAll (pageWrites @ apiWrites @ indexWrites)
+            writeAll (pageWrites @ markdownMirrors destination docsSet.Pages @ apiWrites @ indexWrites)
 
             apiDirForValidation |> Option.iter validateGeneratedApiLinks
 
@@ -928,7 +944,7 @@ module SiteBuilder =
               UsesDocumentationSets = true }
 
         resetOutputDirectory outputDir
-        writeAll [ Path.Combine(outputDir, "llms.txt"), generateLlmsTxt site.Package ]
+        writeAll [ Path.Combine(outputDir, "llms.txt"), generateLlmsTxt site.Package + "\n\n- [Full guides and examples](llms-full.txt)\n" ]
         renderDocsSetVersion currentVersion versions [ site ] config theme "" outputDir site
 
     let private versionSiteOutputIdentities (site: DocsSetVersionSite) =
@@ -1073,7 +1089,7 @@ module SiteBuilder =
 
             writeVersionFallbacks destination identities (fallbackForIdentity site)
 
-        writeAll [ Path.Combine(outputDir, "llms.txt"), generateLlmsTxt current.Package ]
+        writeAll [ Path.Combine(outputDir, "llms.txt"), generateLlmsTxt current.Package + "\n\n- [Full guides and examples](llms-full.txt)\n" ]
 
     /// <summary>Builds the current site and computes the version list from history snapshots.</summary>
     /// <param name="historyDir">The directory containing previous package snapshots.</param>

@@ -18,10 +18,10 @@ module ReleaseCapsule =
 
     /// Schema 4 adds configurable source URL patterns and branches.
     [<Literal>]
-    let ContentSchemaVersion = 4
+    let ContentSchemaVersion = 5
 
     /// Content schema versions this renderer reads. Older versions are migrated; unknown versions are rejected.
-    let supportedContentSchemaVersions = set [ 1; 2; 3; 4 ]
+    let supportedContentSchemaVersions = set [ 1; 2; 3; 4; 5 ]
 
     [<Literal>]
     let HistoryIndexSchemaVersion = 1
@@ -34,7 +34,7 @@ module ReleaseCapsule =
                 if not (site.ContainsKey name) then site[name] <- null
 
         /// Content schemas 1 and 2 predate blog metadata; fill every blog field with its default
-        /// explicitly so the strict schema-4 codec can decode the page metadata.
+        /// explicitly so the strict current codec can decode the page metadata.
         let private addBlogMetadataDefaults (metadata: Nodes.JsonObject) =
             let defaults: (string * Nodes.JsonNode) list =
                 [ "Date", null
@@ -50,8 +50,29 @@ module ReleaseCapsule =
             for name, value in defaults do
                 if not (metadata.ContainsKey name) then metadata[name] <- value
 
+        let private addExampleContextDefaults (root: Nodes.JsonObject) =
+            match root["Site"] with
+            | :? Nodes.JsonObject as site -> site["ExampleContext"] <- null
+            | _ -> invalidOp "Content is missing Site."
+            match root["Pages"] with
+            | :? Nodes.JsonArray as pages ->
+                for page in pages do
+                    match page["Metadata"] with
+                    | :? Nodes.JsonObject as metadata -> metadata["ExampleContext"] <- null
+                    | _ -> invalidOp "Content page is missing Metadata."
+            | _ -> invalidOp "Content is missing Pages."
+
+        let migrateV4 (bytes: byte array) : ReleaseContentArtifact =
+            let root =
+                match Nodes.JsonNode.Parse(Encoding.UTF8.GetString bytes) with
+                | :? Nodes.JsonObject as value -> value
+                | _ -> invalidOp "Content schema 4 payload must be an object."
+            addExampleContextDefaults root
+            root["SchemaVersion"] <- Nodes.JsonValue.Create(ContentSchemaVersion)
+            Json.deserialize (Json.compile ReleaseSchema.releaseContentArtifact) (root.ToJsonString())
+
         /// Schema 2 had documentation sets but predated blog metadata. Do not depend on
-        /// Json.NET's treatment of absent record fields: write every default before schema-4 decoding.
+        /// Json.NET's treatment of absent record fields: write every default before current-schema decoding.
         let migrateV2 (bytes: byte array) : ReleaseContentArtifact =
             let root =
                 match Nodes.JsonNode.Parse(Encoding.UTF8.GetString bytes) with
@@ -74,12 +95,13 @@ module ReleaseCapsule =
                 site["CommentsProvider"] <- null
                 addSourceUrlDefaults site
             | _ -> invalidOp "Content schema 2 is missing Site."
+            addExampleContextDefaults root
 
             root["SchemaVersion"] <- Nodes.JsonValue.Create(ContentSchemaVersion)
             Json.deserialize (Json.compile ReleaseSchema.releaseContentArtifact) (root.ToJsonString())
 
         /// Schema 3 predates configurable source URLs. Add the absent fields explicitly before
-        /// strict schema-4 deserialization, preserving the legacy RepoUrl fallback.
+        /// strict current-schema deserialization, preserving the legacy RepoUrl fallback.
         let migrateV3 (bytes: byte array) : ReleaseContentArtifact =
             let root =
                 match Nodes.JsonNode.Parse(Encoding.UTF8.GetString bytes) with
@@ -90,6 +112,7 @@ module ReleaseCapsule =
             match root["Site"] with
             | :? Nodes.JsonObject as site -> addSourceUrlDefaults site
             | _ -> invalidOp "Content schema 3 is missing Site."
+            addExampleContextDefaults root
             root["SchemaVersion"] <- Nodes.JsonValue.Create(ContentSchemaVersion)
             Json.deserialize (Json.compile ReleaseSchema.releaseContentArtifact) (root.ToJsonString())
 
@@ -137,6 +160,7 @@ module ReleaseCapsule =
                             match Nodes.JsonNode.Parse((required page "Metadata").GetRawText()) with
                             | :? Nodes.JsonObject as metadata ->
                                 addBlogMetadataDefaults metadata
+                                metadata["ExampleContext"] <- null
                                 Json.deserialize contentMetadataCodec (metadata.ToJsonString())
                             | _ -> invalidOp "Content schema 1 page Metadata must be an object."
                           Markdown = (required page "Markdown").GetString() })
@@ -148,6 +172,7 @@ module ReleaseCapsule =
                 match Nodes.JsonNode.Parse((required root "Site").GetRawText()) with
                 | :? Nodes.JsonObject as value ->
                     addSourceUrlDefaults value
+                    value["ExampleContext"] <- null
                     value
                 | _ -> invalidOp "Content schema 1 Site must be an object."
             let site = Json.deserialize siteConfigCodec (siteNode.ToJsonString())
@@ -657,14 +682,16 @@ module ReleaseCapsule =
 
         let semantic =
             verifyComponent manifest.Semantic entries
-            |> deserializeWith semanticCodec
+            |> System.Text.Encoding.UTF8.GetString
+            |> History.readSemanticArtifact
 
         let contentBytes = verifyComponent manifest.Content entries
         // The manifest records the exact persisted content contract. Deserialize against that
         // version's shape, then migrate supported older versions with a small deterministic step.
         let content =
             match manifest.Content.SchemaVersion with
-            | 4 -> deserializeWith contentCodec contentBytes
+            | 5 -> deserializeWith contentCodec contentBytes
+            | 4 -> LegacyContent.migrateV4 contentBytes
             | 3 -> LegacyContent.migrateV3 contentBytes
             | 2 -> LegacyContent.migrateV2 contentBytes
             | 1 -> LegacyContent.migrate semantic.Prelude api (LegacyContent.deserialize contentBytes)
@@ -680,6 +707,8 @@ module ReleaseCapsule =
         if api.SchemaVersion <> History.ApiModelSchemaVersion then
             invalidOp $"Unsupported API model schema {api.SchemaVersion}; expected {History.ApiModelSchemaVersion}."
 
+        if manifest.Semantic.SchemaVersion <> 2 && manifest.Semantic.SchemaVersion <> History.SemanticSchemaVersion then
+            invalidOp $"Unsupported semantic schema {manifest.Semantic.SchemaVersion}."
         if semantic.SchemaVersion <> History.SemanticSchemaVersion then
             invalidOp $"Unsupported semantic schema {semantic.SchemaVersion}; expected {History.SemanticSchemaVersion}."
 

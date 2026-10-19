@@ -383,13 +383,26 @@ module AnnotationContractTests =
 module HistoryTests =
 
     [<Fact>]
+    let ``semantic schema two migrates without fabricating example context`` () =
+        let block = {
+            Id = "guide.md#fsharp-0"; SourceHash = "source"; ContextHash = "context"
+            Lines = []; Tooltips = []; Diagnostics = []; ExampleContext = None }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ block ] } ] }
+        let root = System.Text.Json.Nodes.JsonNode.Parse(Json.serialize Codecs.semanticArtifact artifact).AsObject()
+        root["SchemaVersion"] <- System.Text.Json.Nodes.JsonValue.Create(2)
+        root["Pages"].[0].["Blocks"].[0].AsObject().Remove("ExampleContext") |> ignore
+        let migrated = History.readSemanticArtifact (root.ToJsonString())
+        Assert.Equal(History.SemanticSchemaVersion, migrated.SchemaVersion)
+        Assert.Equal(None, migrated.Pages.Head.Blocks.Head.ExampleContext)
+
+    [<Fact>]
     let ``semantic artifact round trips and validates tooltip indexes`` () =
         let path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".semantic.json")
         let block = {
             Id = "guide.md#fsharp-0"; SourceHash = "source"; ContextHash = "context"
             Lines = [ { Tokens = [ { Text = "value"; Kind = SemanticTokenKind.Identifier; Tooltip = Some 0 } ] } ]
             Tooltips = [ { Signature = Some "value: int"; Documentation = Some "A value."; Sections = []; Footer = None; Link = None } ]
-            Diagnostics = []
+            Diagnostics = []; ExampleContext = None
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ block ] } ] }
         File.WriteAllText(path, Json.serialize Codecs.semanticArtifact artifact)
@@ -533,6 +546,7 @@ module ReleaseCapsuleTests =
             Navigation = None
             FSharpPrelude = None
             CommentsProvider = None
+            ExampleContext = None
         }
 
     let private inputs () =
@@ -1130,7 +1144,7 @@ module ContentProviderTests =
             ContextHash = DocumentationDiscovery.contextHash "" [ discovered ]
             Lines = [ { Tokens = [ { Text = discovered.ExpandedSource; Kind = SemanticTokenKind.Identifier; Tooltip = Some 0 } ] } ]
             Tooltips = [ tooltip ]
-            Diagnostics = []
+            Diagnostics = []; ExampleContext = None
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ semantic ] } ] }
         let html = SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact } "guide.md" markdown
@@ -1143,6 +1157,38 @@ module ContentProviderTests =
         Assert.Contains("source hash mismatch", error.Message)
 
     [<Fact>]
+    let ``page front matter and site config accept example context opt-out`` () =
+        let metadata, _ = ContentProvider.parseFrontMatter "---\ntitle: Quiet\nexampleContext: false\n---\nText" |> Option.get
+        Assert.Equal(Some false, metadata.ExampleContext)
+        let config = Json.deserialize (Json.compile SiteSchema.siteConfigFile) "{\"exampleContext\":false}"
+        Assert.Equal(Some false, config.ExampleContext)
+
+    [<Fact>]
+    let ``checked example context renders in HTML and Markdown with opt-outs`` () =
+        let markdown = "```fsharp\nlet value = 42\n```"
+        let block = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown |> List.head
+        let context = { Requires = [ { Open = "Example"; Package = Some "Example.Package" } ]; Types = [ "val value: int" ] }
+        let semantic = {
+            Id = block.Id; SourceHash = block.SourceHash; ContextHash = DocumentationDiscovery.contextHash "" [ block ]
+            Lines = [ { Tokens = [ { Text = block.ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]
+            Tooltips = []; Diagnostics = []; ExampleContext = Some context }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ semantic ] } ] }
+        let options = { SemanticCode.defaults with Artifact = Some artifact }
+        let html = SemanticCode.formatFences options "guide.md" markdown
+        Assert.Contains("<summary>Requires &amp; types</summary>", html)
+        Assert.Contains("Requires: open Example  (packages: Example.Package)", html)
+        Assert.Contains("val value: int", html)
+        let plain = SemanticCode.formatMarkdownFences options "guide.md" markdown
+        Assert.Contains("```fsharp\n// Requires: open Example  (packages: Example.Package)\n// val value: int\n```", plain)
+        Assert.DoesNotContain("Requires &amp; types", SemanticCode.formatFences { options with ExampleContext = false } "guide.md" markdown)
+        Assert.Equal(markdown, SemanticCode.formatMarkdownFences { options with ExampleContext = false } "guide.md" markdown)
+        let opted = markdown.Replace("```fsharp", "```fsharp no-context")
+        Assert.DoesNotContain("Requires &amp; types", SemanticCode.formatFences options "guide.md" opted)
+        Assert.Equal(opted, SemanticCode.formatMarkdownFences options "guide.md" opted)
+        let qualifiedOnly = { context with Requires = [ { Open = ""; Package = Some "Example.Package" } ]; Types = [] }
+        Assert.Equal([ "Requires: (packages: Example.Package)" ], SemanticCode.contextLines qualifiedOnly)
+
+    [<Fact>]
     let ``persisted semantic records reject changed preparation context and missing blocks`` () =
         let markdown = "```fsharp prepare\nopen System\n```\n\n```fsharp\nlet value = DateTime.UnixEpoch\n```"
         let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown
@@ -1151,13 +1197,13 @@ module ContentProviderTests =
             Id = displayed.Id; SourceHash = displayed.SourceHash
             ContextHash = DocumentationDiscovery.contextHash "" blocks
             Lines = [ { Tokens = [ { Text = displayed.ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]
-            Tooltips = []; Diagnostics = []
+            Tooltips = []; Diagnostics = []; ExampleContext = None
         }
         let preparation = {
             Id = blocks.[0].Id; SourceHash = blocks.[0].SourceHash
             ContextHash = DocumentationDiscovery.contextHash "" blocks
             Lines = [ { Tokens = [ { Text = blocks.[0].ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]
-            Tooltips = []; Diagnostics = []
+            Tooltips = []; Diagnostics = []; ExampleContext = None
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ preparation; semantic ] } ] }
         let changedPreparation = markdown.Replace("open System", "open System.IO")
@@ -1180,7 +1226,7 @@ module ContentProviderTests =
             Id = block.Id; SourceHash = block.SourceHash
             ContextHash = DocumentationDiscovery.contextHash "" blocks
             Lines = [ { Tokens = [ { Text = block.ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]
-            Tooltips = []; Diagnostics = []
+            Tooltips = []; Diagnostics = []; ExampleContext = None
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = blocks |> List.map semantic } ] }
 
@@ -1197,7 +1243,7 @@ module ContentProviderTests =
         let prelude = "open System"
         let semantic = {
             Id = block.Id; SourceHash = block.SourceHash; ContextHash = DocumentationDiscovery.contextHash prelude [ block ]
-            Lines = [ { Tokens = [ { Text = block.ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]; Tooltips = []; Diagnostics = [] }
+            Lines = [ { Tokens = [ { Text = block.ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]; Tooltips = []; Diagnostics = []; ExampleContext = None }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = prelude; Pages = [ { SourcePath = "guide.md"; Blocks = [ semantic ] } ] }
 
         let html = SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact; Prelude = artifact.Prelude } "guide.md" markdown
@@ -1227,7 +1273,7 @@ module ContentProviderTests =
             ContextHash = DocumentationDiscovery.contextHash "" [ checkedBlock ]
             Lines = [ { Tokens = [ { Text = "let"; Kind = Keyword; Tooltip = None }; { Text = " checkedValue = 1"; Kind = PlainText; Tooltip = None } ] } ]
             Tooltips = []
-            Diagnostics = []
+            Diagnostics = []; ExampleContext = None
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ semantic ] } ] }
 
@@ -1361,7 +1407,8 @@ module ContentProviderTests =
               Themes = None
               Navigation = None
               FSharpPrelude = None
-              CommentsProvider = None }
+              CommentsProvider = None
+              ExampleContext = None }
         let diagnostics = ContentProvider.createLinkDiagnostics ()
 
         let pages =
@@ -1957,7 +2004,7 @@ module SiteBuilderTests =
             Id = discovered.Id; SourceHash = discovered.SourceHash; ContextHash = DocumentationDiscovery.contextHash "" [ discovered ]
             Lines = [ { Tokens = [ { Text = "let"; Kind = Keyword; Tooltip = None }; { Text = " answer = 42"; Kind = Identifier; Tooltip = Some 0 } ] } ]
             Tooltips = [ { Signature = Some "answer: int"; Documentation = Some "Stored release documentation."; Sections = []; Footer = None; Link = None } ]
-            Diagnostics = []
+            Diagnostics = []; ExampleContext = None
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "index.md"; Blocks = [ semanticBlock ] } ] }
         let options = { SemanticCode.defaults with Artifact = Some artifact }
@@ -2166,6 +2213,7 @@ module SiteBuilderTests =
             Navigation = Some [ { Label = "Guides"; Href = "index.html" }; { Label = "Source"; Href = "https://github.com/example/library" } ]
             FSharpPrelude = None
             CommentsProvider = None
+            ExampleContext = None
         }
 
         SiteBuilder.build {
@@ -2191,6 +2239,26 @@ module SiteBuilderTests =
         Assert.Contains("href=\"content/example.css\"", homepage)
         Assert.DoesNotContain("data-set-theme=\"cupcake\"", homepage)
         Assert.Contains("href=\"https://github.com/example/library\"", homepage)
+
+    [<Fact>]
+    let ``site writes annotated Markdown mirrors and llms full output`` () =
+        let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let package: PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty }
+        let annotated = "```fsharp\nlet value = 42\n```\n```fsharp\n// val value: int\n```"
+        let page: ContentPage = {
+            Metadata = ContentMetadata.empty "Guide"
+            ContentHtml = "<p>Requires &amp; types: val value: int</p>"
+            Markdown = annotated
+            FilePath = "guide.md"
+            OutputPath = "guide.html"
+            SectionOrder = 0 }
+        SiteBuilder.build {
+            Pages = [ page ]; Package = package; Config = SiteConfig.empty; Versions = []
+            Theme = "light"; RootPath = ""; SiteRootPath = ""; OutputDir = outputDir }
+        Assert.Contains("// val value: int", File.ReadAllText(Path.Combine(outputDir, "guide.md")))
+        Assert.Contains("// val value: int", File.ReadAllText(Path.Combine(outputDir, "llms-full.txt")))
+        Assert.Contains("llms-full.txt", File.ReadAllText(Path.Combine(outputDir, "llms.txt")))
+        Assert.Contains("Requires &amp; types", File.ReadAllText(Path.Combine(outputDir, "guide.html")))
 
     [<Fact>]
     let ``api index includes nested entities`` () =
@@ -2789,7 +2857,8 @@ module DocumentationSetTests =
                   [ { Label = "Docs"; Href = "/" }
                     { Label = "Handbook"; Href = "/handbook/" } ]
           FSharpPrelude = None
-          CommentsProvider = None }
+          CommentsProvider = None
+          ExampleContext = None }
 
     let private configured id title source path projects isDefault sidebar api prelude : DocsSetConfig =
         { Id = id
@@ -3380,9 +3449,31 @@ module DocumentationSetTests =
 
         let _, _, _, content, _ = ReleaseCapsule.load capsule
 
-        Assert.Equal(4, content.SchemaVersion)
+        Assert.Equal(ReleaseCapsule.ContentSchemaVersion, content.SchemaVersion)
         Assert.Equal(None, content.Site.SourceUrlPattern)
         Assert.Equal(None, content.Site.SourceBranch)
+
+    [<Fact>]
+    let ``content schema four migrates example context opt-outs explicitly`` () =
+        let fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "content-schema-2.json")
+        let root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText fixture).AsObject()
+        root["SchemaVersion"] <- System.Text.Json.Nodes.JsonValue.Create(4)
+        let metadata = root["Pages"].AsArray().[0].["Metadata"].AsObject()
+        metadata["Date"] <- null
+        metadata["Tags"] <- System.Text.Json.Nodes.JsonArray()
+        metadata["Category"] <- null
+        metadata["Draft"] <- System.Text.Json.Nodes.JsonValue.Create(false)
+        for name in [ "Summary"; "Slug"; "Series"; "SeriesOrder"; "BlogList" ] do metadata[name] <- null
+        for name in [ "Draft"; "Comments" ] do metadata[name] <- System.Text.Json.Nodes.JsonValue.Create(false)
+        let site = root["Site"].AsObject()
+        site["CommentsProvider"] <- null
+        site["SourceUrlPattern"] <- null
+        site["SourceBranch"] <- null
+        let capsule = writeLegacyContentCapsule 4 (Text.Encoding.UTF8.GetBytes(root.ToJsonString()))
+        let _, _, _, content, _ = ReleaseCapsule.load capsule
+        Assert.Equal(ReleaseCapsule.ContentSchemaVersion, content.SchemaVersion)
+        Assert.Equal(None, content.Site.ExampleContext)
+        Assert.Equal(None, content.Pages.Head.Metadata.ExampleContext)
 
     [<Fact>]
     let ``content schema two fixture migrates with explicit blog defaults`` () =

@@ -16,9 +16,10 @@ module SemanticCode =
         Prelude: string
         /// <summary>Maps a fully-qualified F# symbol name to a relative API URL, or None when it is not documented.</summary>
         LinkResolver: string -> string option
+        ExampleContext: bool
     }
 
-    let defaults = { Enabled = true; Artifact = None; Prelude = ""; LinkResolver = fun _ -> None }
+    let defaults = { Enabled = true; Artifact = None; Prelude = ""; LinkResolver = (fun _ -> None); ExampleContext = true }
     let disabled = { defaults with Enabled = false }
 
     let private tokenClass = function
@@ -178,12 +179,27 @@ module SemanticCode =
             |> String.concat "\n"
         codeFrame "livedocs-lexical-code" lines ""
 
-    let private renderPersistedBlock (resolveLink: string -> string option) (block: SemanticCodeBlock) =
+    let contextLines (context: ExampleContext) =
+        [ if not context.Requires.IsEmpty then
+              let opens = context.Requires |> List.choose (fun requirement -> if requirement.Open = "" then None else Some("open " + requirement.Open)) |> List.distinct |> String.concat "; "
+              let packages = context.Requires |> List.choose _.Package |> List.distinct |> List.sort
+              let suffix = if packages.IsEmpty then "" else "(packages: " + String.concat ", " packages + ")"
+              yield "Requires: " + opens + (if opens = "" || suffix = "" then suffix else "  " + suffix)
+          for signature in context.Types do yield signature ]
+
+    let private renderPersistedBlock (resolveLink: string -> string option) showContext (block: SemanticCodeBlock) =
         let lines = block.Lines |> List.map (renderPersistedLine resolveLink block) |> String.concat "\n"
-        codeFrame "livedocs-semantic-code" lines $"<div class=\"livedocs-tooltips\">{renderTooltips block}</div>"
+        let context =
+            if not showContext then "" else
+                block.ExampleContext
+                |> Option.map (fun value -> contextLines value |> List.map (fun line -> $"<div><code>{WebUtility.HtmlEncode line}</code></div>") |> String.concat "")
+                |> Option.filter (String.IsNullOrWhiteSpace >> not)
+                |> Option.map (fun value -> $"<details class=\"livedocs-shared-setup livedocs-example-context not-prose\"><summary>Requires &amp; types</summary><div>{value}</div></details>")
+                |> Option.defaultValue ""
+        codeFrame "livedocs-semantic-code" lines $"<div class=\"livedocs-tooltips\">{renderTooltips block}</div>" + context
 
     let private renderPreparation resolveLink (block: SemanticCodeBlock) =
-        $"<details class=\"livedocs-shared-setup not-prose\"><summary>Shared setup</summary>{renderPersistedBlock resolveLink block}</details>"
+        $"<details class=\"livedocs-shared-setup not-prose\"><summary>Shared setup</summary>{renderPersistedBlock resolveLink false block}</details>"
 
     let private renderPrelude (prelude: string) =
         $"<details class=\"livedocs-shared-setup livedocs-repository-setup not-prose\"><summary>Repository F# setup</summary>{renderLexicalSource prelude}</details>"
@@ -222,13 +238,45 @@ module SemanticCode =
                         if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}: expected {persisted.SourceHash}, got {block.SourceHash}."
                         let expectedContext = if block.Mode = Isolated then DocumentationDiscovery.contextHash options.Prelude [ block ] else pageContextHash
                         if persisted.ContextHash <> expectedContext then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
-                        htmlStartMarker + renderPersistedBlock options.LinkResolver persisted + htmlEndMarker
+                        let showContext = options.ExampleContext && not (fence.Info.Split(' ') |> Array.exists (fun token -> token.Equals("no-context", StringComparison.OrdinalIgnoreCase)))
+                        htmlStartMarker + renderPersistedBlock options.LinkResolver showContext persisted + htmlEndMarker
                 builder.Append(replacement) |> ignore
                 cursor <- fence.Start + fence.Length)
             fences
             blocks
         builder.Append(markdown.Substring(cursor)) |> ignore
         builder.ToString()
+
+    /// Adds compiler-derived context after checked fences for plain Markdown and LLM readers.
+    let formatMarkdownFences (options: Options) (sourcePath: string) (markdown: string) =
+        match options.Artifact with
+        | None -> markdown
+        | Some artifact when not options.Enabled || not options.ExampleContext -> markdown
+        | Some artifact ->
+            let page = artifact.Pages |> List.tryFind (fun page -> page.SourcePath = sourcePath.Replace('\\', '/'))
+            let byId = page |> Option.map (fun page -> page.Blocks |> List.map (fun block -> block.Id, block) |> Map.ofList) |> Option.defaultValue Map.empty
+            let fences = DocumentationDiscovery.scanFsharpFences markdown
+            let blocks = DocumentationDiscovery.discoverMarkdown sourcePath None markdown
+            let builder = Text.StringBuilder()
+            let mutable cursor = 0
+            for fence, block in List.zip fences blocks do
+                let endOffset = fence.Start + fence.Length
+                builder.Append(markdown.Substring(cursor, endOffset - cursor)) |> ignore
+                if options.ExampleContext && not (fence.Info.Split(' ') |> Array.exists (fun flag -> flag.Equals("no-context", StringComparison.OrdinalIgnoreCase))) then
+                    match block.Mode, Map.tryFind block.Id byId with
+                    | (Page | Run), Some persisted when persisted.SourceHash = block.SourceHash ->
+                        match persisted.ExampleContext with
+                        | Some context ->
+                            let lines = contextLines context
+                            if not lines.IsEmpty then
+                                builder.AppendLine("```fsharp") |> ignore
+                                for line in lines do builder.AppendLine("// " + line) |> ignore
+                                builder.AppendLine("```") |> ignore
+                        | None -> ()
+                    | _ -> ()
+                cursor <- endOffset
+            builder.Append(markdown.Substring cursor) |> ignore
+            builder.ToString()
 
     /// Replaces compilable F# fences with compiler-enriched HTML and appends their shared tooltip payload.
     /// Compiler-backed and lexical fallback F# fences share one HTML and styling contract.

@@ -400,6 +400,12 @@ module internal DocAnalysis =
                     resolvedProjects
                     |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
                     |> List.filter (String.IsNullOrWhiteSpace >> not)
+                let packageByAssembly =
+                    resolvedProjects
+                    |> List.map (fun projectPath ->
+                        Path.GetFileNameWithoutExtension(ProjectResolver.resolveAssemblyPath projectPath), SymbolLister.packageName projectPath)
+                    |> Map.ofList
+                let packageForAssembly assembly = Map.tryFind assembly packageByAssembly
                 let aggregateReferences =
                     (evaluated |> List.collect (snd >> _.References)) @ builtAssemblies
                     |> List.distinct
@@ -491,7 +497,7 @@ module internal DocAnalysis =
                                       |> Async.RunSynchronously
                                   let semantic =
                                       if errors.IsEmpty then
-                                          let artifact = SemanticExtractor.artifact (checkedUnits @ transcriptUnits)
+                                          let artifact = SemanticExtractor.artifact packageForAssembly (checkedUnits @ transcriptUnits)
                                           writePageCache page artifact
                                           Some artifact
                                       else None

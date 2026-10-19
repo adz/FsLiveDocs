@@ -26,6 +26,11 @@ type SemanticDiagnostic = {
     EndLine: int
     EndColumn: int
 }
+/// Compiler-derived, renderer-neutral dependencies and bindings for one checked example.
+/// An empty Open denotes a documented package used through a fully qualified name.
+type ExampleRequirement = { Open: string; Package: string option }
+type ExampleContext = { Requires: ExampleRequirement list; Types: string list }
+
 type SemanticCodeBlock = {
     Id: string
     SourceHash: string
@@ -33,6 +38,7 @@ type SemanticCodeBlock = {
     Lines: SemanticLine list
     Tooltips: SemanticTooltip list
     Diagnostics: SemanticDiagnostic list
+    ExampleContext: ExampleContext option
 }
 type SemanticPage = { SourcePath: string; Blocks: SemanticCodeBlock list }
 type SemanticDocumentationArtifact = { SchemaVersion: int; Prelude: string; Pages: SemanticPage list }

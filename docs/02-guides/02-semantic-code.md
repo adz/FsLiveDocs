@@ -31,7 +31,8 @@ The stored semantic component contains:
 - inferred signatures and documentation;
 - mapped diagnostics;
 - source and page-context hashes;
-- the repository documentation prelude.
+- the repository documentation prelude;
+- used imports with documented package provenance and top-level `let` signatures for checked page/run examples.
 
 It does not contain HTML, formatter types, CSS classes, or tooltip DOM IDs.
 
@@ -62,7 +63,7 @@ let now = DateTimeOffset.UnixEpoch
 ```
 ````
 
-The setup participates in compilation and source hashing. The renderer displays it as shared setup.
+The setup participates in compilation and source hashing. The renderer displays it as shared setup. When an example uses a symbol made available by a setup `open`, that open appears in its **Requires & types** panel and in generated Markdown/LLM text. See [Author and test examples](01-verified-examples.md) for per-block and per-page opt-outs.
 
 ## Check a block independently
 
