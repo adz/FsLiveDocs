@@ -122,7 +122,7 @@ module SemanticCode =
         | Isolated -> "Isolated", "Isolated: compiled independently of the page"
         | Prepare -> "Setup", "Setup: compiled as page preparation"
         | Transcript -> "Verified", "Verified: compared by docs build"
-        | Run -> "Verified", "Verified: compiled and run by docs build"
+        | Run -> "Verified", "Verified: compiled by docs build; execution requires test or capture"
         | Page -> "Verified", "Verified by docs build"
 
     let private badge mode =
@@ -139,7 +139,7 @@ module SemanticCode =
         | Isolated -> "// [isolated: compiled independently by docs build]"
         | Prepare -> "// [setup: compiled by docs build]"
         | Transcript -> "// [verified: transcript compared by docs build]"
-        | Run -> "// [verified: compiled and run by docs build]"
+        | Run -> "// [verified: compiled by docs build; run by test or capture]"
         | Page -> "// [verified by docs build]"
 
     let private renderTranscriptSource (resolveLink: string -> string option) (persisted: SemanticCodeBlock option) (source: string) =
@@ -210,7 +210,7 @@ module SemanticCode =
               let opens = context.Requires |> List.choose (fun requirement -> if requirement.Open = "" then None else Some("open " + requirement.Open)) |> List.distinct |> String.concat "; "
               let packages = context.Requires |> List.choose _.Package |> List.distinct |> List.sort
               let suffix = if packages.IsEmpty then "" else "(packages: " + String.concat ", " packages + ")"
-              yield "Requires: " + opens + (if opens = "" || suffix = "" then suffix else "  " + suffix)
+              yield "Requires: " + opens + (if opens = "" || suffix = "" then suffix else " " + suffix)
           for signature in context.Types do yield signature ]
 
     let private renderPersistedBlock (resolveLink: string -> string option) showContext (block: SemanticCodeBlock) =
@@ -271,7 +271,14 @@ module SemanticCode =
             if needed.IsEmpty then Set.empty
             else
                 preparations |> List.choose _.ExampleContext |> List.collect _.Requires |> List.map _.Open |> Set.ofList
-        let opens = Set.union checkedOpens preparationOpens
+        // Schema-2 capsules migrate to absent example context. Without compiler-derived
+        // requirements, retain authored opens rather than producing broken setup code.
+        let opens =
+            if checkedBlocks |> List.exists (fun block -> block.ExampleContext.IsNone) then
+                lines
+                |> List.choose (fun line -> let matched = openPattern.Match line in if matched.Success then Some matched.Groups.[1].Value else None)
+                |> Set.ofList
+            else Set.union checkedOpens preparationOpens
         let selected =
             lines
             |> List.fold (fun (owner, kept) line ->
@@ -369,8 +376,15 @@ module SemanticCode =
                     if not setupShown && not (String.IsNullOrWhiteSpace setup) && (block.Mode = Page || block.Mode = Run) then
                         builder.AppendLine("```fsharp").AppendLine("// Page setup (hidden on the site; needed to run the examples below)").AppendLine(setup).AppendLine("```") |> ignore
                         setupShown <- true
-                    builder.Append(statusComment block.Mode).Append('\n') |> ignore
-                    builder.Append(markdown.Substring(fence.Start, fence.Length)) |> ignore
+                    // Put status inside the fence so blog prose (excerpts, RSS and reading
+                    // time) never treats it as a paragraph of its own.
+                    let original = markdown.Substring(fence.Start, fence.Length)
+                    let firstLineEnd = original.IndexOf('\n')
+                    if firstLineEnd < 0 then builder.Append(original) |> ignore
+                    else
+                        builder.Append(original.Substring(0, firstLineEnd + 1))
+                            .Append(statusComment block.Mode).Append('\n')
+                            .Append(original.Substring(firstLineEnd + 1)) |> ignore
                 if options.ExampleContext && not (fence.Info.Split(' ') |> Array.exists (fun flag -> flag.Equals("no-context", StringComparison.OrdinalIgnoreCase))) then
                     match block.Mode, Map.tryFind block.Id byId with
                     | (Page | Run), Some persisted when persisted.SourceHash = block.SourceHash ->

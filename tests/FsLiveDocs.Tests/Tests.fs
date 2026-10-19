@@ -1027,6 +1027,28 @@ module ContentProviderTests =
         Assert.DoesNotContain("\r", blocks.[0].ExpandedSource)
 
     [<Fact>]
+    let ``transcluded mirror uses expanded fence identities and example context`` () =
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let file = Path.Combine(root, "guide.md")
+        File.WriteAllText(Path.Combine(root, "example.fs"), "// <snippet:Answer>\nlet answer = 42\n// </snippet:Answer>")
+        let body = "{{< snippet id=\"Answer\" >}}\n\n```fsharp\nlet next = answer + 1\n```"
+        File.WriteAllText(file, body)
+        let expanded = ContentProvider.expandTransclusions body root emptyPackage
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None expanded
+        let semantic (block: DocumentationBlock) =
+            let name = if block.Id.EndsWith("0") then "answer" else "next"
+            { Id = block.Id; SourceHash = block.SourceHash; ContextHash = DocumentationDiscovery.contextHash "" blocks
+              Lines = []; Tooltips = []; Diagnostics = []
+              ExampleContext = Some { Requires = []; Types = [ $"val {name}: int" ] } }
+        let options = { SemanticCode.defaults with Artifact = Some { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = blocks |> List.map semantic } ] } }
+        let page = ContentProvider.scanDocsWithOptions root root emptyPackage "" options |> List.exactlyOne
+        Assert.DoesNotContain("{{< snippet", page.Markdown)
+        Assert.Contains("let answer = 42", page.Markdown)
+        Assert.Contains("// val answer: int", page.Markdown)
+        Assert.Contains("// val next: int", page.Markdown)
+
+    [<Fact>]
     let ``no-check requires a reason and contradictory modes fail discovery`` () =
         let missing = Assert.Throws<InvalidOperationException>(fun () -> DocumentationDiscovery.discoverMarkdown "guide.md" None "```fsharp no-check\nx\n```" |> ignore)
         Assert.Contains("requires a non-empty reason", missing.Message)
@@ -1179,10 +1201,10 @@ module ContentProviderTests =
         let options = { SemanticCode.defaults with Artifact = Some artifact }
         let html = SemanticCode.formatFences options "guide.md" markdown
         Assert.Contains("<summary>Requires &amp; types</summary>", html)
-        Assert.Contains("Requires: open Example  (packages: Example.Package)", html)
+        Assert.Contains("Requires: open Example (packages: Example.Package)", html)
         Assert.Contains("val value: int", html)
         let plain = SemanticCode.formatMarkdownFences options "guide.md" markdown
-        Assert.Contains("```fsharp\n// Requires: open Example  (packages: Example.Package)\n// val value: int\n```", plain)
+        Assert.Contains("```fsharp\n// Requires: open Example (packages: Example.Package)\n// val value: int\n```", plain)
         Assert.DoesNotContain("Requires &amp; types", SemanticCode.formatFences { options with ExampleContext = false } "guide.md" markdown)
         Assert.DoesNotContain("// Requires:", SemanticCode.formatMarkdownFences { options with ExampleContext = false } "guide.md" markdown)
         let opted = markdown.Replace("```fsharp", "```fsharp no-context")
@@ -1241,6 +1263,40 @@ module ContentProviderTests =
         Assert.Contains("open System", html)
 
     [<Fact>]
+    let ``schema two setup retains authored opens in HTML and Markdown`` () =
+        let markdown = "```fsharp prepare\nopen System.IO\nlet readAll = File.ReadAllText\n```\n\n```fsharp\nlet text = readAll \"file\"\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown
+        let semantic (block: DocumentationBlock) =
+            { Id = block.Id; SourceHash = block.SourceHash; ContextHash = DocumentationDiscovery.contextHash "" blocks
+              Lines = [ { Tokens = [ { Text = "readAll"; Kind = Identifier; Tooltip = Some 0 } ] } ]
+              Tooltips = [ { Signature = None; Documentation = None; Sections = []; Footer = None; Link = None } ]
+              Diagnostics = []; ExampleContext = None }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = blocks |> List.map semantic } ] }
+        let root = System.Text.Json.Nodes.JsonNode.Parse(Json.serialize Codecs.semanticArtifact artifact).AsObject()
+        root["SchemaVersion"] <- System.Text.Json.Nodes.JsonValue.Create(2)
+        for block in root["Pages"].[0].["Blocks"].AsArray() do block.AsObject().Remove("ExampleContext") |> ignore
+        let migrated = History.readSemanticArtifact (root.ToJsonString())
+        let options = { SemanticCode.defaults with Artifact = Some migrated }
+        let html = SemanticCode.formatFences options "guide.md" markdown
+        let mirror = SemanticCode.formatMarkdownFences options "guide.md" markdown
+        Assert.Contains("Show page setup", html)
+        Assert.Contains("System", html)
+        Assert.Contains("IO", html)
+        Assert.Contains("open System.IO\nlet readAll", mirror)
+
+    [<Fact>]
+    let ``run status does not claim execution by build`` () =
+        let markdown = "```fsharp run\nprintfn \"hello\"\n```"
+        let block = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown |> List.head
+        let semantic = { Id = block.Id; SourceHash = block.SourceHash; ContextHash = DocumentationDiscovery.contextHash "" [ block ]; Lines = []; Tooltips = []; Diagnostics = []; ExampleContext = None }
+        let options = { SemanticCode.defaults with Artifact = Some { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ semantic ] } ] } }
+        let html = SemanticCode.formatFences options "guide.md" markdown
+        let mirror = SemanticCode.formatMarkdownFences options "guide.md" markdown
+        Assert.Contains("execution requires test or capture", html)
+        Assert.Contains("run by test or capture", mirror)
+        Assert.DoesNotContain("run by docs build", html + mirror)
+
+    [<Fact>]
     let ``configured repository prelude is rendered and participates in context validation`` () =
         let markdown = "```fsharp\nlet value = DateTime.UnixEpoch\n```"
         let block = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown |> List.head
@@ -1284,7 +1340,7 @@ module ContentProviderTests =
         Assert.Contains(">Isolated</span>", html)
         Assert.DoesNotContain("livedocs-status", SemanticCode.formatFences { options with StatusBadges = false } "guide.md" markdown)
         let raw = SemanticCode.formatMarkdownFences options "guide.md" markdown
-        Assert.Contains("// [verified by docs build]", raw)
+        Assert.Contains("```fsharp\n// [verified by docs build]\nlet checkedValue", raw)
         Assert.Contains("// [fragment: Illustrative <only>; not compiled]", raw)
         Assert.Contains("// [isolated: compiled independently by docs build]", raw)
         Assert.Equal(raw, SemanticCode.formatMarkdownFences { options with StatusBadges = false } "guide.md" markdown)
@@ -3689,6 +3745,17 @@ module BlogTests =
         let text = Blog.excerpt long
         Assert.EndsWith("lengthy...", text)
         Assert.True(text.Length <= 240)
+
+    [<Fact>]
+    let ``status comments in fences never become blog prose or feed excerpts`` () =
+        let source = "```fsharp\nlet value = 1\n```\n\n" + String.replicate 199 "word "
+        let block = DocumentationDiscovery.discoverMarkdown "post.md" None source |> List.head
+        let semantic = { Id = block.Id; SourceHash = block.SourceHash; ContextHash = DocumentationDiscovery.contextHash "" [ block ]; Lines = []; Tooltips = []; Diagnostics = []; ExampleContext = None }
+        let options = { SemanticCode.defaults with Artifact = Some { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "post.md"; Blocks = [ semantic ] } ] } }
+        let page = { post "Post" "2026-01-01" false None None with Markdown = SemanticCode.formatMarkdownFences options "post.md" source }
+        Assert.StartsWith("word word", Blog.excerpt page)
+        Assert.DoesNotContain("verified", Blog.excerpt page)
+        Assert.Equal(1, Blog.estimatedReadingMinutes page)
 
     [<Fact>]
     let ``generated blog pages use the site layout relative links and a relative feed`` () =

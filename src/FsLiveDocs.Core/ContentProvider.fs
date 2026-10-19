@@ -974,9 +974,11 @@ module ContentProvider =
             else
                 renderMarkdownWithApiLinksAndRoutes protectedMarkdown context.Package context.RootPath context.ApiRoutes
 
-        semanticSegments
-        |> Seq.mapi (fun index html -> $"<!--fslivedocs-semantic-placeholder:{index}-->", html)
-        |> Seq.fold (fun (current: string) (placeholder, html) -> current.Replace(placeholder, html)) rendered
+        let html =
+            semanticSegments
+            |> Seq.mapi (fun index html -> $"<!--fslivedocs-semantic-placeholder:{index}-->", html)
+            |> Seq.fold (fun (current: string) (placeholder, html) -> current.Replace(placeholder, html)) rendered
+        html, rewritten
 
     let private loadMarkdownPage (context: MarkdownContext) (filePath: string) (outputPath: string) (raw: string) =
         let plainMarkdown body pageContext =
@@ -985,7 +987,7 @@ module ContentProvider =
             SemanticCode.formatMarkdownFences options sourcePath body
         match parseFrontMatter raw with
         | Some (metadata, body) ->
-            let contentHtml = resolveMarkdown context filePath body metadata.ExampleContext
+            let contentHtml, rewritten = resolveMarkdown context filePath body metadata.ExampleContext
             let labels =
                 [ metadata.Platform |> Option.map (fun value -> $"Platform: {System.Net.WebUtility.HtmlEncode value}")
                   metadata.TargetFramework |> Option.map (fun value -> $"Target: {System.Net.WebUtility.HtmlEncode value}") ]
@@ -995,12 +997,12 @@ module ContentProvider =
                 else
                     let labelText = String.concat " · " labels
                     $"<aside class=\"livedocs-checking-context not-prose\" aria-label=\"Example checking context\">{labelText}</aside>" + contentHtml
-            { Metadata = metadata; ContentHtml = contentHtml; Markdown = plainMarkdown body metadata.ExampleContext; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
+            { Metadata = metadata; ContentHtml = contentHtml; Markdown = plainMarkdown rewritten metadata.ExampleContext; FilePath = filePath; OutputPath = outputPath; SectionOrder = System.Int32.MaxValue }
         | None ->
-            let contentHtml = resolveMarkdown context filePath raw None
+            let contentHtml, rewritten = resolveMarkdown context filePath raw None
             { Metadata = ContentMetadata.empty (defaultTitle filePath)
               ContentHtml = contentHtml
-              Markdown = plainMarkdown raw None
+              Markdown = plainMarkdown rewritten None
               FilePath = filePath
               OutputPath = outputPath
               SectionOrder = System.Int32.MaxValue }
