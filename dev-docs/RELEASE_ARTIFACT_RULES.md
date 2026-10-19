@@ -127,7 +127,7 @@ Follow these rules:
 - Never regenerate a published artifact under the same product version.
 - Verify every published component and archive with SHA-256 before rendering.
 
-Content schema 4 adds `SourceUrlPattern` and `SourceBranch` to the persisted site configuration. The schema-3 migration writes both fields as `null`, so the legacy `RepoUrl` fallback keeps its previous GitHub behavior. Schema-1 and schema-2 migrations also set the new fields explicitly before strict deserialization. Content schema 5 adds optional `ExampleContext` to site and page metadata; schema-1–4 migrations write `null` explicitly. Semantic schema 3 adds renderer-neutral example requirements and top-level signatures; schema-2 migration sets context to absent rather than recompiling historical projects.
+Content schema 4 adds `SourceUrlPattern` and `SourceBranch` to the persisted site configuration. The schema-3 migration writes both fields as `null`, so the legacy `RepoUrl` fallback keeps its previous GitHub behavior. Schema-1 and schema-2 migrations also set the new fields explicitly before strict deserialization. Content schema 5 adds optional `ExampleContext` to site and page metadata; schema-1–4 migrations write `null` explicitly. Content schema 6 adds optional site `ExampleStatusBadges`; schema-1–5 migrations write `null` explicitly. Semantic schema 3 adds renderer-neutral example requirements and top-level signatures; schema-2 migration sets context to absent rather than recompiling historical projects.
 
 Compatibility preserves historical content and semantic meaning. It does not require byte-identical HTML.
 

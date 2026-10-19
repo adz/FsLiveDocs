@@ -17,9 +17,10 @@ module SemanticCode =
         /// <summary>Maps a fully-qualified F# symbol name to a relative API URL, or None when it is not documented.</summary>
         LinkResolver: string -> string option
         ExampleContext: bool
+        StatusBadges: bool
     }
 
-    let defaults = { Enabled = true; Artifact = None; Prelude = ""; LinkResolver = (fun _ -> None); ExampleContext = true }
+    let defaults = { Enabled = true; Artifact = None; Prelude = ""; LinkResolver = (fun _ -> None); ExampleContext = true; StatusBadges = true }
     let disabled = { defaults with Enabled = false }
 
     let private tokenClass = function
@@ -116,6 +117,31 @@ module SemanticCode =
 
     /// <summary>Renders a transcript as a faithful FSI session: prompts in a non-selectable
     /// gutter, the runnable interactions in a code frame, and the result in its own tinted band.</summary>
+    let private badgeText = function
+        | NoCheck reason -> "Fragment", $"Fragment: {reason}; not compiled"
+        | Isolated -> "Isolated", "Isolated: compiled independently of the page"
+        | Prepare -> "Setup", "Setup: compiled as page preparation"
+        | Transcript -> "Verified", "Verified: compared by docs build"
+        | Run -> "Verified", "Verified: compiled and run by docs build"
+        | Page -> "Verified", "Verified by docs build"
+
+    let private badge mode =
+        let label, description = badgeText mode
+        $"<span class=\"livedocs-status\" title=\"{WebUtility.HtmlEncode description}\" aria-label=\"{WebUtility.HtmlEncode description}\">{label}</span>"
+
+    let private badgeHeader mode = $"<div class=\"livedocs-code-header\">{badge mode}</div>"
+
+    let private statusComment mode =
+        match mode with
+        | NoCheck reason ->
+            let safeReason = reason.Replace('\n', ' ').Replace('\r', ' ')
+            $"// [fragment: {safeReason}; not compiled]"
+        | Isolated -> "// [isolated: compiled independently by docs build]"
+        | Prepare -> "// [setup: compiled by docs build]"
+        | Transcript -> "// [verified: transcript compared by docs build]"
+        | Run -> "// [verified: compiled and run by docs build]"
+        | Page -> "// [verified by docs build]"
+
     let private renderTranscriptSource (resolveLink: string -> string option) (persisted: SemanticCodeBlock option) (source: string) =
         let parsed = ExampleTranscript.parse source
         let normalized = DocumentationDiscovery.normalizeSource source
@@ -240,6 +266,12 @@ module SemanticCode =
                         if persisted.ContextHash <> expectedContext then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
                         let showContext = options.ExampleContext && not (fence.Info.Split(' ') |> Array.exists (fun token -> token.Equals("no-context", StringComparison.OrdinalIgnoreCase)))
                         htmlStartMarker + renderPersistedBlock options.LinkResolver showContext persisted + htmlEndMarker
+                let replacement =
+                    if options.StatusBadges then
+                        let index = replacement.IndexOf("<div class=\"livedocs-code ", StringComparison.Ordinal)
+                        if index < 0 then replacement
+                        else replacement.Insert(replacement.IndexOf('>', index) + 1, badgeHeader block.Mode)
+                    else replacement
                 builder.Append(replacement) |> ignore
                 cursor <- fence.Start + fence.Length)
             fences
@@ -251,7 +283,7 @@ module SemanticCode =
     let formatMarkdownFences (options: Options) (sourcePath: string) (markdown: string) =
         match options.Artifact with
         | None -> markdown
-        | Some artifact when not options.Enabled || not options.ExampleContext -> markdown
+        | Some artifact when not options.Enabled -> markdown
         | Some artifact ->
             let page = artifact.Pages |> List.tryFind (fun page -> page.SourcePath = sourcePath.Replace('\\', '/'))
             let byId = page |> Option.map (fun page -> page.Blocks |> List.map (fun block -> block.Id, block) |> Map.ofList) |> Option.defaultValue Map.empty
@@ -261,7 +293,9 @@ module SemanticCode =
             let mutable cursor = 0
             for fence, block in List.zip fences blocks do
                 let endOffset = fence.Start + fence.Length
-                builder.Append(markdown.Substring(cursor, endOffset - cursor)) |> ignore
+                builder.Append(markdown.Substring(cursor, fence.Start - cursor)) |> ignore
+                builder.Append(statusComment block.Mode).Append('\n') |> ignore
+                builder.Append(markdown.Substring(fence.Start, fence.Length)) |> ignore
                 if options.ExampleContext && not (fence.Info.Split(' ') |> Array.exists (fun flag -> flag.Equals("no-context", StringComparison.OrdinalIgnoreCase))) then
                     match block.Mode, Map.tryFind block.Id byId with
                     | (Page | Run), Some persisted when persisted.SourceHash = block.SourceHash ->

@@ -946,7 +946,8 @@ module ContentProvider =
         let semanticCode =
             { context.SemanticCode with
                 LinkResolver = semanticLinkResolver context.Package context.RootPath context.ApiRoutes
-                ExampleContext = context.SemanticCode.ExampleContext && context.SiteConfig.ExampleContext <> Some false && pageContext <> Some false }
+                ExampleContext = context.SemanticCode.ExampleContext && context.SiteConfig.ExampleContext <> Some false && pageContext <> Some false
+                StatusBadges = context.SiteConfig.ExampleStatusBadges <> Some false }
 
         let formatted =
             SemanticCode.formatFences semanticCode semanticSourcePath rewritten

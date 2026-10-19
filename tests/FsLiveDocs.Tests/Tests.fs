@@ -547,6 +547,7 @@ module ReleaseCapsuleTests =
             FSharpPrelude = None
             CommentsProvider = None
             ExampleContext = None
+            ExampleStatusBadges = None
         }
 
     let private inputs () =
@@ -1162,6 +1163,8 @@ module ContentProviderTests =
         Assert.Equal(Some false, metadata.ExampleContext)
         let config = Json.deserialize (Json.compile SiteSchema.siteConfigFile) "{\"exampleContext\":false}"
         Assert.Equal(Some false, config.ExampleContext)
+        let badges = Json.deserialize (Json.compile SiteSchema.siteConfigFile) "{\"exampleStatusBadges\":false}"
+        Assert.Equal(Some false, badges.ExampleStatusBadges)
 
     [<Fact>]
     let ``checked example context renders in HTML and Markdown with opt-outs`` () =
@@ -1181,10 +1184,10 @@ module ContentProviderTests =
         let plain = SemanticCode.formatMarkdownFences options "guide.md" markdown
         Assert.Contains("```fsharp\n// Requires: open Example  (packages: Example.Package)\n// val value: int\n```", plain)
         Assert.DoesNotContain("Requires &amp; types", SemanticCode.formatFences { options with ExampleContext = false } "guide.md" markdown)
-        Assert.Equal(markdown, SemanticCode.formatMarkdownFences { options with ExampleContext = false } "guide.md" markdown)
+        Assert.DoesNotContain("// Requires:", SemanticCode.formatMarkdownFences { options with ExampleContext = false } "guide.md" markdown)
         let opted = markdown.Replace("```fsharp", "```fsharp no-context")
         Assert.DoesNotContain("Requires &amp; types", SemanticCode.formatFences options "guide.md" opted)
-        Assert.Equal(opted, SemanticCode.formatMarkdownFences options "guide.md" opted)
+        Assert.DoesNotContain("// Requires:", SemanticCode.formatMarkdownFences options "guide.md" opted)
         let qualifiedOnly = { context with Requires = [ { Open = ""; Package = Some "Example.Package" } ]; Types = [] }
         Assert.Equal([ "Requires: (packages: Example.Package)" ], SemanticCode.contextLines qualifiedOnly)
 
@@ -1261,6 +1264,29 @@ module ContentProviderTests =
         Assert.Contains("livedocs-code livedocs-lexical-code", formatted)
         Assert.Contains("<span class=\"tok-keyword\">let</span>", formatted)
         Assert.DoesNotContain("```fsharp", formatted)
+
+    [<Fact>]
+    let ``status badges distinguish checked fragments and isolated blocks in both outputs`` () =
+        let markdown = "```fsharp\nlet checkedValue = 1\n```\n\n```fsharp no-check reason=\"Illustrative <only>\"\nlet incomplete =\n```\n\n```fsharp isolated\nlet separate = 2\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown
+        let semantic (block: DocumentationBlock) =
+            { Id = block.Id; SourceHash = block.SourceHash
+              ContextHash = DocumentationDiscovery.contextHash "" (if block.Mode = Isolated then [ block ] else [ blocks.Head ])
+              Lines = [ { Tokens = [ { Text = block.ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]
+              Tooltips = []; Diagnostics = []; ExampleContext = None }
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = [ semantic blocks.[0]; semantic blocks.[2] ] } ] }
+        let options = { SemanticCode.defaults with Artifact = Some artifact }
+        let html = SemanticCode.formatFences options "guide.md" markdown
+        Assert.Contains(">Verified</span>", html)
+        Assert.Contains(">Fragment</span>", html)
+        Assert.Contains("Illustrative &lt;only&gt;; not compiled", html)
+        Assert.Contains(">Isolated</span>", html)
+        Assert.DoesNotContain("livedocs-status", SemanticCode.formatFences { options with StatusBadges = false } "guide.md" markdown)
+        let raw = SemanticCode.formatMarkdownFences options "guide.md" markdown
+        Assert.Contains("// [verified by docs build]", raw)
+        Assert.Contains("// [fragment: Illustrative <only>; not compiled]", raw)
+        Assert.Contains("// [isolated: compiled independently by docs build]", raw)
+        Assert.Equal(raw, SemanticCode.formatMarkdownFences { options with StatusBadges = false } "guide.md" markdown)
 
     [<Fact>]
     let ``semantic and lexical F sharp blocks share one code frame contract`` () =
@@ -1408,7 +1434,8 @@ module ContentProviderTests =
               Navigation = None
               FSharpPrelude = None
               CommentsProvider = None
-              ExampleContext = None }
+              ExampleContext = None
+              ExampleStatusBadges = None }
         let diagnostics = ContentProvider.createLinkDiagnostics ()
 
         let pages =
@@ -2214,6 +2241,7 @@ module SiteBuilderTests =
             FSharpPrelude = None
             CommentsProvider = None
             ExampleContext = None
+            ExampleStatusBadges = None
         }
 
         SiteBuilder.build {
@@ -2858,7 +2886,8 @@ module DocumentationSetTests =
                     { Label = "Handbook"; Href = "/handbook/" } ]
           FSharpPrelude = None
           CommentsProvider = None
-          ExampleContext = None }
+          ExampleContext = None
+          ExampleStatusBadges = None }
 
     let private configured id title source path projects isDefault sidebar api prelude : DocsSetConfig =
         { Id = id

@@ -119,7 +119,8 @@ module SiteSchema =
             fieldAs "FSharpPrelude" (fun (s: SiteConfig) -> s.FSharpPrelude) { withSchema (Schema.option Schema.text) }
             fieldAs "CommentsProvider" (fun (s: SiteConfig) -> s.CommentsProvider) { withSchema (Schema.option commentsProvider) }
             fieldAs "ExampleContext" (fun (s: SiteConfig) -> s.ExampleContext) { withSchema (Schema.option Schema.bool) }
-            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath logoThemes showSiteName stylesheet headHtml themes navigation fsharpPrelude commentsProvider exampleContext ->
+            fieldAs "ExampleStatusBadges" (fun (s: SiteConfig) -> s.ExampleStatusBadges) { withSchema (Schema.option Schema.bool) }
+            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath logoThemes showSiteName stylesheet headHtml themes navigation fsharpPrelude commentsProvider exampleContext exampleStatusBadges ->
                 { RepoUrl = repoUrl
                   SourceUrlPattern = sourceUrlPattern
                   SourceBranch = sourceBranch
@@ -135,7 +136,8 @@ module SiteSchema =
                   Navigation = navigation
                   FSharpPrelude = fsharpPrelude
                   CommentsProvider = commentsProvider
-                  ExampleContext = exampleContext })
+                  ExampleContext = exampleContext
+                  ExampleStatusBadges = exampleStatusBadges })
         }
 
     /// The `.livedocs/config.json` spelling of `SiteConfig`: camelCase keys, every one optional.
@@ -165,7 +167,8 @@ module SiteSchema =
             field (fun (s: SiteConfig) -> s.FSharpPrelude)
             field _.CommentsProvider { withSchema (Schema.option commentsProvider |> Schema.mayOmit) }
             field (fun (s: SiteConfig) -> s.ExampleContext) { withSchema (Schema.option Schema.bool |> Schema.mayOmit) }
-            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath logoThemes showSiteName stylesheet headHtml themes navigation fsharpPrelude commentsProvider exampleContext ->
+            field (fun (s: SiteConfig) -> s.ExampleStatusBadges) { withSchema (Schema.option Schema.bool |> Schema.mayOmit) }
+            construct (fun repoUrl sourceUrlPattern sourceBranch siteName logoText logoPath logoDarkPath logoThemes showSiteName stylesheet headHtml themes navigation fsharpPrelude commentsProvider exampleContext exampleStatusBadges ->
                 { RepoUrl = repoUrl
                   SourceUrlPattern = sourceUrlPattern
                   SourceBranch = sourceBranch
@@ -181,7 +184,8 @@ module SiteSchema =
                   Navigation = navigation
                   FSharpPrelude = fsharpPrelude
                   CommentsProvider = commentsProvider
-                  ExampleContext = exampleContext })
+                  ExampleContext = exampleContext
+                  ExampleStatusBadges = exampleStatusBadges })
         }
 
     let contentMetadata : Schema<ContentMetadata> =

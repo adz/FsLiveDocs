@@ -934,6 +934,8 @@ module View =
                         pointer-events: none;
                         opacity: 0.72;
                     }
+                    .livedocs-code-header { display: flex; justify-content: flex-end; padding: .3rem .75rem; background: var(--livedocs-code-background); color: var(--livedocs-code-foreground); }
+                    .livedocs-status { border: 1px solid currentColor; border-radius: .35rem; padding: .05rem .45rem; font-size: .75rem; font-weight: 600; }
                     .livedocs-code-toolbar {
                         position: absolute;
                         top: 0.6rem;

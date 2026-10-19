@@ -53,6 +53,8 @@ type SiteConfig = {
     CommentsProvider: CommentsProvider option
     /// <summary>Disable compiler-derived example context across the site when false.</summary>
     ExampleContext: bool option
+    /// <summary>Hide example status badges in HTML when false.</summary>
+    ExampleStatusBadges: bool option
 }
 
 and GiscusSettings = {
@@ -85,7 +87,8 @@ module SiteConfig =
           Navigation = None
           FSharpPrelude = None
           CommentsProvider = None
-          ExampleContext = None }
+          ExampleContext = None
+          ExampleStatusBadges = None }
 
 /// Constructs source-control URLs shared by Markdown links and API member links.
 module SourceUrl =

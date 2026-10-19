@@ -63,7 +63,7 @@ platform: dotnet
 ---
 ```
 
-Set `exampleContext: false` in front matter to suppress the **Requires & types** annotation on checked examples on that page. Set `"exampleContext": false` in `.livedocs/config.json` to disable it for the whole site; both default to enabled. A single `fsharp no-context` fence opts out independently. This setting changes presentation, not verification or execution.
+Set `exampleContext: false` in front matter to suppress the **Requires & types** annotation on checked examples on that page. Set `"exampleContext": false` in `.livedocs/config.json` to disable it for the whole site; both default to enabled. A single `fsharp no-context` fence opts out independently. This setting changes presentation, not verification or execution. Set `"exampleStatusBadges": false` in `.livedocs/config.json` to hide HTML example status badges (default: shown); Markdown mirrors and LLM output always include status comments.
 
 The project must be part of the page's documentation set. The target framework must appear in that project.
 

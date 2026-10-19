@@ -18,10 +18,10 @@ module ReleaseCapsule =
 
     /// Schema 4 adds configurable source URL patterns and branches.
     [<Literal>]
-    let ContentSchemaVersion = 5
+    let ContentSchemaVersion = 6
 
     /// Content schema versions this renderer reads. Older versions are migrated; unknown versions are rejected.
-    let supportedContentSchemaVersions = set [ 1; 2; 3; 4; 5 ]
+    let supportedContentSchemaVersions = set [ 1; 2; 3; 4; 5; 6 ]
 
     [<Literal>]
     let HistoryIndexSchemaVersion = 1
@@ -52,7 +52,9 @@ module ReleaseCapsule =
 
         let private addExampleContextDefaults (root: Nodes.JsonObject) =
             match root["Site"] with
-            | :? Nodes.JsonObject as site -> site["ExampleContext"] <- null
+            | :? Nodes.JsonObject as site ->
+                site["ExampleContext"] <- null
+                site["ExampleStatusBadges"] <- null
             | _ -> invalidOp "Content is missing Site."
             match root["Pages"] with
             | :? Nodes.JsonArray as pages ->
@@ -61,6 +63,14 @@ module ReleaseCapsule =
                     | :? Nodes.JsonObject as metadata -> metadata["ExampleContext"] <- null
                     | _ -> invalidOp "Content page is missing Metadata."
             | _ -> invalidOp "Content is missing Pages."
+
+        let migrateV5 (bytes: byte array) : ReleaseContentArtifact =
+            let root = Nodes.JsonNode.Parse(bytes) :?> Nodes.JsonObject
+            match root["Site"] with
+            | :? Nodes.JsonObject as site -> site["ExampleStatusBadges"] <- null
+            | _ -> invalidOp "Content is missing Site."
+            root["SchemaVersion"] <- Nodes.JsonValue.Create(ContentSchemaVersion)
+            Json.deserialize (Json.compile ReleaseSchema.releaseContentArtifact) (root.ToJsonString())
 
         let migrateV4 (bytes: byte array) : ReleaseContentArtifact =
             let root =
@@ -173,6 +183,7 @@ module ReleaseCapsule =
                 | :? Nodes.JsonObject as value ->
                     addSourceUrlDefaults value
                     value["ExampleContext"] <- null
+                    value["ExampleStatusBadges"] <- null
                     value
                 | _ -> invalidOp "Content schema 1 Site must be an object."
             let site = Json.deserialize siteConfigCodec (siteNode.ToJsonString())
@@ -690,7 +701,8 @@ module ReleaseCapsule =
         // version's shape, then migrate supported older versions with a small deterministic step.
         let content =
             match manifest.Content.SchemaVersion with
-            | 5 -> deserializeWith contentCodec contentBytes
+            | 6 -> deserializeWith contentCodec contentBytes
+            | 5 -> LegacyContent.migrateV5 contentBytes
             | 4 -> LegacyContent.migrateV4 contentBytes
             | 3 -> LegacyContent.migrateV3 contentBytes
             | 2 -> LegacyContent.migrateV2 contentBytes
