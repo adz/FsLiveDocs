@@ -93,18 +93,56 @@ module Presentation =
             "<span class=\"text-secondary font-semibold\">$1</span>")
 
     let synopsis nodes =
+        let nonEmpty value =
+            if String.IsNullOrWhiteSpace value then None else Some value
+
+        let cleanRenderedHtml html =
+            html
+            // Keep separate list items and block lines readable before removing markup.
+            |> fun value -> Regex.Replace(value, @"</(?:li|p|pre|h[1-6]|div|blockquote)>", " ", RegexOptions.IgnoreCase)
+            |> fun value -> Regex.Replace(value, "<[^>]+>", "")
+            // Disabled authored HTML is emitted as encoded source. Remove familiar authored tags,
+            // but preserve intentionally encoded values such as &lt;value&gt; as display text.
+            |> fun value -> Regex.Replace(value, @"&lt;/?(?:a|abbr|b|blockquote|br|code|del|div|em|i|kbd|mark|p|pre|small|span|strong|sub|sup|u)(?:\s[^&]*?)?&gt;", "", RegexOptions.IgnoreCase)
+            |> WebUtility.HtmlDecode
+            |> fun value -> Regex.Replace(value, @"[ \t\r\n]+", " ").Trim()
+
+        let markdownText (markdown: string) =
+            Markdown.ToHtml(markdown, markdownPipeline) |> cleanRenderedHtml
+
+        let rec displayText nodes =
+            nodes
+            |> List.map (fun node ->
+                match node.Kind with
+                | DocumentationNodeKind.Markdown -> markdownText (node.Text |> Option.defaultValue "")
+                | DocumentationNodeKind.UnorderedList
+                | DocumentationNodeKind.OrderedList -> node.Children |> List.map (fun child -> displayText [ child ]) |> String.concat " "
+                | DocumentationNodeKind.SymbolReference when node.Children.IsEmpty && node.Text.IsNone ->
+                    node.Target
+                    |> Option.map normalizedSymbolId
+                    |> Option.map (fun target -> target.Split('.') |> Array.last |> fun name -> Regex.Replace(name, @"`\d+$", ""))
+                    |> Option.defaultValue ""
+                | DocumentationNodeKind.ExternalLink when node.Children.IsEmpty && node.Text.IsNone -> node.Target |> Option.defaultValue ""
+                | DocumentationNodeKind.LineBreak -> " "
+                | _ -> (node.Text |> Option.defaultValue "") + displayText node.Children)
+            |> String.concat ""
+            |> fun value -> Regex.Replace(value, @"[ \t\r\n]+", " ").Trim()
+
         let rec firstParagraph nodes =
-            nodes |> List.tryPick (fun node ->
+            nodes
+            |> List.tryPick (fun node ->
                 match node.Kind with
                 | DocumentationNodeKind.Markdown ->
                     let html = Markdown.ToHtml(node.Text |> Option.defaultValue "", markdownPipeline)
-                    let paragraph = Regex.Match(html, @"<p>(.*?)</p>", RegexOptions.Singleline)
-                    if paragraph.Success then
-                        Some (WebUtility.HtmlDecode(Regex.Replace(paragraph.Groups.[1].Value, "<[^>]+>", "")))
-                    else None
-                | DocumentationNodeKind.Paragraph -> Some(Documentation.plainText node.Children)
+                    let paragraph = Regex.Match(html, @"<p(?:\s[^>]*)?>(.*?)</p>", RegexOptions.Singleline ||| RegexOptions.IgnoreCase)
+                    if paragraph.Success then cleanRenderedHtml paragraph.Groups.[1].Value |> nonEmpty else None
+                | DocumentationNodeKind.Paragraph -> displayText node.Children |> nonEmpty
                 | _ -> firstParagraph node.Children)
-        let text = firstParagraph nodes |> Option.defaultWith (fun () -> Documentation.plainText nodes)
+
+        let text =
+            firstParagraph nodes
+            |> Option.defaultWith (fun () -> displayText nodes)
+            |> fun value -> Regex.Replace(value, @"`([^`]+)`", "$1")
         if String.IsNullOrWhiteSpace text then "No description available."
         else
             let matchResult = Regex.Match(text.Trim(), @"^(.+?[.!?])(?:\s|$)")

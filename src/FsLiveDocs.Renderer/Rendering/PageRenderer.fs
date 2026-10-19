@@ -142,16 +142,31 @@ module PageRenderer =
             family
             |> Option.map (fun value -> value.EntityIds |> List.choose (fun id -> allEntities |> List.tryFind (fun entity -> entity.Id = id)))
             |> Option.defaultValue [ requestedEntity ]
+        let recordCompanionFamily =
+            familyEntities |> List.exists (fun entity -> entity.Kind = EntityKind.Record)
+            && familyEntities |> List.exists (fun entity -> entity.Kind = EntityKind.Module)
+        let familyRecordFields =
+            if recordCompanionFamily then
+                familyEntities
+                |> List.filter (fun entity -> entity.Kind = EntityKind.Record)
+                |> List.collect _.Members
+                |> List.distinctBy _.Id
+            else []
         let e =
             match family with
             | Some value when familyEntities.Length > 1 ->
                 let summary = familyEntities |> List.tryPick (fun entity -> if Documentation.isEmpty entity.Summary then None else Some entity.Summary) |> Option.defaultValue []
+                let members =
+                    familyEntities
+                    |> List.filter (fun entity -> not recordCompanionFamily || entity.Kind <> EntityKind.Record)
+                    |> List.collect _.Members
+                    |> List.distinctBy _.Id
                 { requestedEntity with
                     Id = value.Id
                     Name = value.Name
                     Kind = familyEntities |> List.tryFind (fun entity -> entity.Kind <> EntityKind.Module) |> Option.map _.Kind |> Option.defaultValue requestedEntity.Kind
                     Summary = summary
-                    Members = familyEntities |> List.collect _.Members |> List.distinctBy _.Id
+                    Members = members
                     Examples = familyEntities |> List.collect _.Examples |> List.distinctBy _.Name
                     Entities = familyEntities |> List.collect _.Entities |> List.distinctBy _.Id }
             | _ -> requestedEntity
@@ -260,6 +275,10 @@ module PageRenderer =
                   renderPackageBadges ent
 
                   renderSummaryBlock ent.Summary
+
+                  // A record companion family is one conceptual page with two useful shapes:
+                  // record fields remain tabular while module operations retain authored sections.
+                  renderFieldTable "Fields" familyRecordFields
 
                   let ownContents =
                       ent.Entities |> List.filter (fun ne -> not (otherPackageRootIds.Contains ne.Id))
@@ -542,7 +561,7 @@ module PageRenderer =
 
         let content =
             [ match e.Kind with
-              | EntityKind.Record -> renderRecordEntity e
+              | EntityKind.Record when not recordCompanionFamily -> renderRecordEntity e
               | _ -> renderGenericEntity e ]
 
         // A family may supply the displayed name and content, but this page is written under

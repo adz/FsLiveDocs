@@ -1,0 +1,34 @@
+{
+  "SchemaVersion": 3,
+  "Package": {
+    "Version": "0.9",
+    "Entities": [
+      {
+        "Id": "Example",
+        "Name": "Example",
+        "Kind": "Namespace",
+        "Summary": [],
+        "Members": [],
+        "Examples": [],
+        "Entities": [
+          {
+            "Id": "Example.Core",
+            "Name": "Core",
+            "Kind": "Module",
+            "Summary": [],
+            "Members": [],
+            "Examples": [],
+            "Entities": []
+          }
+        ]
+      }
+    ],
+    "Scenarios": [],
+    "Packages": [
+      {
+        "Name": "Core",
+        "EntityIds": ["Example", "Example.Core"]
+      }
+    ]
+  }
+}

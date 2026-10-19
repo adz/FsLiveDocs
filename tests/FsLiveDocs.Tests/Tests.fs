@@ -3927,6 +3927,28 @@ module ApiOrganizationTests =
         Assert.Equal(History.ApiModelSchemaVersion, artifact.SchemaVersion)
         Assert.Equal("Example.Order", (Assert.Single artifact.Package.Organization.Families).Id)
 
+    [<Theory>]
+    [<InlineData("api-schema-3-package-namespaces.json")>]
+    [<InlineData("api-schema-4-package-namespaces.json")>]
+    let ``legacy capsule package ownership drops ancestor namespaces before history rendering`` fixtureName =
+        let fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", fixtureName)
+        let package = (History.readApiArtifact (File.ReadAllText fixture)).Package
+        let packageInfo = Assert.Single package.Packages
+        Assert.Equal<string list>([ "Example.Core" ], packageInfo.EntityIds)
+
+        let releaseSet =
+            { Id = "core"; Title = "Core"; Source = "docs"; Path = ""; Projects = []; IsDefault = true; Sidebar = true; Api = true
+              ApiEntityIds = [ "Example"; "Example.Core" ]; FSharpPrelude = None }
+        let site : SiteBuilder.DocsSetVersionSite =
+            { Version = package.Version; Package = package; StaticRoot = None; UsesDocumentationSets = true
+              Sets = [ { Set = releaseSet; Package = package; Pages = [] } ] }
+        let output = Path.Combine(Path.GetTempPath(), "fsld-legacy-api-" + Guid.NewGuid().ToString("N"))
+        SiteBuilder.buildDocsSetsHistory package.Version [ site ] SiteConfig.empty "light" output
+
+        let packagePage = File.ReadAllText(Path.Combine(output, "api", "packages", "Core.html"))
+        Assert.Contains("../Example.Core.html", packagePage)
+        Assert.DoesNotContain("../Example.html", packagePage)
+
     [<Fact>]
     let ``sections appear in entity summaries sidebars and package landing pages`` () =
         let create = memberInfo "Example.Order.create" "create" "decimal -> Order"
@@ -3964,8 +3986,51 @@ module ApiOrganizationTests =
         Assert.DoesNotContain("api/Example.Order`1.html", apiHtml)
 
     [<Fact>]
-    let ``Markdown synopsis uses the first paragraph rather than a heading`` () =
+    let ``Markdown synopsis uses the first non-empty paragraph rather than a heading`` () =
+        let emptyParagraph = { Documentation.text "" with Kind = DocumentationNodeKind.Paragraph; Text = None }
+        let laterParagraph = { emptyParagraph with Children = [ Documentation.text "Dequeue<'a> is a queue. More detail." ] }
+        Assert.Equal("Dequeue<'a> is a queue.", Presentation.synopsis [ emptyParagraph; laterParagraph ])
         Assert.Equal("Dequeue<'a> is a queue.", Presentation.synopsis [ Documentation.markdown "# Dequeue\n\n`Dequeue<'a>` is a queue.\n\nMore detail." ])
+        Assert.Equal("Lead paragraph.", Presentation.synopsis [ Documentation.markdown "Lead paragraph. {.lead}\n\nMore detail." ])
+
+    [<Theory>]
+    [<InlineData("```fsharp\nlet value = 1\n```", "let value = 1")>]
+    [<InlineData("- first item\n- second item", "first item second item")>]
+    [<InlineData("[Guide](https://example.com) for details.", "Guide for details.")>]
+    [<InlineData("<strong>Important</strong> &lt;value&gt;.", "Important <value>.")>]
+    let ``Markdown synopsis cleans non-paragraph blocks links and HTML`` markdown expected =
+        Assert.Equal(expected, Presentation.synopsis [ Documentation.markdown markdown ])
+
+    [<Fact>]
+    let ``structured synopsis gives unlabelled symbol links a clean type name`` () =
+        let symbol =
+            { Kind = DocumentationNodeKind.SymbolReference; Text = None; Target = Some "T:Example.Fiber`2"; Language = None; Children = [] }
+        let paragraph =
+            { Documentation.text "" with
+                Kind = DocumentationNodeKind.Paragraph
+                Text = None
+                Children = [ Documentation.text "Operations on a running "; symbol; Documentation.text "." ] }
+        Assert.Equal("Operations on a running Fiber.", Presentation.synopsis [ paragraph ])
+        Assert.Equal("Uses context safely.", Presentation.synopsis [ Documentation.text "Uses `context` safely." ])
+
+    [<Fact>]
+    let ``record companion families retain fields and organized module sections`` () =
+        let field = memberInfo "Example.Customer.Name" "Name" "string"
+        let create = memberInfo "Example.Customer.create" "create" "string -> Customer"
+        let record = entity "Example.Customer" "Customer" EntityKind.Record [ field ]
+        let companion = entity "Example.CustomerModule" "Customer" EntityKind.Module [ create ]
+        let package : PackageModel =
+            { Version = "1.0"; Entities = [ record; companion ]; Scenarios = []; Packages = []
+              Organization = ApiOrganizationModel.derive [ record; companion ] }
+        let output = Path.Combine(Path.GetTempPath(), "fsld-record-family-" + Guid.NewGuid().ToString("N"))
+        SiteBuilder.build { Pages = []; Package = package; Config = SiteConfig.empty; Versions = []; Theme = "light"; RootPath = ""; SiteRootPath = ""; OutputDir = output }
+
+        let page = File.ReadAllText(Path.Combine(output, "api", companion.Id + ".html"))
+        Assert.Contains(">Record</span>", page)
+        Assert.Contains("data-toc-title=\"Fields\"", page)
+        Assert.Contains("href=\"#Example.Customer.Name\"", page)
+        Assert.Contains("data-api-section=\"operations\"", page)
+        Assert.Contains("id=\"Example.Customer.create\"", page)
 
     [<Fact>]
     let ``organized multi-package pages render in current and historical documentation sets`` () =
@@ -3973,7 +4038,7 @@ module ApiOrganizationTests =
             { memberInfo "Example.Flow.create" "create" "unit -> Flow" with
                 Summary = [ { Kind = DocumentationNodeKind.SymbolReference; Text = None; Target = Some "Example.Layers.Scope"; Language = None; Children = [ Documentation.text "Scope" ] } ] }
         let flowType = entity "Example.Flow`1" "Flow<'a>" EntityKind.Union []
-        let flowModule = { entity "Example.FlowModule" "Flow" EntityKind.Module [ create ] with Summary = [ Documentation.markdown "# Flow\n\nFlow builds work.\n\nMore details." ] }
+        let flowModule = { entity "Example.FlowModule" "Flow" EntityKind.Module [ create ] with Summary = [ Documentation.markdown "# Flow\n\nFlow builds `Work<'a>`.\n\nMore details." ] }
         let other = entity "Example.Layers.Scope" "Scope" EntityKind.Type []
         let root = { entity "Example" "Example" EntityKind.Namespace [] with Entities = [ flowType; flowModule; { entity "Example.Layers" "Layers" EntityKind.Namespace [] with Entities = [ other ] } ] }
         let organization = ApiOrganizationModel.derive [ root ]
@@ -3990,19 +4055,24 @@ module ApiOrganizationTests =
               Sets = [ { Set = releaseSet; Package = model; Pages = [] } ] }
         let output = Path.Combine(Path.GetTempPath(), "fsld-org-" + Guid.NewGuid().ToString("N"))
         SiteBuilder.buildDocsSetsHistory "1.0" [ site; { site with Version = "0.9" } ] SiteConfig.empty "light" output
-        for prefix in [ output; Path.Combine(output, "history", "0.9") ] do
+        for prefix, expectedScopeHref in
+            [ output, "href=\"../api/Example.Layers.Scope.html\""
+              Path.Combine(output, "history", "0.9"), "href=\"../../../history/0.9/api/Example.Layers.Scope.html\"" ] do
             let api = Path.Combine(prefix, "api")
             let page = File.ReadAllText(Path.Combine(api, flowModule.Id + ".html"))
             let index = File.ReadAllText(Path.Combine(api, "index.html"))
+            let core = File.ReadAllText(Path.Combine(api, "packages", "Core.html"))
             let layers = File.ReadAllText(Path.Combine(api, "packages", "Layers.html"))
             Assert.Contains("data-api-section=\"construction\"", page)
             Assert.Contains("data-api-summary-section=\"construction\"", page)
-            Assert.Contains("Example.Layers.Scope.html\">Scope</a>", page)
+            Assert.Contains(expectedScopeHref, page)
+            Assert.Equal(1, Regex.Matches(index, "data-api-family-card=\"Example.Flow\"").Count)
+            Assert.Equal(1, Regex.Matches(core, "data-api-family-card=\"Example.Flow\"").Count)
             Assert.Contains("data-toc-title=\"Flow\"", page)
             Assert.Contains("data-api-package-section=\"workflow\"", index)
-            Assert.Contains("data-api-package-section=\"workflow\"", File.ReadAllText(Path.Combine(api, "packages", "Core.html")))
+            Assert.Contains("data-api-package-section=\"workflow\"", core)
             Assert.DoesNotContain("data-toc-title=\"Flow\"><span class=\"leading-tight\">Flow</span><span class=\"badge badge-primary opacity-50 font-mono text-[10px]\">Module", page)
-            Assert.Contains("Flow builds work.", index)
+            Assert.Contains("Flow builds Work&lt;&#39;a&gt;.", index)
             Assert.DoesNotContain("# Flow", index)
             Assert.Contains("../Example.Layers.Scope.html", layers)
             Assert.DoesNotContain("../Example.FlowModule.html", layers)

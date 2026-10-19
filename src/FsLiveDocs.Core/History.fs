@@ -76,7 +76,25 @@ module History =
             if declared < ApiModelSchemaVersion then Json.deserialize apiCodec (root.ToJsonString())
             else Json.deserialize apiCodec json
         if declared < ApiModelSchemaVersion then
-            { artifact with Package = { artifact.Package with Organization = ApiOrganizationModel.derive artifact.Package.Entities } }
+            let namespaceIds =
+                artifact.Package.Entities
+                |> ApiOrganizationModel.flattenEntities
+                |> List.filter (fun entity -> entity.Kind = EntityKind.Namespace)
+                |> List.map _.Id
+                |> Set.ofList
+            let packages =
+                artifact.Package.Packages
+                |> List.map (fun packageInfo ->
+                    { packageInfo with
+                        // Schema 3/4 extraction persisted flattened hierarchy ancestors as package
+                        // ownership. Package pages use exact ownership, so discard namespace IDs
+                        // while migrating the historical artifact.
+                        EntityIds = packageInfo.EntityIds |> List.filter (namespaceIds.Contains >> not) })
+            { artifact with
+                Package =
+                    { artifact.Package with
+                        Packages = packages
+                        Organization = ApiOrganizationModel.derive artifact.Package.Entities } }
         else artifact
 
     /// <summary>Computes the lowercase SHA-256 digest of a file.</summary>
