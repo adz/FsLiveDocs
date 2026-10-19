@@ -21,9 +21,11 @@ let total = subtotal * 1.2M
 ```
 ````
 
+Every F# example has a status: **Verified** means the docs build compiled it (and ran or compared it for executable/output modes); **Fragment** means it was not compiled and its no-check reason is shown on hover; **Isolated** means it was compiled separately from the page. Raw Markdown and LLM outputs carry the status as a comment before each fence. Set `exampleStatusBadges: false` in `.livedocs/config.json` to hide site badges without hiding raw comments.
+
 Checked page and `run` examples include a collapsed **Requires & types** panel. It lists only the opens used by symbols in that block, the documented NuGet package when known, and the F# signatures of top-level `let` bindings. Opens supplied by earlier blocks or hidden `prepare` setup appear here when used, making each example easier to paste. Generated `.md` mirrors and `llms-full.txt` put the same lines in an F# comment fence directly after the example. Locally defined values from previous blocks may still be needed; the panel does not copy those definitions.
 
-Use `prepare` for setup that readers need less often:
+Use `prepare` for setup that readers need less often. The site hides it behind **Show page setup** near the first checked example. Generated Markdown mirrors and `llms-full.txt` emit a single labelled setup fence before the first checked example, keeping only opens and definitions referenced by checked examples (rather than inlining every preparation block):
 
 ````markdown
 ```fsharp prepare

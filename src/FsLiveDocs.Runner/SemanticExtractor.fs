@@ -287,7 +287,7 @@ module SemanticExtractor =
                     { Severity = diagnostic.Severity; Message = diagnostic.Message; StartLine = diagnostic.StartLine; StartColumn = diagnostic.StartColumn; EndLine = diagnostic.EndLine; EndColumn = diagnostic.EndColumn })
             let context =
                 match range.Block.Mode with
-                | Page | Run -> Some(exampleContext range source uses packageForAssembly)
+                | Page | Run | Prepare -> Some(exampleContext range source uses packageForAssembly)
                 | _ -> None
             extractBlock contextHash range uses diagnostics context)
 

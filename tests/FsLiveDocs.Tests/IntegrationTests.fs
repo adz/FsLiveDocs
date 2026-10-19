@@ -122,6 +122,29 @@ module IntegrationTests =
         Assert.DoesNotContain(context.Requires, fun requirement -> requirement.Open = "System.IO")
         Assert.Contains(context.Types, fun signature -> signature.StartsWith("val greet: ") && signature.Contains("string -> string"))
         Assert.Contains(context.Types, fun signature -> signature.StartsWith("val epoch: ") && signature.Contains("DateTimeOffset"))
+        let raw = SemanticCode.formatMarkdownFences { SemanticCode.defaults with Artifact = Some artifact } "guide.md" markdown
+        Assert.Contains("// Page setup (hidden on the site; needed to run the examples below)", raw)
+        Assert.Contains("open System", raw)
+        Assert.DoesNotContain("open System.IO", raw)
+    }
+
+    [<Fact>]
+    let ``raw page setup keeps referenced definitions once`` () = async {
+        let markdown = "```fsharp prepare\nopen System\nopen System.IO\nlet used = DateTime.UnixEpoch\nlet unused = 12\n```\n```fsharp\nlet first = used.Year\n```\n```fsharp\nlet second = used.Month\n```"
+        let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" (Some coreProject) markdown
+        let! results = DocumentationCompiler.checkBlocks coreProject "" blocks
+        Assert.Empty(results |> List.collect _.Diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = SemanticDiagnosticSeverity.Error))
+        let artifact = SemanticExtractor.artifact (fun _ -> None) results
+        let options = { SemanticCode.defaults with Artifact = Some artifact }
+        let raw = SemanticCode.formatMarkdownFences options "guide.md" markdown
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(raw, "Page setup ").Count)
+        Assert.Contains("let used = DateTime.UnixEpoch", raw)
+        Assert.DoesNotContain("let unused", raw)
+        Assert.DoesNotContain("open System.IO", raw)
+        Assert.DoesNotContain("fsharp prepare", raw)
+        let html = SemanticCode.formatFences options "guide.md" markdown
+        Assert.Contains("Show page setup", html)
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(html, "Show page setup").Count)
     }
 
     [<Fact>]

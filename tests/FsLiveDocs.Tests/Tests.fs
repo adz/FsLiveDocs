@@ -1229,14 +1229,15 @@ module ContentProviderTests =
             Id = block.Id; SourceHash = block.SourceHash
             ContextHash = DocumentationDiscovery.contextHash "" blocks
             Lines = [ { Tokens = [ { Text = block.ExpandedSource; Kind = Identifier; Tooltip = None } ] } ]
-            Tooltips = []; Diagnostics = []; ExampleContext = None
+            Tooltips = []; Diagnostics = []
+            ExampleContext = if block.Mode = Page then Some { Requires = [ { Open = "System"; Package = None } ]; Types = [] } else None
         }
         let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [ { SourcePath = "guide.md"; Blocks = blocks |> List.map semantic } ] }
 
         let html = SemanticCode.formatFences { SemanticCode.defaults with Artifact = Some artifact } "guide.md" markdown
 
         Assert.Contains("<details class=\"livedocs-shared-setup", html)
-        Assert.Contains("Shared setup", html)
+        Assert.Contains("Show page setup", html)
         Assert.Contains("open System", html)
 
     [<Fact>]
@@ -2272,7 +2273,7 @@ module SiteBuilderTests =
     let ``site writes annotated Markdown mirrors and llms full output`` () =
         let outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
         let package: PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = []; Organization = ApiOrganizationModel.empty }
-        let annotated = "```fsharp\nlet value = 42\n```\n```fsharp\n// val value: int\n```"
+        let annotated = "```fsharp\n// Page setup (hidden on the site; needed to run the examples below)\nopen System\n```\n// [verified by docs build]\n```fsharp\nlet value = 42\n```\n```fsharp\n// val value: int\n```"
         let page: ContentPage = {
             Metadata = ContentMetadata.empty "Guide"
             ContentHtml = "<p>Requires &amp; types: val value: int</p>"
@@ -2284,7 +2285,12 @@ module SiteBuilderTests =
             Pages = [ page ]; Package = package; Config = SiteConfig.empty; Versions = []
             Theme = "light"; RootPath = ""; SiteRootPath = ""; OutputDir = outputDir }
         Assert.Contains("// val value: int", File.ReadAllText(Path.Combine(outputDir, "guide.md")))
-        Assert.Contains("// val value: int", File.ReadAllText(Path.Combine(outputDir, "llms-full.txt")))
+        let mirror = File.ReadAllText(Path.Combine(outputDir, "guide.md"))
+        let llms = File.ReadAllText(Path.Combine(outputDir, "llms-full.txt"))
+        Assert.Contains("// val value: int", llms)
+        for text in [ mirror; llms ] do
+            Assert.Contains("// [verified by docs build]", text)
+            Assert.Contains("// Page setup (hidden on the site; needed to run the examples below)", text)
         Assert.Contains("llms-full.txt", File.ReadAllText(Path.Combine(outputDir, "llms.txt")))
         Assert.Contains("Requires &amp; types", File.ReadAllText(Path.Combine(outputDir, "guide.html")))
 
@@ -3502,7 +3508,23 @@ module DocumentationSetTests =
         let _, _, _, content, _ = ReleaseCapsule.load capsule
         Assert.Equal(ReleaseCapsule.ContentSchemaVersion, content.SchemaVersion)
         Assert.Equal(None, content.Site.ExampleContext)
+        Assert.Equal(None, content.Site.ExampleStatusBadges)
         Assert.Equal(None, content.Pages.Head.Metadata.ExampleContext)
+
+    [<Fact>]
+    let ``content schema five migrates missing status badge switch`` () =
+        let fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "content-schema-2.json")
+        let root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText fixture).AsObject()
+        root["SchemaVersion"] <- System.Text.Json.Nodes.JsonValue.Create(5)
+        let metadata = root["Pages"].AsArray().[0].["Metadata"].AsObject()
+        for name in [ "Date"; "Category"; "Summary"; "Slug"; "Series"; "SeriesOrder"; "BlogList"; "ExampleContext" ] do metadata[name] <- null
+        metadata["Tags"] <- System.Text.Json.Nodes.JsonArray()
+        for name in [ "Draft"; "Comments" ] do metadata[name] <- System.Text.Json.Nodes.JsonValue.Create(false)
+        let site = root["Site"].AsObject()
+        for name in [ "CommentsProvider"; "SourceUrlPattern"; "SourceBranch"; "ExampleContext" ] do site[name] <- null
+        let capsule = writeLegacyContentCapsule 5 (Text.Encoding.UTF8.GetBytes(root.ToJsonString()))
+        let _, _, _, content, _ = ReleaseCapsule.load capsule
+        Assert.Equal(None, content.Site.ExampleStatusBadges)
 
     [<Fact>]
     let ``content schema two fixture migrates with explicit blog defaults`` () =

@@ -224,8 +224,71 @@ module SemanticCode =
                 |> Option.defaultValue ""
         codeFrame "livedocs-semantic-code" lines $"<div class=\"livedocs-tooltips\">{renderTooltips block}</div>" + context
 
-    let private renderPreparation resolveLink (block: SemanticCodeBlock) =
-        $"<details class=\"livedocs-shared-setup not-prose\"><summary>Shared setup</summary>{renderPersistedBlock resolveLink false block}</details>"
+    let private openPattern = Regex(@"^\s*open\s+([\w.]+)\s*$")
+
+    /// Select setup using compiler-resolved opens and references in the checked examples.
+    /// Keep unrecognised setup constructs rather than silently making a runnable example invalid.
+    let private usedSetup (blocks: DocumentationBlock list) (byId: Map<string, SemanticCodeBlock>) =
+        let checkedBlocks =
+            blocks |> List.filter (fun block -> block.Mode = Page || block.Mode = Run)
+            |> List.choose (fun block -> Map.tryFind block.Id byId)
+        let checkedOpens =
+            checkedBlocks
+            |> List.choose _.ExampleContext
+            |> List.collect _.Requires
+            |> List.map _.Open |> Set.ofList
+        let references =
+            checkedBlocks
+            |> List.collect (fun block -> block.Lines |> List.collect (fun line -> line.Tokens))
+            |> List.filter (fun token -> token.Tooltip.IsSome)
+            |> List.map _.Text |> Set.ofList
+        let preparations = blocks |> List.filter (fun block -> block.Mode = Prepare)
+        let lines =
+            preparations
+            |> List.collect (fun block -> DocumentationDiscovery.normalizeSource(block.ExpandedSource).TrimEnd('\n').Split('\n') |> Array.toList)
+        let definition = Regex(@"^\s*(?:let|type|module)\s+(?:rec\s+|private\s+|mutable\s+)*([\w']+)")
+        let named =
+            lines |> List.choose (fun line -> let matched = definition.Match line in if matched.Success then Some matched.Groups.[1].Value else None)
+            |> Set.ofList
+        let mutable needed = references |> Set.intersect named
+        let mutable changed = true
+        while changed do
+            let expanded =
+                lines
+                |> List.fold (fun (owner, found) line ->
+                    let matched = definition.Match line
+                    let owner = if matched.Success then Some matched.Groups.[1].Value else owner
+                    let found =
+                        if owner |> Option.exists needed.Contains then
+                            named |> Set.fold (fun state name -> if Regex.IsMatch(line, @"\b" + Regex.Escape name + @"\b") then Set.add name state else state) found
+                        else found
+                    owner, found) (None, needed)
+                |> snd
+            changed <- expanded <> needed
+            needed <- expanded
+        let preparations = blocks |> List.filter (fun block -> block.Mode = Prepare) |> List.choose (fun block -> Map.tryFind block.Id byId)
+        let preparationOpens =
+            if needed.IsEmpty then Set.empty
+            else
+                preparations |> List.choose _.ExampleContext |> List.collect _.Requires |> List.map _.Open |> Set.ofList
+        let opens = Set.union checkedOpens preparationOpens
+        let selected =
+            lines
+            |> List.fold (fun (owner, kept) line ->
+                let matched = definition.Match line
+                let owner = if matched.Success then Some matched.Groups.[1].Value else owner
+                let opened = openPattern.Match line
+                let keep =
+                    if opened.Success then opens.Contains opened.Groups.[1].Value
+                    elif matched.Success then needed.Contains matched.Groups.[1].Value
+                    elif owner.IsSome then owner |> Option.exists needed.Contains
+                    else not (String.IsNullOrWhiteSpace line)
+                owner, if keep then line :: kept else kept) (None, [])
+            |> snd |> List.rev
+        String.concat "\n" selected
+
+    let private renderPreparation source =
+        $"<details class=\"livedocs-shared-setup livedocs-page-setup not-prose\"><summary>Show page setup</summary>{renderLexicalSource source}</details>"
 
     let private renderPrelude (prelude: string) =
         $"<details class=\"livedocs-shared-setup livedocs-repository-setup not-prose\"><summary>Repository F# setup</summary>{renderLexicalSource prelude}</details>"
@@ -236,6 +299,8 @@ module SemanticCode =
         let page : SemanticPage option = artifact.Pages |> List.tryFind (fun page -> page.SourcePath = sourcePath.Replace('\\', '/'))
         let persistedById : Map<string, SemanticCodeBlock> =
             page |> Option.map (fun value -> value.Blocks |> List.map (fun block -> block.Id, block) |> Map.ofList) |> Option.defaultValue Map.empty
+        let setup = usedSetup blocks persistedById
+        let mutable setupShown = false
         let pageContextBlocks = blocks |> List.filter (fun block -> block.Mode <> Isolated && (match block.Mode with NoCheck _ | Transcript -> false | _ -> true))
         let pageContextHash = DocumentationDiscovery.contextHash options.Prelude pageContextBlocks
         let builder = Text.StringBuilder()
@@ -249,7 +314,7 @@ module SemanticCode =
                         let persisted = persistedById |> Map.tryFind block.Id |> Option.defaultWith (fun () -> invalidOp $"Semantic artifact is missing block {block.Id}.")
                         if persisted.SourceHash <> block.SourceHash then invalidOp $"Semantic source hash mismatch for {block.Id}: expected {persisted.SourceHash}, got {block.SourceHash}."
                         if persisted.ContextHash <> pageContextHash then invalidOp $"Semantic checking-context hash mismatch for {block.Id}."
-                        htmlStartMarker + renderPreparation options.LinkResolver persisted + htmlEndMarker
+                        ""
                     | NoCheck _ ->
                         htmlStartMarker + renderLexicalSource fence.Code + htmlEndMarker
                     | Transcript ->
@@ -272,6 +337,9 @@ module SemanticCode =
                         if index < 0 then replacement
                         else replacement.Insert(replacement.IndexOf('>', index) + 1, badgeHeader block.Mode)
                     else replacement
+                if not setupShown && not (String.IsNullOrWhiteSpace setup) && (block.Mode = Page || block.Mode = Run) then
+                    builder.Append(htmlStartMarker + renderPreparation setup + htmlEndMarker + "\n\n") |> ignore
+                    setupShown <- true
                 builder.Append(replacement) |> ignore
                 cursor <- fence.Start + fence.Length)
             fences
@@ -289,13 +357,20 @@ module SemanticCode =
             let byId = page |> Option.map (fun page -> page.Blocks |> List.map (fun block -> block.Id, block) |> Map.ofList) |> Option.defaultValue Map.empty
             let fences = DocumentationDiscovery.scanFsharpFences markdown
             let blocks = DocumentationDiscovery.discoverMarkdown sourcePath None markdown
+            let setup = usedSetup blocks byId
             let builder = Text.StringBuilder()
             let mutable cursor = 0
+            let mutable setupShown = false
             for fence, block in List.zip fences blocks do
                 let endOffset = fence.Start + fence.Length
                 builder.Append(markdown.Substring(cursor, fence.Start - cursor)) |> ignore
-                builder.Append(statusComment block.Mode).Append('\n') |> ignore
-                builder.Append(markdown.Substring(fence.Start, fence.Length)) |> ignore
+                if block.Mode = Prepare then ()
+                else
+                    if not setupShown && not (String.IsNullOrWhiteSpace setup) && (block.Mode = Page || block.Mode = Run) then
+                        builder.AppendLine("```fsharp").AppendLine("// Page setup (hidden on the site; needed to run the examples below)").AppendLine(setup).AppendLine("```") |> ignore
+                        setupShown <- true
+                    builder.Append(statusComment block.Mode).Append('\n') |> ignore
+                    builder.Append(markdown.Substring(fence.Start, fence.Length)) |> ignore
                 if options.ExampleContext && not (fence.Info.Split(' ') |> Array.exists (fun flag -> flag.Equals("no-context", StringComparison.OrdinalIgnoreCase))) then
                     match block.Mode, Map.tryFind block.Id byId with
                     | (Page | Run), Some persisted when persisted.SourceHash = block.SourceHash ->
