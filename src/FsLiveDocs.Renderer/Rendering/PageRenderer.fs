@@ -149,6 +149,7 @@ module PageRenderer =
                 { requestedEntity with
                     Id = value.Id
                     Name = value.Name
+                    Kind = familyEntities |> List.tryFind (fun entity -> entity.Kind <> EntityKind.Module) |> Option.map _.Kind |> Option.defaultValue requestedEntity.Kind
                     Summary = summary
                     Members = familyEntities |> List.collect _.Members |> List.distinctBy _.Id
                     Examples = familyEntities |> List.collect _.Examples |> List.distinctBy _.Name

@@ -3964,6 +3964,53 @@ module ApiOrganizationTests =
         Assert.DoesNotContain("api/Example.Order`1.html", apiHtml)
 
     [<Fact>]
+    let ``Markdown synopsis uses the first paragraph rather than a heading`` () =
+        Assert.Equal("Dequeue<'a> is a queue.", Presentation.synopsis [ Documentation.markdown "# Dequeue\n\n`Dequeue<'a>` is a queue.\n\nMore detail." ])
+
+    [<Fact>]
+    let ``organized multi-package pages render in current and historical documentation sets`` () =
+        let create =
+            { memberInfo "Example.Flow.create" "create" "unit -> Flow" with
+                Summary = [ { Kind = DocumentationNodeKind.SymbolReference; Text = None; Target = Some "Example.Layers.Scope"; Language = None; Children = [ Documentation.text "Scope" ] } ] }
+        let flowType = entity "Example.Flow`1" "Flow<'a>" EntityKind.Union []
+        let flowModule = { entity "Example.FlowModule" "Flow" EntityKind.Module [ create ] with Summary = [ Documentation.markdown "# Flow\n\nFlow builds work.\n\nMore details." ] }
+        let other = entity "Example.Layers.Scope" "Scope" EntityKind.Type []
+        let root = { entity "Example" "Example" EntityKind.Namespace [] with Entities = [ flowType; flowModule; { entity "Example.Layers" "Layers" EntityKind.Namespace [] with Entities = [ other ] } ] }
+        let organization = ApiOrganizationModel.derive [ root ]
+        let directive : ApiOrganizationModel.FamilyDirective =
+            { FamilyId = "Example.Flow"; Name = Some "Flow"; Sections = [ { Id = "construction"; Title = "Construction"; Summary = []; Order = 10; Symbols = [ create.Id ]; Members = []; Facets = [] } ]; PackageSections = [ { PackageName = "Core"; Id = "workflow"; Title = "Workflow APIs"; Summary = []; Order = 10; Entities = [ flowType.Id; flowModule.Id ] } ] }
+        let model : PackageModel =
+            { Version = "1.0"; Entities = [ root ]; Scenarios = []
+              Packages = [ { Name = "Core"; EntityIds = [ flowType.Id; flowModule.Id ]; Description = None }; { Name = "Layers"; EntityIds = [ other.Id ]; Description = None } ]
+              Organization = ApiOrganizationModel.applyDirective directive organization }
+        let releaseSet =
+            { Id = "core"; Title = "Core"; Source = "docs"; Path = ""; Projects = []; IsDefault = true; Sidebar = true; Api = true; ApiEntityIds = [ root.Id; flowType.Id; flowModule.Id; "Example.Layers"; other.Id ]; FSharpPrelude = None }
+        let site : SiteBuilder.DocsSetVersionSite =
+            { Version = "1.0"; Package = model; StaticRoot = None; UsesDocumentationSets = true
+              Sets = [ { Set = releaseSet; Package = model; Pages = [] } ] }
+        let output = Path.Combine(Path.GetTempPath(), "fsld-org-" + Guid.NewGuid().ToString("N"))
+        SiteBuilder.buildDocsSetsHistory "1.0" [ site; { site with Version = "0.9" } ] SiteConfig.empty "light" output
+        for prefix in [ output; Path.Combine(output, "history", "0.9") ] do
+            let api = Path.Combine(prefix, "api")
+            let page = File.ReadAllText(Path.Combine(api, flowModule.Id + ".html"))
+            let index = File.ReadAllText(Path.Combine(api, "index.html"))
+            let layers = File.ReadAllText(Path.Combine(api, "packages", "Layers.html"))
+            Assert.Contains("data-api-section=\"construction\"", page)
+            Assert.Contains("data-api-summary-section=\"construction\"", page)
+            Assert.Contains("Example.Layers.Scope.html\">Scope</a>", page)
+            Assert.Contains("data-toc-title=\"Flow\"", page)
+            Assert.Contains("data-api-package-section=\"workflow\"", index)
+            Assert.Contains("data-api-package-section=\"workflow\"", File.ReadAllText(Path.Combine(api, "packages", "Core.html")))
+            Assert.DoesNotContain("data-toc-title=\"Flow\"><span class=\"leading-tight\">Flow</span><span class=\"badge badge-primary opacity-50 font-mono text-[10px]\">Module", page)
+            Assert.Contains("Flow builds work.", index)
+            Assert.DoesNotContain("# Flow", index)
+            Assert.Contains("../Example.Layers.Scope.html", layers)
+            Assert.DoesNotContain("../Example.FlowModule.html", layers)
+            Assert.DoesNotContain("../Example.html", layers)
+            let layersGroup = page.Substring(page.IndexOf(">Layers</a></summary>"))
+            Assert.DoesNotContain("href=\"../api/Example.html\"", layersGroup)
+
+    [<Fact>]
     let ``default organization merges a member placement that shares its entity ID`` () =
         let constructor = memberInfo "Example.Widget" ".ctor" "unit -> Widget"
         let widget = entity "Example.Widget" "Widget" EntityKind.Type [ constructor ]

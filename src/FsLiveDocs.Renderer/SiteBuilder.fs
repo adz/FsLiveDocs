@@ -780,8 +780,8 @@ module SiteBuilder =
                         navigationPackage.Packages
                         |> List.choose (fun packageInfo ->
                             let owned =
-                                View.entitiesForPackage packageInfo navigationPackage.Entities
-                                |> Presentation.flattenEntities
+                                let ids = packageInfo.EntityIds |> Set.ofList
+                                allEntities |> List.filter (fun entity -> ids.Contains entity.Id)
 
                             if not owned.IsEmpty then
                                 let packageContent =
@@ -790,14 +790,25 @@ module SiteBuilder =
                                             attr "data-toc-title" packageInfo.Name
                                             _class "text-5xl font-black tracking-tighter mb-12" ]
                                           [ str packageInfo.Name ]
-                                      div
-                                          [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ]
-                                          (owned
-                                           |> List.map (fun entity ->
-                                               a
-                                                   [ _href ("../" + entity.Id + ".html")
-                                                     _class "p-4 border border-base-300 rounded-2xl font-bold" ]
-                                                   [ str entity.Name ])) ]
+                                      let entityCard (entity: EntityModel) =
+                                          a [ _href ("../" + entity.Id + ".html"); _class "p-4 border border-base-300 rounded-2xl font-bold" ] [ str entity.Name ]
+                                      let sections =
+                                          navigationPackage.Organization.PackageSections
+                                          |> List.filter (fun sectionInfo -> sectionInfo.PackageName = packageInfo.Name)
+                                          |> List.sortBy (fun sectionInfo -> sectionInfo.Order, sectionInfo.Title)
+                                      if sections.IsEmpty then
+                                          div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (owned |> List.map entityCard)
+                                      else
+                                          for sectionInfo in sections do
+                                              let ids = sectionInfo.EntityIds |> Set.ofList
+                                              let members = owned |> List.filter (fun entity -> ids.Contains entity.Id)
+                                              if not members.IsEmpty then
+                                                  section [ attr "data-api-package-section" sectionInfo.Id ] [
+                                                      View.h2WithAnchor ("package-section-" + sectionInfo.Id) sectionInfo.Title "text-2xl font-black mb-3"
+                                                      if not (Documentation.isEmpty sectionInfo.Summary) then
+                                                          div [ _class "prose max-w-none mb-6" ] [ rawText (Presentation.renderDocumentationHtml docsSet.Package sectionInfo.Summary) ]
+                                                      div [ _class "grid grid-cols-1 md:grid-cols-2 gap-4 not-prose" ] (members |> List.map entityCard)
+                                                  ] ]
 
                                 let packageRoot =
                                     siteRootPath
@@ -825,17 +836,47 @@ module SiteBuilder =
                                 None)
 
                     let card (entity: EntityModel) =
+                        let family = ApiOrganizationModel.familyForEntity navigationPackage.Organization entity.Id
+                        let title = family |> Option.map _.Name |> Option.defaultValue entity.Name
+                        let summary =
+                            family
+                            |> Option.bind (fun info ->
+                                info.EntityIds
+                                |> List.tryPick (fun id ->
+                                    allEntities
+                                    |> List.tryFind (fun candidate -> candidate.Id = id && not (Documentation.isEmpty candidate.Summary))
+                                    |> Option.map _.Summary))
+                            |> Option.defaultValue entity.Summary
                         a
                             [ _href (entity.Id + ".html")
                               _class "card bg-base-100 border border-base-300 p-5 hover:border-primary transition-all" ]
-                            [ h3 [ _class "text-lg font-bold" ] [ str entity.Name ]
-                              p [ _class "text-sm opacity-60 mt-2" ] [ str (Presentation.synopsis entity.Summary) ] ]
+                            [ h3 [ _class "text-lg font-bold" ] [ str title ]
+                              p [ _class "text-sm opacity-60 mt-2" ] [ str (Presentation.synopsis summary) ] ]
 
                     let overview =
                         [ View.h1WithAnchor "api-reference" "API Reference" "text-5xl font-black mb-12 tracking-tighter"
-                          div
-                              [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 not-prose" ]
-                              (allEntities |> List.map card) ]
+                          for packageInfo in navigationPackage.Packages do
+                              let ids = packageInfo.EntityIds |> Set.ofList
+                              let owned = allEntities |> List.filter (fun entity -> ids.Contains entity.Id)
+                              if not owned.IsEmpty then
+                                  h2 [ _class "text-2xl font-black mb-6" ] [ str packageInfo.Name ]
+                                  let sections =
+                                      navigationPackage.Organization.PackageSections
+                                      |> List.filter (fun sectionInfo -> sectionInfo.PackageName = packageInfo.Name)
+                                      |> List.sortBy (fun sectionInfo -> sectionInfo.Order, sectionInfo.Title)
+                                  if sections.IsEmpty then
+                                      div [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 not-prose" ] (owned |> List.map card)
+                                  else
+                                      for sectionInfo in sections do
+                                          let sectionIds = sectionInfo.EntityIds |> Set.ofList
+                                          let members = owned |> List.filter (fun entity -> sectionIds.Contains entity.Id)
+                                          if not members.IsEmpty then
+                                              section [ attr "data-api-package-section" sectionInfo.Id ] [
+                                                  View.h3WithAnchor ("package-" + packageInfo.Name + "-" + sectionInfo.Id) sectionInfo.Title "text-xl font-black mb-5"
+                                                  div [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 not-prose" ] (members |> List.map card)
+                                              ]
+                          if navigationPackage.Packages.IsEmpty then
+                              div [ _class "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 not-prose" ] (allEntities |> List.map card) ]
 
                     let overviewRoot =
                         siteRootPath + String.replicate ((setApiOutput set).Split('/').Length - 1) "../"

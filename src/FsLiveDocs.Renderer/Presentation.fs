@@ -93,11 +93,22 @@ module Presentation =
             "<span class=\"text-secondary font-semibold\">$1</span>")
 
     let synopsis nodes =
-        let text = Documentation.plainText nodes
+        let rec firstParagraph nodes =
+            nodes |> List.tryPick (fun node ->
+                match node.Kind with
+                | DocumentationNodeKind.Markdown ->
+                    let html = Markdown.ToHtml(node.Text |> Option.defaultValue "", markdownPipeline)
+                    let paragraph = Regex.Match(html, @"<p>(.*?)</p>", RegexOptions.Singleline)
+                    if paragraph.Success then
+                        Some (WebUtility.HtmlDecode(Regex.Replace(paragraph.Groups.[1].Value, "<[^>]+>", "")))
+                    else None
+                | DocumentationNodeKind.Paragraph -> Some(Documentation.plainText node.Children)
+                | _ -> firstParagraph node.Children)
+        let text = firstParagraph nodes |> Option.defaultWith (fun () -> Documentation.plainText nodes)
         if String.IsNullOrWhiteSpace text then "No description available."
         else
-            let matchResult = Regex.Match(text, @"^(.+?[.!?])(?:\s|$)")
-            if matchResult.Success then matchResult.Groups.[1].Value else text
+            let matchResult = Regex.Match(text.Trim(), @"^(.+?[.!?])(?:\s|$)")
+            if matchResult.Success then matchResult.Groups.[1].Value else text.Trim()
 
     let entityExamples (entity: EntityModel) =
         if isNull (box entity.Examples) then [] else entity.Examples
