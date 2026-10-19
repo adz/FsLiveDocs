@@ -532,6 +532,22 @@ module IntegrationTests =
             
         projFile
 
+    let private runProcess workingDirectory executable arguments =
+        let startInfo = System.Diagnostics.ProcessStartInfo(executable)
+        startInfo.WorkingDirectory <- workingDirectory
+        startInfo.RedirectStandardOutput <- true
+        startInfo.RedirectStandardError <- true
+        startInfo.UseShellExecute <- false
+        for argument in arguments do
+            startInfo.ArgumentList.Add argument
+        use child = System.Diagnostics.Process.Start startInfo
+        let output = child.StandardOutput.ReadToEnd()
+        let error = child.StandardError.ReadToEnd()
+        child.WaitForExit()
+        let commandLine = String.concat " " arguments
+        Assert.True(child.ExitCode = 0, $"{executable} {commandLine} failed with exit code {child.ExitCode}:\n{output}\n{error}")
+        output
+
     /// Writes a project whose source files carry the supplied content verbatim, then builds it.
     let private buildProjectWithSource dirName (files: (string * string) list) =
         let baseDir = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", dirName)
@@ -562,6 +578,51 @@ module IntegrationTests =
         let proc = System.Diagnostics.Process.Start(psi)
         proc.WaitForExit()
         projFile
+
+    [<Fact>]
+    let ``release capture preserves authored API sections through history rendering`` () =
+        let root = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", "CapturedApiOrganization-" + Guid.NewGuid().ToString("N"))
+        let docsApi = Path.Combine(root, "docs", "api")
+        Directory.CreateDirectory(docsApi) |> ignore
+        let project = Path.Combine(root, "Example.fsproj")
+        File.WriteAllText(
+            project,
+            "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <GenerateDocumentationFile>true</GenerateDocumentationFile>\n  </PropertyGroup>\n  <ItemGroup><Compile Include=\"Library.fs\" /></ItemGroup>\n</Project>\n")
+        File.WriteAllText(
+            Path.Combine(root, "Library.fs"),
+            "namespace Example\n\n/// Arithmetic operations.\nmodule Calculator =\n    /// Adds two values.\n    let add left right = left + right\n\n    /// Subtracts the second value.\n    let subtract left right = left - right\n")
+        File.WriteAllText(Path.Combine(root, "docs", "index.md"), "---\ntitle: Home\n---\n# Home\n")
+        File.WriteAllText(
+            Path.Combine(docsApi, "Example.Calculator.md"),
+            "---\ntitle: Calculator\napi:\n  sections:\n    - id: arithmetic\n      title: Authored arithmetic\n      order: 10\n      members: [add, subtract]\n---\n\nCalculator details.\n")
+
+        runProcess root "git" [ "init" ] |> ignore
+        runProcess root "git" [ "config"; "user.email"; "tests@example.com" ] |> ignore
+        runProcess root "git" [ "config"; "user.name"; "FsLiveDocs Tests" ] |> ignore
+        runProcess root "git" [ "add"; "." ] |> ignore
+        runProcess root "git" [ "commit"; "-m"; "Fixture" ] |> ignore
+        runProcess root "dotnet" [ "build"; project; "--nologo" ] |> ignore
+
+        let livedocs = Path.Combine(AppContext.BaseDirectory, "livedocs")
+        let capsule = Path.Combine(root, "example.livedocs.zip")
+        runProcess root livedocs [ "capture"; project; "--version"; "1.0.0"; "--output"; capsule; "--interactive"; "false"; "--banner"; "false" ] |> ignore
+
+        let _, capturedApi, _, _, _ = ReleaseCapsule.load capsule
+        let capturedFamily = capturedApi.Package.Organization.Families |> List.find (fun family -> family.Id = "Example.Calculator")
+        Assert.Contains(capturedFamily.Sections, fun sectionInfo -> sectionInfo.Id = "arithmetic" && sectionInfo.Title = "Authored arithmetic")
+
+        let index = Path.Combine(root, "history.json")
+        ReleaseCapsule.saveHistoryIndex index {
+            SchemaVersion = ReleaseCapsule.HistoryIndexSchemaVersion
+            CurrentVersion = "1.0.0"
+            Entries = [ { Version = "1.0.0"; CapsulePath = Some capsule; CapsuleUrl = None; CapsuleSha256 = History.sha256 capsule } ]
+        }
+        runProcess root livedocs [ "build-history"; index; "--interactive"; "false"; "--banner"; "false" ] |> ignore
+
+        let entityPage = File.ReadAllText(Path.Combine(root, "output", "api", "Example.Calculator.html"))
+        Assert.Contains("data-api-section=\"arithmetic\"", entityPage)
+        Assert.Contains("Authored arithmetic", entityPage)
+        Assert.DoesNotContain("data-api-section=\"operations\"", entityPage)
 
     [<Fact>]
     let ``extraction shows the source pattern for a parameter destructured in the parameter list`` () = async {

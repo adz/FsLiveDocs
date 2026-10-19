@@ -42,6 +42,26 @@ module internal ReleaseCapture =
 
     let private currentRevision () = Git.currentRevision (Directory.GetCurrentDirectory())
 
+    /// Keeps only organization changes introduced while applying one documentation set. Every
+    /// prepared set starts from the same extracted defaults, which must not overwrite authored
+    /// placements contributed by a previously merged set.
+    let private organizationChanges (baseline: ApiOrganization) (candidate: ApiOrganization) =
+        let baselineFamilies = baseline.Families |> List.map (fun family -> family.Id, family) |> Map.ofList
+        let families =
+            candidate.Families
+            |> List.choose (fun family ->
+                match baselineFamilies |> Map.tryFind family.Id with
+                | None -> Some family
+                | Some original ->
+                    let sections = family.Sections |> List.filter (fun sectionInfo -> not (original.Sections |> List.contains sectionInfo))
+                    let placements = family.Placements |> List.filter (fun placement -> not (original.Placements |> List.contains placement))
+                    if family.Name = original.Name && sections.IsEmpty && placements.IsEmpty then None
+                    else Some { family with EntityIds = []; Sections = sections; Placements = placements })
+        { Families = families
+          PackageSections =
+            candidate.PackageSections
+            |> List.filter (fun sectionInfo -> not (baseline.PackageSections |> List.contains sectionInfo)) }
+
     /// Runs the complete release-capture policy. Reporting functions may present progress, but
     /// cannot weaken compiler, warning, execution, provenance, or integrity checks.
     let capture (request: Request) =
@@ -98,9 +118,17 @@ module internal ReleaseCapture =
                 request.Site request.DocsSets.IsSome resolvedSets package semantic ""
         request.ReportLinkWarnings request.WarnAsError prepared.Warnings
 
+        // API-page front matter is applied while preparing each documentation set, after compiler
+        // extraction. Persist the merged renderer-neutral organization rather than the earlier
+        // extraction-only defaults so capsule rendering does not depend on discarded front matter.
+        let capturedOrganization =
+            prepared.Sites
+            |> List.map (fun site -> organizationChanges package.Organization site.Package.Organization)
+            |> List.fold ApiOrganizationModel.merge package.Organization
+
         let api: ApiModelArtifact =
             { SchemaVersion = History.ApiModelSchemaVersion
-              Package = package }
+              Package = { package with Organization = capturedOrganization } }
 
         let contentPages =
             pages

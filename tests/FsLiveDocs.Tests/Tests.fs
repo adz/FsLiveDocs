@@ -3969,21 +3969,27 @@ module ApiOrganizationTests =
                 { Families = [ family ]
                   PackageSections = [ { PackageName = "Example"; Id = "domain"; Title = "Domain APIs"; Summary = []; Order = 10; EntityIds = [ order.Id; orderType.Id ] } ] } }
         let config = SiteConfig.empty
-        let output = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        let sourceOutput = Path.Combine(root, "source")
+        let historyOutput = Path.Combine(root, "history-output")
+        let docs = Path.Combine(root, "docs")
+        Directory.CreateDirectory(docs) |> ignore
 
-        SiteBuilder.build { Pages = []; Package = package; Config = config; Versions = []; Theme = "light"; RootPath = ""; SiteRootPath = ""; OutputDir = output }
+        SiteBuilder.build { Pages = []; Package = package; Config = config; Versions = []; Theme = "light"; RootPath = ""; SiteRootPath = ""; OutputDir = sourceOutput }
+        SiteBuilder.buildHistory "1.0" [ "1.0", package, [], docs; "0.9", { package with Version = "0.9" }, [], docs ] config "light" historyOutput
 
-        let entityHtml = File.ReadAllText(Path.Combine(output, "api", "Example.Order.html"))
-        let packageHtml = File.ReadAllText(Path.Combine(output, "api", "packages", "Example.html"))
-        let apiHtml = File.ReadAllText(Path.Combine(output, "api.html"))
-        Assert.Contains("data-api-summary-section=\"construction\"", entityHtml)
-        Assert.Contains("Example.Order.html#Example.Order-section-construction", entityHtml)
-        Assert.Contains("Example.Order.html#Example.Order.create", entityHtml)
-        Assert.Contains("data-api-package-section=\"domain\"", packageHtml)
-        Assert.Contains(">Domain APIs<", packageHtml)
-        Assert.DoesNotContain("../Example.Order`1.html", packageHtml)
-        Assert.Contains("data-api-package-section=\"domain\"", apiHtml)
-        Assert.DoesNotContain("api/Example.Order`1.html", apiHtml)
+        for output in [ sourceOutput; Path.Combine(historyOutput, "history", "0.9") ] do
+            let entityHtml = File.ReadAllText(Path.Combine(output, "api", "Example.Order.html"))
+            let packageHtml = File.ReadAllText(Path.Combine(output, "api", "packages", "Example.html"))
+            let apiHtml = File.ReadAllText(Path.Combine(output, "api.html"))
+            Assert.Contains("data-api-summary-section=\"construction\"", entityHtml)
+            Assert.Contains("Example.Order.html#Example.Order-section-construction", entityHtml)
+            Assert.Contains("Example.Order.html#Example.Order.create", entityHtml)
+            Assert.Contains("data-api-package-section=\"domain\"", packageHtml)
+            Assert.Contains(">Domain APIs<", packageHtml)
+            Assert.DoesNotContain("../Example.Order`1.html", packageHtml)
+            Assert.Contains("data-api-package-section=\"domain\"", apiHtml)
+            Assert.DoesNotContain("api/Example.Order`1.html", apiHtml)
 
     [<Fact>]
     let ``Markdown synopsis uses the first non-empty paragraph rather than a heading`` () =
