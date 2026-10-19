@@ -971,6 +971,8 @@ module View =
                         color: oklch(var(--nc));
                     }
                     table.pre tbody, table.pre tr { display: table; width: 100%; }
+                    /* A wide Markdown table scrolls inside the content column instead of widening the page. */
+                    .prose table:not(.pre) { display: block; max-width: 100%; overflow-x: auto; }
                     table.pre td { border: 0 !important; padding: 1.5rem 0 !important; }
                     table.pre td.lines { width: 1%; padding-left: 1rem !important; opacity: 0.4; user-select: none; }
                     table.pre td.snippet { width: 99%; padding-right: 1.5rem !important; }

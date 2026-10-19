@@ -2003,6 +2003,17 @@ module ViewTests =
         Assert.Contains("background-image: linear-gradient(#0f172a, #0f172a) !important", html)
 
     [<Fact>]
+    let ``wide Markdown tables scroll inside the content column`` () =
+        let package : PackageModel = { Version = "1.0"; Entities = []; Scenarios = []; Packages = [] ; Organization = ApiOrganizationModel.empty }
+        let page = { Metadata = ContentMetadata.empty "Guide"; ContentHtml = ""; Markdown = ""; FilePath = "guide.md"; OutputPath = "guide.html"; SectionOrder = 0 }
+        let context : SiteBuilder.SiteRenderContext =
+            { AllPages = [ page ]; Package = package; Config = defaultSiteConfig; Versions = []; Theme = "dark"; RootPath = ""; SiteRootPath = "" }
+
+        let html = SiteBuilder.renderPage page context
+
+        Assert.Contains(".prose table:not(.pre) { display: block; max-width: 100%; overflow-x: auto; }", html)
+
+    [<Fact>]
     let ``sidebar orders a folder by its earliest prefixed page`` () =
         let metadata title = ContentMetadata.empty title
         let page source output title = { Metadata = metadata title; ContentHtml = ""; Markdown = ""; FilePath = source; OutputPath = output; SectionOrder = 0 }
