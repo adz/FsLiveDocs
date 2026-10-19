@@ -1346,6 +1346,16 @@ module ContentProviderTests =
         Assert.Equal(raw, SemanticCode.formatMarkdownFences { options with StatusBadges = false } "guide.md" markdown)
 
     [<Fact>]
+    let ``fragment reasons drop their closing punctuation in badges and status comments`` () =
+        let markdown = "```fsharp no-check reason=\"Shown without its enclosing declaration.\"\nlet incomplete =\n```"
+        let artifact = { SchemaVersion = History.SemanticSchemaVersion; Prelude = ""; Pages = [] }
+        let options = { SemanticCode.defaults with Artifact = Some artifact }
+        let html = SemanticCode.formatFences options "guide.md" markdown
+        Assert.Contains("title=\"Fragment: Shown without its enclosing declaration; not compiled\"", html)
+        let raw = SemanticCode.formatMarkdownFences options "guide.md" markdown
+        Assert.Contains("// [fragment: Shown without its enclosing declaration; not compiled]", raw)
+
+    [<Fact>]
     let ``semantic and lexical F sharp blocks share one code frame contract`` () =
         let markdown = "```fsharp\nlet checkedValue = 1\n```\n\n```fsharp no-check reason=\"Illustrative\"\nlet illustrativeValue = 2\n```"
         let blocks = DocumentationDiscovery.discoverMarkdown "guide.md" None markdown

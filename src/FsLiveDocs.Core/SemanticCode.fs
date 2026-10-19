@@ -117,8 +117,11 @@ module SemanticCode =
 
     /// <summary>Renders a transcript as a faithful FSI session: prompts in a non-selectable
     /// gutter, the runnable interactions in a code frame, and the result in its own tinted band.</summary>
+    /// A no-check reason is usually a sentence; drop its closing punctuation so "; not compiled" reads cleanly.
+    let private reasonClause (reason: string) = reason.Trim().TrimEnd('.', ';', ':', ',')
+
     let private badgeText = function
-        | NoCheck reason -> "Fragment", $"Fragment: {reason}; not compiled"
+        | NoCheck reason -> "Fragment", $"Fragment: {reasonClause reason}; not compiled"
         | Isolated -> "Isolated", "Isolated: compiled independently of the page"
         | Prepare -> "Setup", "Setup: compiled as page preparation"
         | Transcript -> "Verified", "Verified: compared by docs build"
@@ -134,7 +137,7 @@ module SemanticCode =
     let private statusComment mode =
         match mode with
         | NoCheck reason ->
-            let safeReason = reason.Replace('\n', ' ').Replace('\r', ' ')
+            let safeReason = (reasonClause reason).Replace('\n', ' ').Replace('\r', ' ')
             $"// [fragment: {safeReason}; not compiled]"
         | Isolated -> "// [isolated: compiled independently by docs build]"
         | Prepare -> "// [setup: compiled by docs build]"
