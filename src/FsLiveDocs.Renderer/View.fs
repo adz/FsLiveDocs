@@ -257,15 +257,121 @@ module View =
         | [ entity ] when entity.Kind = EntityKind.Namespace -> omitAncestorNamespaces entity.Entities
         | _ -> entities
 
-    /// Keeps an explicitly listed entity and drops a descendant that its ancestor already renders
-    /// recursively. Package sections list both `Parent` and `Parent.Child`, which otherwise put the
-    /// child in the sidebar twice: once under its ancestor and once as a section entry.
-    let private distinctEntityRoots (entities: EntityModel list) =
-        let ids = entities |> List.map _.Id |> Set.ofList
-        entities
-        |> List.filter (fun entity ->
-            not (ids |> Set.exists (fun id ->
-                id <> entity.Id && id.StartsWith(entity.Id + ".", StringComparison.Ordinal))))
+    /// The transient, renderer-local view of one package-owned entity tree. Family membership is
+    /// organization metadata; child edges come only from the surviving owned entities in `entities`.
+    type private SidebarProjection =
+        { FamilyOf: EntityModel -> string
+          MembersByFamily: Map<string, EntityModel list>
+          FirstMemberByFamily: Map<string, EntityModel>
+          ChildFamilies: Map<string, (string * EntityModel) list>
+          Descendants: Map<string, Set<string>> }
+
+    let private buildSidebarProjection (organization: ApiOrganization) (entities: EntityModel list) =
+        let familyOf (entity: EntityModel) =
+            ApiOrganizationModel.familyForEntity organization entity.Id
+            |> Option.map _.Id
+            |> Option.defaultValue entity.Id
+        let all = Presentation.flattenEntities entities
+        let membersByFamily = all |> List.groupBy familyOf |> Map.ofList
+        let firstMemberByFamily =
+            all
+            |> List.fold (fun (families: Map<string, EntityModel>) entity ->
+                let family = familyOf entity
+                if families.ContainsKey family then families else families.Add(family, entity)) Map.empty
+        let childFamilies =
+            all
+            |> List.fold (fun (families: Map<string, (string * EntityModel) list>) entity ->
+                let family = familyOf entity
+                let existing = families |> Map.tryFind family |> Option.defaultValue []
+                let seen = existing |> List.map fst |> Set.ofList
+                let additions =
+                    entity.Entities
+                    |> List.fold (fun (seen: Set<string>, additions: (string * EntityModel) list) child ->
+                        let childFamily = familyOf child
+                        if childFamily = family || seen.Contains childFamily then
+                            seen, additions
+                        else
+                            seen.Add childFamily, (childFamily, child) :: additions) (seen, [])
+                    |> snd
+                    |> List.rev
+                families.Add(family, existing @ additions)) Map.empty
+        let descendants =
+            let rec reachable (family: string) =
+                let rec walk (seen: Set<string>) (pending: string list) =
+                    match pending with
+                    | [] -> seen
+                    | head :: tail ->
+                        if seen.Contains head then walk seen tail
+                        else
+                            let next =
+                                childFamilies
+                                |> Map.tryFind head
+                                |> Option.defaultValue []
+                                |> List.map fst
+                            walk (seen.Add head) (next @ tail)
+                walk Set.empty [ family ] |> Set.remove family
+            firstMemberByFamily
+            |> Map.toList
+            |> List.map (fun (family, _) -> family, reachable family)
+            |> Map.ofList
+        { FamilyOf = familyOf
+          MembersByFamily = membersByFamily
+          FirstMemberByFamily = firstMemberByFamily
+          ChildFamilies = childFamilies
+          Descendants = descendants }
+
+    /// Projects one family through the union of its surviving owned members' actual child edges.
+    /// The first section candidate is the representative, so routes and section ordering stay put;
+    /// a companion module's nested child survives even when the type is the visible representative.
+    let rec private projectSidebarFamily
+        (projection: SidebarProjection)
+        (candidateRepresentatives: Map<string, EntityModel>)
+        (rendered: Collections.Generic.HashSet<string>)
+        (active: Set<string>)
+        (family: string)
+        =
+        if active.Contains family then
+            invalidOp $"API sidebar family graph contains a cycle at '{family}'."
+        elif not (rendered.Add family) then
+            None
+        else
+            let representative =
+                candidateRepresentatives
+                |> Map.tryFind family
+                |> Option.defaultWith (fun () -> projection.FirstMemberByFamily.[family])
+            let children =
+                projection.ChildFamilies
+                |> Map.tryFind family
+                |> Option.defaultValue []
+                |> List.choose (fun (childFamily, _) ->
+                    if childFamily = family then None
+                    else projectSidebarFamily projection candidateRepresentatives rendered (active.Add family) childFamily)
+            Some { representative with Entities = children }
+
+    /// Lossless navigation roots: an explicit candidate is removed only when another surviving
+    /// candidate's actual projected child tree reaches its family. Prefix similarity is irrelevant.
+    let private projectSidebarRoots
+        (projection: SidebarProjection)
+        (candidates: EntityModel list)
+        (rendered: Collections.Generic.HashSet<string>)
+        =
+        let candidateFamilies = candidates |> List.map projection.FamilyOf |> List.distinct
+        let candidateRepresentatives =
+            candidates
+            |> List.fold (fun (families: Map<string, EntityModel>) entity ->
+                let family = projection.FamilyOf entity
+                if families.ContainsKey family then families else families.Add(family, entity)) Map.empty
+        let reaches other family =
+            projection.Descendants
+            |> Map.tryFind other
+            |> Option.defaultValue Set.empty
+            |> Set.contains family
+        let survivors =
+            candidateFamilies
+            |> List.filter (fun family -> not (candidateFamilies |> List.exists (fun other -> other <> family && reaches other family)))
+        survivors
+        |> List.choose (fun family ->
+            projectSidebarFamily projection candidateRepresentatives rendered Set.empty family)
 
     let private sidebarApiGroup (rootPath: string) (organization: ApiOrganization) (label: string) (groupPageId: string option) (packageAnchor: string option) (entities: EntityModel list) (packageSections: ApiPackageSection list) =
         // The label spans the full row height (not just its text) so the whole row - not only the
@@ -291,21 +397,25 @@ module View =
                     | None -> span [ _class "flex-1 min-w-0 truncate py-2 pl-4" ] [ str label ]
                 ]
                 ul [ _class "menu menu-sm p-0 mt-2 gap-1 border-l-2 border-primary/10 ml-4" ] [
+                    let projection = buildSidebarProjection organization entities
+                    let renderedFamilies = Collections.Generic.HashSet<string>(StringComparer.Ordinal)
                     if packageSections.IsEmpty then
-                        yield! entities |> distinctEntityRoots |> List.map (sidebarEntityLink rootPath organization)
+                        yield!
+                            projectSidebarRoots projection entities renderedFamilies
+                            |> List.map (sidebarEntityLink rootPath organization)
                     else
                         let all = Presentation.flattenEntities entities
                         for sectionInfo in packageSections |> List.sortBy (fun item -> item.Order, item.Title) do
                             let sectionEntities =
                                 sectionInfo.EntityIds
                                 |> List.choose (fun id -> all |> List.tryFind (fun entity -> entity.Id = id))
-                                |> distinctEntityRoots
-                                |> List.distinctBy (fun entity -> ApiOrganizationModel.familyForEntity organization entity.Id |> Option.map _.Id |> Option.defaultValue entity.Id)
-                            if not sectionEntities.IsEmpty then
+                            let sectionRoots =
+                                projectSidebarRoots projection sectionEntities renderedFamilies
+                            if not sectionRoots.IsEmpty then
                                 li [ attr "data-sidebar-item" "true" ] [
                                     details [ _class "group" ] [
                                         summary [ _class "py-2 px-4 cursor-pointer text-xs font-bold" ] [ str sectionInfo.Title ]
-                                        ul [ _class "menu menu-sm p-0 ml-2 border-l border-base-300" ] (sectionEntities |> List.map (sidebarEntityLink rootPath organization))
+                                        ul [ _class "menu menu-sm p-0 ml-2 border-l border-base-300" ] (sectionRoots |> List.map (sidebarEntityLink rootPath organization))
                                     ]
                                 ]
                 ]

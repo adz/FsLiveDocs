@@ -4049,6 +4049,138 @@ module ApiOrganizationTests =
 
         Assert.Equal(1, occurrences)
 
+    let private sidebarRoutes (html: string) =
+        Regex.Matches(html, "href=\"[^\"]*api/([^\"#]+\.html)")
+        |> Seq.cast<Match>
+        |> Seq.map (fun item -> Uri.UnescapeDataString item.Groups.[1].Value)
+        |> Seq.filter (fun route -> not (route.StartsWith("packages/", StringComparison.Ordinal)))
+        |> Seq.toList
+
+    let private sidebarPackage entities organization =
+        let allEntities = Presentation.flattenEntities entities
+        { Version = "1.0"
+          Entities = entities
+          Scenarios = []
+          Packages = [ { Name = "Example"; EntityIds = allEntities |> List.map _.Id; Description = None } ]
+          Organization = organization }
+
+    let private sidebarSection entityIds =
+        { PackageName = "Example"
+          Id = "section"
+          Title = "Section"
+          Summary = []
+          Order = 10
+          EntityIds = entityIds }
+
+    let private sidebarOrganization sections entities =
+        { ApiOrganizationModel.derive entities with PackageSections = sections }
+
+    let private renderSidebar entities organization =
+        Giraffe.ViewEngine.RenderView.AsString.htmlNode (View.sidebar "" [] (sidebarPackage entities organization))
+
+    [<Fact>]
+    let ``sidebar retains parent and renders explicit child once`` () =
+        let child = entity "Example.Parent.Child" "Child" EntityKind.Module []
+        let parent = { entity "Example.Parent" "Parent" EntityKind.Module [] with Entities = [ child ] }
+        let html = renderSidebar [ parent ] (sidebarOrganization [ sidebarSection [ parent.Id; child.Id ] ] [ parent ])
+        let routes = sidebarRoutes html
+        Assert.Equal(1, routes |> List.filter ((=) "Example.Parent.html") |> List.length)
+        Assert.Equal(1, routes |> List.filter ((=) "Example.Parent.Child.html") |> List.length)
+
+    [<Fact>]
+    let ``sidebar keeps Foo and FooBar separate`` () =
+        let foo = entity "Example.Foo" "Foo" EntityKind.Module []
+        let fooBar = entity "Example.FooBar" "FooBar" EntityKind.Module []
+        let html = renderSidebar [ foo; fooBar ] (sidebarOrganization [ sidebarSection [ foo.Id; fooBar.Id ] ] [ foo; fooBar ])
+        let routes = sidebarRoutes html
+        Assert.Equal(1, routes |> List.filter ((=) "Example.Foo.html") |> List.length)
+        Assert.Equal(1, routes |> List.filter ((=) "Example.FooBar.html") |> List.length)
+
+    [<Theory>]
+    [<InlineData("type,module,child")>]
+    [<InlineData("module,type,child")>]
+    [<InlineData("child,type,module")>]
+    let ``sidebar companion family preserves nested module child`` (order: string) =
+        let nested = entity "Example.Flow.Nested" "Nested" EntityKind.Module []
+        let operations =
+            { entity "Example.FlowModule" "Flow" EntityKind.Module [] with Entities = [ nested ] }
+        let flow = entity "Example.Flow" "Flow" EntityKind.Record []
+        let entities = [ flow; operations ]
+        let byName : Map<string, string> =
+            Map.ofList [ "type", flow.Id; "module", operations.Id; "child", nested.Id ]
+        let ids = order.Split(',') |> Array.toList |> List.map (fun key -> byName.[key])
+        let html = renderSidebar entities (sidebarOrganization [ sidebarSection ids ] entities)
+        let routes = sidebarRoutes html
+        let familyRoute = if order.StartsWith("module", StringComparison.Ordinal) then "Example.FlowModule.html" else "Example.Flow.html"
+        Assert.Equal(1, routes |> List.filter ((=) familyRoute) |> List.length)
+        Assert.Equal(1, routes |> List.filter ((=) "Example.Flow.Nested.html") |> List.length)
+
+    [<Fact>]
+    let ``sidebar preserves unlisted companion descendant`` () =
+        let nested = entity "Example.Flow.Nested" "Nested" EntityKind.Module []
+        let operations =
+            { entity "Example.FlowModule" "Flow" EntityKind.Module [] with Entities = [ nested ] }
+        let flow = entity "Example.Flow" "Flow" EntityKind.Record []
+        let entities = [ flow; operations ]
+        let html = renderSidebar entities (sidebarOrganization [ sidebarSection [ flow.Id; operations.Id ] ] entities)
+        let routes = sidebarRoutes html
+        Assert.Equal(1, routes |> List.filter ((=) "Example.Flow.html") |> List.length)
+        Assert.Equal(1, routes |> List.filter ((=) "Example.Flow.Nested.html") |> List.length)
+
+    [<Fact>]
+    let ``sidebar dotted ids without actual containment do not suppress entries`` () =
+        let parent = entity "Example.A" "A" EntityKind.Module []
+        let child = entity "Example.A.B" "A.B" EntityKind.Module []
+        let html = renderSidebar [ parent; child ] (sidebarOrganization [ sidebarSection [ parent.Id; child.Id ] ] [ parent; child ])
+        let routes = sidebarRoutes html
+        Assert.Equal(1, routes |> List.filter ((=) "Example.A.html") |> List.length)
+        Assert.Equal(1, routes |> List.filter ((=) "Example.A.B.html") |> List.length)
+
+    [<Fact>]
+    let ``sidebar repeated section assignments render family once`` () =
+        let child = entity "Example.Parent.Child" "Child" EntityKind.Module []
+        let parent = { entity "Example.Parent" "Parent" EntityKind.Module [] with Entities = [ child ] }
+        let first = { sidebarSection [ parent.Id; child.Id; child.Id ] with Id = "first"; Title = "First"; Order = 10 }
+        let second = { sidebarSection [ parent.Id; child.Id ] with Id = "second"; Title = "Second"; Order = 20 }
+        let html = renderSidebar [ parent ] (sidebarOrganization [ first; second ] [ parent ])
+        let routes = sidebarRoutes html
+        Assert.Equal(1, routes |> List.filter ((=) "Example.Parent.html") |> List.length)
+        Assert.Equal(1, routes |> List.filter ((=) "Example.Parent.Child.html") |> List.length)
+        Assert.DoesNotContain(">Second<", html)
+
+    [<Fact>]
+    let ``sidebar package ownership remains isolated during family projection`` () =
+        let nested = entity "ExampleNested.Child" "Child" EntityKind.Module []
+        let operations =
+            { entity "ExampleNested.FlowModule" "Flow" EntityKind.Module [] with Entities = [ nested ] }
+        let flow = entity "ExampleNested.Flow" "Flow" EntityKind.Record []
+        let other = entity "OtherPackage.Thing" "Thing" EntityKind.Module []
+        let entities = [ flow; operations ]
+        let package =
+            { Version = "1.0"
+              Entities = entities @ [ other ]
+              Scenarios = []
+              Packages =
+                [ { Name = "ExampleNested"; EntityIds = [ flow.Id; operations.Id; nested.Id ]; Description = None } ]
+              Organization = ApiOrganizationModel.derive (entities @ [ other ]) }
+        let html = Giraffe.ViewEngine.RenderView.AsString.htmlNode (View.sidebar "" [] package)
+        let routes = sidebarRoutes html
+        Assert.Contains("ExampleNested.Flow.html", routes)
+        Assert.Contains("ExampleNested.Child.html", routes)
+        Assert.DoesNotContain("OtherPackage.Thing.html", routes)
+
+    [<Fact>]
+    let ``sidebar normalization preserves all reachable family ids`` () =
+        let grandchild = entity "Example.Root.Child.Grandchild" "Grandchild" EntityKind.Module []
+        let child = { entity "Example.Root.Child" "Child" EntityKind.Module [] with Entities = [ grandchild ] }
+        let root = { entity "Example.Root" "Root" EntityKind.Module [] with Entities = [ child ] }
+        let flat = entity "Example.Flat" "Flat" EntityKind.Module []
+        let html = renderSidebar [ root; flat ] (sidebarOrganization [ sidebarSection [ root.Id; child.Id; grandchild.Id; flat.Id ] ] [ root; flat ])
+        let routes = sidebarRoutes html
+        let expected = [ "Example.Flat.html"; "Example.Root.Child.Grandchild.html"; "Example.Root.Child.html"; "Example.Root.html" ]
+        Assert.Equal<string list>(expected, routes |> List.sort)
+        Assert.All(expected, fun route -> Assert.Equal(1, routes |> List.filter ((=) route) |> List.length))
+
     [<Fact>]
     let ``Markdown synopsis uses the first non-empty paragraph rather than a heading`` () =
         let emptyParagraph = { Documentation.text "" with Kind = DocumentationNodeKind.Paragraph; Text = None }
