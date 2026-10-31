@@ -3916,6 +3916,8 @@ module WorkspaceTests =
 
 module ApiOrganizationTests =
 
+    open FsLiveDocs.Renderer.SiteBuilder
+
     let private entity id name kind members : EntityModel =
         { Id = id; Name = name; Kind = kind; Summary = []; Members = members; Examples = []; Entities = [] }
 
@@ -4148,26 +4150,128 @@ module ApiOrganizationTests =
         Assert.Equal(1, routes |> List.filter ((=) "Example.Parent.Child.html") |> List.length)
         Assert.DoesNotContain(">Second<", html)
 
-    [<Fact>]
-    let ``sidebar package ownership remains isolated during family projection`` () =
-        let nested = entity "ExampleNested.Child" "Child" EntityKind.Module []
-        let operations =
-            { entity "ExampleNested.FlowModule" "Flow" EntityKind.Module [] with Entities = [ nested ] }
-        let flow = entity "ExampleNested.Flow" "Flow" EntityKind.Record []
-        let other = entity "OtherPackage.Thing" "Thing" EntityKind.Module []
-        let entities = [ flow; operations ]
-        let package =
+    let private sharedNamespaceFixture () =
+        let aChild = entity "Shared.AChild" "AChild" EntityKind.Module []
+        let aOperations =
+            { entity "Shared.AOperations" "A" EntityKind.Module [] with Entities = [ aChild ] }
+        let aType = entity "Shared.A" "A" EntityKind.Record []
+        let bChild = entity "Shared.BChild" "BChild" EntityKind.Module []
+        let bOperations =
+            { entity "Shared.BOperations" "B" EntityKind.Module [] with Entities = [ bChild ] }
+        let bType = entity "Shared.B" "B" EntityKind.Record []
+        let root =
+            { entity "Shared" "Shared" EntityKind.Namespace [] with
+                Entities = [ aType; aOperations; bType; bOperations ] }
+        let organization = ApiOrganizationModel.derive [ root ]
+        let buildPackageModel (entities: EntityModel list) : PackageModel =
             { Version = "1.0"
-              Entities = entities @ [ other ]
+              Entities = [ root ]
               Scenarios = []
               Packages =
-                [ { Name = "ExampleNested"; EntityIds = [ flow.Id; operations.Id; nested.Id ]; Description = None } ]
-              Organization = ApiOrganizationModel.derive (entities @ [ other ]) }
-        let html = Giraffe.ViewEngine.RenderView.AsString.htmlNode (View.sidebar "" [] package)
-        let routes = sidebarRoutes html
-        Assert.Contains("ExampleNested.Flow.html", routes)
-        Assert.Contains("ExampleNested.Child.html", routes)
-        Assert.DoesNotContain("OtherPackage.Thing.html", routes)
+                [ { Name = "Shared"
+                    EntityIds = entities |> List.map _.Id
+                    Description = None } ]
+              Organization = organization }
+        let aOwned : EntityModel list = [ aType; aOperations; aChild ]
+        let bOwned : EntityModel list = [ bType; bOperations; bChild ]
+        buildPackageModel aOwned, buildPackageModel bOwned
+
+    [<Fact>]
+    let ``sidebar package ownership remains isolated during family projection`` () =
+        let packageA, packageB = sharedNamespaceFixture ()
+        let routesA =
+            Giraffe.ViewEngine.RenderView.AsString.htmlNode (View.sidebar "" [] packageA) |> sidebarRoutes
+        let routesB =
+            Giraffe.ViewEngine.RenderView.AsString.htmlNode (View.sidebar "" [] packageB) |> sidebarRoutes
+
+        Assert.Contains("Shared.A.html", routesA)
+        Assert.Contains("Shared.AChild.html", routesA)
+        Assert.DoesNotContain("Shared.B.html", routesA)
+        Assert.DoesNotContain("Shared.BChild.html", routesA)
+
+        Assert.Contains("Shared.B.html", routesB)
+        Assert.Contains("Shared.BChild.html", routesB)
+        Assert.DoesNotContain("Shared.A.html", routesB)
+        Assert.DoesNotContain("Shared.AChild.html", routesB)
+
+    [<Fact>]
+    let ``sidebar sets retain their own package entries`` () =
+        let packageA, packageB = sharedNamespaceFixture ()
+        let metadata title = ContentMetadata.empty title
+        let page path title =
+            { Metadata = metadata title
+              ContentHtml = "<h1>" + title + "</h1>"
+              Markdown = "# " + title
+              FilePath = path + ".md"
+              OutputPath = path + ".html"
+              SectionOrder = 0 }
+        let buildSite id title path package =
+            { Set =
+                { Id = id
+                  Title = title
+                  Source = "docs-" + id
+                  Path = path
+                  Projects = []
+                  IsDefault = id = "a"
+                  Sidebar = true
+                  Api = true
+                  ApiEntityIds = package.Packages |> List.collect _.EntityIds
+                  FSharpPrelude = None }
+              Package = package
+              Pages = [ page (if path = "" then "index" else path + "/index") title ] }
+        let output = Path.Combine(Path.GetTempPath(), "fslivedocs-set-ownership-" + Guid.NewGuid().ToString("N"))
+        try
+            let sites =
+                [ buildSite "a" "Set A" "" packageA
+                  buildSite "b" "Set B" "b" packageB ]
+            SiteBuilder.buildDocsSets "1.0" sites SiteConfig.empty [ "1.0" ] "light" output
+            let routesA = File.ReadAllText(Path.Combine(output, "index.html")) |> sidebarRoutes
+            let routesB = File.ReadAllText(Path.Combine(output, "b", "index.html")) |> sidebarRoutes
+
+            Assert.Contains("Shared.A.html", routesA)
+            Assert.Contains("Shared.AChild.html", routesA)
+            Assert.DoesNotContain("Shared.B.html", routesA)
+
+            Assert.Contains("Shared.B.html", routesB)
+            Assert.Contains("Shared.BChild.html", routesB)
+            Assert.DoesNotContain("Shared.A.html", routesB)
+        finally
+            if Directory.Exists output then Directory.Delete(output, true)
+
+    [<Fact>]
+    let ``sidebar rejects cyclic projected family graphs`` () =
+        let aTwo = entity "Example.A2" "A2" EntityKind.Module []
+        let aThree = entity "Example.A3" "A3" EntityKind.Module []
+        let bOne =
+            { entity "Example.B1" "B1" EntityKind.Module [] with Entities = [ aTwo ] }
+        let aOne =
+            { entity "Example.A1" "A1" EntityKind.Module [] with Entities = [ bOne ] }
+        let bTwo =
+            { entity "Example.B2" "B2" EntityKind.Module [] with Entities = [ aThree ] }
+        let family id entityIds =
+            { Id = id
+              Name = id
+              EntityIds = entityIds
+              Sections = []
+              Placements = [] }
+        let organization =
+            { ApiOrganizationModel.empty with
+                Families =
+                    [ family "Example.A" [ "Example.A1"; "Example.A2"; "Example.A3" ]
+                      family "Example.B" [ "Example.B1"; "Example.B2" ] ] }
+        let package =
+            { Version = "1.0"
+              Entities = [ aOne; bTwo ]
+              Scenarios = []
+              Packages =
+                [ { Name = "Example"
+                    EntityIds = [ "Example.A1"; "Example.A2"; "Example.A3"; "Example.B1"; "Example.B2" ]
+                    Description = None } ]
+              Organization = organization }
+        let error =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                Giraffe.ViewEngine.RenderView.AsString.htmlNode (View.sidebar "" [] package) |> ignore)
+        Assert.Contains("cycle", error.Message, StringComparison.OrdinalIgnoreCase)
 
     [<Fact>]
     let ``sidebar normalization preserves all reachable family ids`` () =
