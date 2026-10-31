@@ -619,6 +619,71 @@ module IntegrationTests =
     }
 
     [<Fact>]
+    let ``extraction resolves package dependency without publishing its entities`` () = async {
+        let root = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", "PackageReference-" + Guid.NewGuid().ToString("N"))
+        let library = Path.Combine(root, "External.Library")
+        let consumer = Path.Combine(root, "Consumer")
+        let feed = Path.Combine(root, "feed")
+        Directory.CreateDirectory(library) |> ignore
+        Directory.CreateDirectory(consumer) |> ignore
+        Directory.CreateDirectory(feed) |> ignore
+        let libraryProject = Path.Combine(library, "External.Library.fsproj")
+        File.WriteAllText(
+            libraryProject,
+            """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>External.Library</PackageId>
+    <Version>1.0.0</Version>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Library.fs" />
+  </ItemGroup>
+</Project>""")
+        File.WriteAllText(
+            Path.Combine(library, "Library.fs"),
+            "namespace External.Library\n\n/// <summary>A payload from an external package.</summary>\ntype Payload = { Value: int }")
+        let consumerProject = Path.Combine(consumer, "Consumer.fsproj")
+        File.WriteAllText(
+            consumerProject,
+            """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Library.fs" />
+    <PackageReference Include="External.Library" Version="1.0.0" />
+  </ItemGroup>
+</Project>""")
+        File.WriteAllText(
+            Path.Combine(consumer, "Library.fs"),
+            "namespace Consumer\n\nopen External.Library\n\nmodule Api =\n    /// <summary>Returns the supplied payload.</summary>\n    let echo (payload: Payload) : Payload = payload")
+        try
+            runProcess library "dotnet" [ "pack"; libraryProject; "--nologo"; "-v"; "q"; "-o"; feed ] |> ignore
+            runProcess consumer "dotnet" [ "build"; consumerProject; "--nologo"; "-v"; "q"; $"-p:RestoreAdditionalProjectSources={feed}" ] |> ignore
+            let! package = SymbolLister.extractFromProject consumerProject
+
+            let rec allEntities (entities: EntityModel list) =
+                [ for entity in entities do
+                      yield entity
+                      yield! allEntities entity.Entities ]
+
+            let entities = package.Entities |> allEntities
+            let ids = entities |> List.map _.Id
+            let api = entities |> List.find (fun entity -> entity.Id = "Consumer.Api")
+            let memberInfo = api.Members |> List.find (fun memberInfo -> memberInfo.Id = "Consumer.Api.echo")
+            Assert.Contains(memberInfo.Parameters, fun parameter -> parameter.Name = "payload" && parameter.Type = "Payload")
+            Assert.Equal("Payload", memberInfo.ReturnType)
+            Assert.DoesNotContain(ids, fun id -> id.StartsWith("External.Library", StringComparison.Ordinal))
+            Assert.DoesNotContain(ids, fun id -> id.StartsWith("System.", StringComparison.Ordinal) || id.StartsWith("Microsoft.", StringComparison.Ordinal))
+            Assert.DoesNotContain(package.Packages |> List.collect _.EntityIds, fun id -> id.StartsWith("External.Library", StringComparison.Ordinal))
+        finally
+            if Directory.Exists root then Directory.Delete(root, true)
+    }
+
+    [<Fact>]
     let ``unpinned documentation pages use their exact selected compiler references`` () = async {
         let root = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", "UnpinnedFrameworks-" + Guid.NewGuid().ToString("N"))
         let docs = Path.Combine(root, "docs")
