@@ -580,6 +580,91 @@ module IntegrationTests =
         projFile
 
     [<Fact>]
+    let ``extraction resolves framework reference assemblies without publishing their entities`` () = async {
+        // FrameworkReference assemblies are supplied by reference packs and never appear as
+        // package compile assets, so reading only project.assets.json leaves FSharp.Formatting
+        // unable to resolve Microsoft.AspNetCore.Http.HttpRequest.
+        let baseDir = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", "FrameworkReference-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(baseDir) |> ignore
+        let project = Path.Combine(baseDir, "FrameworkReference.fsproj")
+        File.WriteAllText(
+            project,
+            "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n    <GenerateDocumentationFile>true</GenerateDocumentationFile>\n  </PropertyGroup>\n  <ItemGroup>\n    <Compile Include=\"Library.fs\" />\n    <FrameworkReference Include=\"Microsoft.AspNetCore.App\" />\n  </ItemGroup>\n</Project>")
+        File.WriteAllText(
+            Path.Combine(baseDir, "Library.fs"),
+            "namespace FrameworkReferenceOnly\n\nopen System.Threading.Tasks\nopen Microsoft.AspNetCore.Http\n\n/// <summary>Lowers a codec to an <see cref=\"T:Microsoft.AspNetCore.Http.IResult\" />.</summary>\ntype Result(codec: int) =\n    interface IResult with\n        member _.ExecuteAsync(context: HttpContext) = Task.CompletedTask\n\n/// <summary>Exposes the ASP.NET Core request shape.</summary>\ntype Env<'app> =\n    { AppEnvironment: 'app\n      Request: HttpRequest }\n\nmodule Api =\n    /// <summary>Builds <see cref=\"T:Microsoft.AspNetCore.Http.HttpRequest\" /> values.</summary>\n    let result (request: HttpRequest) : IResult = Results.Ok()\n\n    /// <summary>Projects a request.</summary>\n    let raw (projection: HttpRequest -> 'input) : 'input = Unchecked.defaultof<'input>\n")
+
+        runProcess baseDir "dotnet" [ "build"; project; "--nologo" ] |> ignore
+
+        let! package = SymbolLister.extractFromProject project
+
+        let rec allEntities (entities: EntityModel list) =
+            [ for entity in entities do
+                  yield entity
+                  yield! allEntities entity.Entities ]
+
+        let entities = package.Entities |> allEntities
+        let ids = entities |> List.map _.Id
+        Assert.Contains(ids, fun id -> id.StartsWith("FrameworkReferenceOnly", StringComparison.Ordinal))
+        Assert.DoesNotContain(ids, fun id -> id.StartsWith("Microsoft.", StringComparison.Ordinal))
+        Assert.DoesNotContain(ids, fun id -> id.StartsWith("System.", StringComparison.Ordinal))
+        let result = entities |> List.find (fun entity -> entity.Id = "FrameworkReferenceOnly.Api")
+        let memberInfo = result.Members |> List.find (fun memberInfo -> memberInfo.Id = "FrameworkReferenceOnly.Api.result")
+        Assert.Contains(memberInfo.Parameters, fun parameter -> parameter.Name = "request" && parameter.Type = "HttpRequest")
+        Assert.Equal("IResult", memberInfo.ReturnType)
+    }
+
+    [<Fact>]
+    let ``unpinned documentation pages use their own target framework references`` () = async {
+        // A net8-only project added to a set whose first project targets netstandard2.1 used to
+        // union both frameworks' System.Runtime references into every unpinned page. The page
+        // then resolved System.IO against net8's facade and lost DirectoryInfo.
+        let root = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", "UnpinnedFrameworks-" + Guid.NewGuid().ToString("N"))
+        let docs = Path.Combine(root, "docs")
+        Directory.CreateDirectory(docs) |> ignore
+        let writeProject name framework =
+            let directory = Path.Combine(root, name)
+            Directory.CreateDirectory(directory) |> ignore
+            let project = Path.Combine(directory, name + ".fsproj")
+            File.WriteAllText(
+                project,
+                $"<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>{framework}</TargetFramework><GenerateDocumentationFile>true</GenerateDocumentationFile></PropertyGroup><ItemGroup><Compile Include=\"Library.fs\" /></ItemGroup></Project>")
+            File.WriteAllText(Path.Combine(directory, "Library.fs"), $"namespace {name}\nmodule Library = let value = 42")
+            runProcess directory "dotnet" [ "build"; project; "--nologo" ] |> ignore
+            project
+
+        let first = writeProject "First" "net8.0"
+        let second = writeProject "Second" "netstandard2.1"
+        File.WriteAllText(
+            Path.Combine(docs, "guide.md"),
+            String.concat "\n" [ "# Guide"; ""; "```fsharp"; "open System.IO"; "let info : DirectoryInfo = DirectoryInfo(\".\")"; "```"; "" ])
+
+        let source = Path.GetRelativePath(Directory.GetCurrentDirectory(), docs).Replace('\\', '/')
+        let set =
+            { Id = "docs"
+              Title = "Docs"
+              Source = source
+              Path = ""
+              Projects = [ first; second ]
+              IsDefault = true
+              Sidebar = true
+              Api = true
+              FSharpPrelude = None }
+        let package : PackageModel =
+            { Version = "1.0"
+              Entities = []
+              Scenarios = []
+              Packages =
+                [ { Name = "First"; EntityIds = []; Description = None }
+                  { Name = "Second"; EntityIds = []; Description = None } ]
+              Organization = ApiOrganizationModel.empty }
+
+        let analysis = DocAnalysis.analyzeDocsSets [ set ] [ first; second ] "" package
+
+        Assert.Empty analysis.Errors
+    }
+
+    [<Fact>]
     let ``release capture preserves authored API sections through history rendering`` () =
         let root = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", "CapturedApiOrganization-" + Guid.NewGuid().ToString("N"))
         let docsApi = Path.Combine(root, "docs", "api")

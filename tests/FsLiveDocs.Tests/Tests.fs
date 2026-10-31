@@ -3992,6 +3992,30 @@ module ApiOrganizationTests =
             Assert.DoesNotContain("api/Example.Order`1.html", apiHtml)
 
     [<Fact>]
+    let ``sidebar lists a nested entity once when its package section also names it`` () =
+        let child = entity "Example.Parent.Child" "Child" EntityKind.Module []
+        let parent = { entity "Example.Parent" "Parent" EntityKind.Module [] with Entities = [ child ] }
+        let package : PackageModel =
+            { Version = "1.0"
+              Entities = [ parent ]
+              Scenarios = []
+              Packages = [ { Name = "Example"; EntityIds = [ parent.Id; child.Id ]; Description = None } ]
+              Organization =
+                { Families = []
+                  PackageSections =
+                    [ { PackageName = "Example"
+                        Id = "all"
+                        Title = "All"
+                        Summary = []
+                        Order = 10
+                        EntityIds = [ parent.Id; child.Id ] } ] } }
+
+        let html = Giraffe.ViewEngine.RenderView.AsString.htmlNode (View.sidebar "" [] package)
+        let occurrences = Regex.Matches(html, Regex.Escape("api/Example.Parent.Child.html")).Count
+
+        Assert.Equal(1, occurrences)
+
+    [<Fact>]
     let ``Markdown synopsis uses the first non-empty paragraph rather than a heading`` () =
         let emptyParagraph = { Documentation.text "" with Kind = DocumentationNodeKind.Paragraph; Text = None }
         let laterParagraph = { emptyParagraph with Children = [ Documentation.text "Dequeue<'a> is a queue. More detail." ] }
