@@ -11,7 +11,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="MsBuild.fs" />
     <Compile Include="ProjectResolver.fs" />
     <Compile Include="CheckerPool.fs" />
     <Compile Include="DocumentationCompiler.fs" />

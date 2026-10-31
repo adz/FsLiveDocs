@@ -406,12 +406,16 @@ module internal DocAnalysis =
                         Path.GetFileNameWithoutExtension(ProjectResolver.resolveAssemblyPath projectPath), SymbolLister.packageName projectPath)
                     |> Map.ofList
                 let packageForAssembly assembly = Map.tryFind assembly packageByAssembly
-                let aggregateReferences =
-                    (evaluated |> List.collect (snd >> _.References)) @ builtAssemblies
-                    |> List.distinct
+                // References must never be unioned across frameworks. A page without a pinned
+                // targetFramework compiles against its own selected project's references, just as
+                // the pinned path below does.
                 let evaluatedProjects =
                     evaluated
-                    |> List.map (fun (path, project) -> path, { project with References = aggregateReferences })
+                    |> List.map (fun (path, project) ->
+                        let references =
+                            project.References @ builtAssemblies
+                            |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
+                        path, { project with References = references })
                     |> Map.ofList
 
                 // A page that pins a target framework must compile against that framework's

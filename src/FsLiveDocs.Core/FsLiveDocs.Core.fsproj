@@ -13,6 +13,8 @@
   <ItemGroup>
     <Compile Include="Effects/LiveEnvironment.fs" />
     <Compile Include="Effects/Run.fs" />
+    <Compile Include="MsBuild.fs" />
+    <Compile Include="ProjectReferences.fs" />
     <Compile Include="Transcript.fs" />
     <Compile Include="DocumentationModel.fs" />
     <Compile Include="ApiModel.fs" />

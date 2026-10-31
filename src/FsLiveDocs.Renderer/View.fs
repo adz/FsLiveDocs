@@ -257,6 +257,16 @@ module View =
         | [ entity ] when entity.Kind = EntityKind.Namespace -> omitAncestorNamespaces entity.Entities
         | _ -> entities
 
+    /// Keeps an explicitly listed entity and drops a descendant that its ancestor already renders
+    /// recursively. Package sections list both `Parent` and `Parent.Child`, which otherwise put the
+    /// child in the sidebar twice: once under its ancestor and once as a section entry.
+    let private distinctEntityRoots (entities: EntityModel list) =
+        let ids = entities |> List.map _.Id |> Set.ofList
+        entities
+        |> List.filter (fun entity ->
+            not (ids |> Set.exists (fun id ->
+                id <> entity.Id && id.StartsWith(entity.Id + ".", StringComparison.Ordinal))))
+
     let private sidebarApiGroup (rootPath: string) (organization: ApiOrganization) (label: string) (groupPageId: string option) (packageAnchor: string option) (entities: EntityModel list) (packageSections: ApiPackageSection list) =
         // The label spans the full row height (not just its text) so the whole row - not only the
         // glyphs - is a navigation target, matching leaf sidebar items. Only the chevron's own small
@@ -282,13 +292,14 @@ module View =
                 ]
                 ul [ _class "menu menu-sm p-0 mt-2 gap-1 border-l-2 border-primary/10 ml-4" ] [
                     if packageSections.IsEmpty then
-                        yield! entities |> List.map (sidebarEntityLink rootPath organization)
+                        yield! entities |> distinctEntityRoots |> List.map (sidebarEntityLink rootPath organization)
                     else
                         let all = Presentation.flattenEntities entities
                         for sectionInfo in packageSections |> List.sortBy (fun item -> item.Order, item.Title) do
                             let sectionEntities =
                                 sectionInfo.EntityIds
                                 |> List.choose (fun id -> all |> List.tryFind (fun entity -> entity.Id = id))
+                                |> distinctEntityRoots
                                 |> List.distinctBy (fun entity -> ApiOrganizationModel.familyForEntity organization entity.Id |> Option.map _.Id |> Option.defaultValue entity.Id)
                             if not sectionEntities.IsEmpty then
                                 li [ attr "data-sidebar-item" "true" ] [

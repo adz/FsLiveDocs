@@ -834,6 +834,7 @@ module SymbolLister =
                         System.AppContext.BaseDirectory
                     ]
                     @ getPackageReferenceDirectories projectPath
+                    @ ProjectReferences.referenceDirectories projectPath
                     |> List.distinct
                 
                 let model = 

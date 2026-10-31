@@ -1,4 +1,4 @@
-namespace FsLiveDocs.Runner
+namespace FsLiveDocs.Core
 
 open System
 open System.IO
