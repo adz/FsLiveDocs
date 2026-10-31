@@ -307,6 +307,7 @@ module internal DocAnalysis =
 
     let private analyzePagesWithProgress
         reportProgress
+        (onCheck: string * string option * EvaluatedProject -> unit)
         defaultPrelude
         (projectPaths: string list)
         (projectFingerprint: string)
@@ -314,23 +315,172 @@ module internal DocAnalysis =
         (pages: Page list)
         =
         let resolvedProjects = projectPaths |> List.map Path.GetFullPath
+        let pages =
+            pages
+            |> List.map (fun page -> { page with SelectedProject = Path.GetFullPath page.SelectedProject })
         let blocks = pages |> List.collect _.Blocks
         let packageFingerprint = Json.serialize packageCodec package
-        let contextFingerprint =
-            [ yield $"semantic-schema:{History.SemanticSchemaVersion}"
-              yield $"compiler-mvid:{typeof<EvaluatedProject>.Assembly.ManifestModule.ModuleVersionId}"
-              yield $"project-inputs:{projectFingerprint}"
-              yield $"prelude:{defaultPrelude}"
-              yield packageFingerprint
-              for page in pages do
-                  let framework = page.TargetFramework |> Option.defaultValue "<default>"
-                  yield $"set:{page.SetId}|project:{page.SelectedProject}|framework:{framework}|prelude:{page.Prelude}"
-
-                  for block in page.Blocks do
-                      yield $"block:{block.Id}|{block.SourceHash}" ]
+        let commonContext =
+            [ $"semantic-schema:{History.SemanticSchemaVersion}"
+              $"compiler-mvid:{typeof<EvaluatedProject>.Assembly.ManifestModule.ModuleVersionId}"
+              $"project-inputs:{projectFingerprint}"
+              packageFingerprint ]
             |> String.concat "\n"
+
+        // One content hash per path for the whole analysis. Shared references are read once even
+        // when many pages select the same project.
+        let fileIdentities = Collections.Generic.Dictionary<string, AnalysisCache.FileIdentity>(StringComparer.Ordinal)
+
+        let identityOf (path: string) : AnalysisCache.FileIdentity =
+            let fullPath = Path.GetFullPath path
+            match fileIdentities.TryGetValue fullPath with
+            | true, identity -> identity
+            | _ ->
+                let content =
+                    if File.Exists fullPath then
+                        use stream = File.OpenRead fullPath
+                        Security.Cryptography.SHA256.HashData stream
+                        |> Convert.ToHexString
+                        |> _.ToLowerInvariant()
+                        |> Some
+                    else
+                        None
+                let identity: AnalysisCache.FileIdentity = { FullPath = fullPath; ContentSha256 = content }
+                fileIdentities.[fullPath] <- identity
+                identity
+
+        let identityText (identity: AnalysisCache.FileIdentity) =
+            match identity.ContentSha256 with
+            | Some content -> identity.FullPath + "|present|" + content
+            | None -> identity.FullPath + "|missing"
+
+        let encode (tag: string) (value: string) =
+            let tagLength = Text.Encoding.UTF8.GetByteCount tag
+            let valueLength = Text.Encoding.UTF8.GetByteCount value
+            $"{tagLength}:{tag}{valueLength}:{value}"
+
+        let encodeOption (tag: string) (value: string option) =
+            match value with
+            | None -> encode (tag + "=none") ""
+            | Some value -> encode (tag + "=some") value
+
+        // The page-cache identity must cover the exact ordered compiler inputs after filename
+        // de-duplication, not project timestamps or a source approximation. First-wins reference
+        // order is observable, so references are deliberately not sorted.
+        let compilerInputHash (evaluated: EvaluatedProject) =
+            let parts = ResizeArray<string>()
+            parts.Add(encode "project-path" evaluated.ProjectPath)
+            parts.Add(encode "effective-framework" evaluated.TargetFramework)
+            parts.Add(encode "configuration" evaluated.Configuration)
+            parts.Add(encodeOption "language-version" evaluated.LanguageVersion)
+            for option in evaluated.OtherOptions do
+                parts.Add(encode "compiler-option" option)
+            for reference in evaluated.References do
+                parts.Add(encode "reference-path" reference)
+                parts.Add(encode "reference-file" (identityText (identityOf reference)))
+                // Tooltip extraction reads an adjacent XML file when it exists. A missing marker is
+                // part of the identity too, so adding or removing documentation invalidates it.
+                let xml = Path.ChangeExtension(reference, ".xml")
+                parts.Add(encode "reference-xml-path" xml)
+                parts.Add(encode "reference-xml-file" (identityText (identityOf xml)))
+            parts.Add(encode "compiler-assembly-mvid" (string typeof<FSharp.Compiler.CodeAnalysis.FSharpChecker>.Assembly.ManifestModule.ModuleVersionId))
+            parts.Add(encode "semantic-extractor-mvid" (string typeof<EvaluatedProject>.Assembly.ManifestModule.ModuleVersionId))
+            parts.Add(encode "semantic-schema" (string History.SemanticSchemaVersion))
+            String.concat "" parts |> sha256Text
+
+        let builtAssemblies =
+            resolvedProjects
+            |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+            |> List.filter (String.IsNullOrWhiteSpace >> not)
+
+        // A page that pins a target framework must compile against that framework's reference
+        // assemblies alone. Concatenating the default framework's references (netstandard2.1 beside
+        // net8.0, say) makes inline SRTP overloads resolve differently, so the framework's own
+        // built project assemblies are gathered here.
+        let frameworkBuiltAssemblies = Collections.Generic.Dictionary<string, string list>()
+
+        let builtAssembliesFor framework =
+            match frameworkBuiltAssemblies.TryGetValue framework with
+            | true, assemblies -> assemblies
+            | _ ->
+                let assemblies =
+                    resolvedProjects
+                    |> List.map (fun projectPath ->
+                        // A project may not declare the page's framework; its default build is
+                        // still compatible with it, so fall back rather than reject the page.
+                        let target =
+                            try
+                                (ProjectResolver.documentationBuildFor (Some framework) projectPath).TargetPath
+                            with :? InvalidOperationException ->
+                                None
+
+                        match target with
+                        | Some path -> path
+                        | None -> ProjectResolver.resolveAssemblyPath projectPath)
+                    |> List.filter (String.IsNullOrWhiteSpace >> not)
+                frameworkBuiltAssemblies.[framework] <- assemblies
+                assemblies
+
+        let evaluationFor (selectedProject, requestedFramework) =
+            match requestedFramework with
+            | None ->
+                let selected = DocumentationCompiler.evaluateProject selectedProject
+                let references =
+                    selected.References @ builtAssemblies
+                    |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
+                { selected with References = references }
+            | Some framework ->
+                let selected = DocumentationCompiler.evaluateProjectFor (Some framework) selectedProject
+                let references =
+                    selected.References @ builtAssembliesFor framework
+                    |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
+                { selected with References = references }
+
+        // Evaluation happens once per (normalized selected project, requested framework) group
+        // before either semantic cache lookup. This deliberately trades the old "no evaluation
+        // for unchanged pages" optimization for correctness: the exact compiler input snapshot
+        // is the only thing that can prove a cached page still means the same thing.
+        let evaluations =
+            pages
+            |> List.map (fun page -> page.SelectedProject, page.TargetFramework)
+            |> List.distinct
+            |> List.map (fun key -> key, evaluationFor key)
+            |> Map.ofList
+
+        let evaluatedFor (page: Page) = evaluations |> Map.find (page.SelectedProject, page.TargetFramework)
+
+        let pageEntries =
+            pages
+            |> List.map (fun page ->
+                let evaluation = evaluatedFor page
+                let context: AnalysisCache.PageCompilerContext =
+                    { SetId = page.SetId
+                      SelectedProject = page.SelectedProject
+                      RequestedFramework = page.TargetFramework
+                      EffectiveFramework = evaluation.TargetFramework
+                      Configuration = evaluation.Configuration
+                      CompilerInputHash = compilerInputHash evaluation }
+                let blockIdentities =
+                    page.Blocks |> List.map (fun block -> $"{block.Id}|{block.SourceHash}")
+                let key =
+                    AnalysisCache.pageKey
+                        commonContext
+                        page.SetId
+                        page.SelectedProject
+                        page.TargetFramework
+                        context.CompilerInputHash
+                        page.SourcePath
+                        page.Prelude
+                        blockIdentities
+                page, context, key)
+
+        let orderedPageKeys =
+            pageEntries
+            |> List.sortBy (fun (page, _, _) -> page.SetId, page.SourcePath)
+            |> List.map (fun (_, _, key) -> key)
+        let artifactKey = AnalysisCache.artifactKey commonContext defaultPrelude orderedPageKeys
         let cacheDirectory = Path.Combine(".livedocs", "cache")
-        let cachePath = Path.Combine(cacheDirectory, sha256Text contextFingerprint + ".semantic.json") |> Path.GetFullPath
+        let cachePath = Path.Combine(cacheDirectory, artifactKey + ".semantic.json") |> Path.GetFullPath
         let cachedArtifact =
             let work =
                 flow {
@@ -352,28 +502,11 @@ module internal DocAnalysis =
                 // The complete artifact above is the fastest no-change path. On an incremental
                 // miss, retain locality by loading each page independently: an edit to one guide
                 // must not make every other guide cross the compiler seam again.
-                let pageCommonContext =
-                    [ $"semantic-schema:{History.SemanticSchemaVersion}"
-                      $"compiler-mvid:{typeof<EvaluatedProject>.Assembly.ManifestModule.ModuleVersionId}"
-                      $"project-inputs:{projectFingerprint}"
-                      packageFingerprint ]
-                    |> String.concat "\n"
-
-                let pageCachePath page =
-                    let framework = page.TargetFramework |> Option.defaultValue "<default>"
-                    let blockIdentities =
-                        page.Blocks |> List.map (fun block -> $"{block.Id}|{block.SourceHash}")
-                    let key =
-                        AnalysisCache.pageKey
-                            pageCommonContext
-                            page.Relative
-                            framework
-                            page.Prelude
-                            blockIdentities
+                let pageCachePath key =
                     Path.Combine(cacheDirectory, key + ".semantic-page.json") |> Path.GetFullPath
 
-                let tryReadPage page =
-                    let path = pageCachePath page
+                let tryReadPage key =
+                    let path = pageCachePath key
                     let work =
                         flow {
                             let! exists = FileSystem.fileExists path
@@ -386,68 +519,21 @@ module internal DocAnalysis =
                         }
                     Run.orRaise FileSystemError.describe $"Could not read semantic page cache {path}" work
 
-                let pageStates = pages |> List.map (fun page -> page, tryReadPage page)
-                let cachedPages = pageStates |> List.choose snd
-                let missingPages = pageStates |> List.choose (fun (page, cached) -> if cached.IsNone then Some page else None)
+                let pageStates = pageEntries |> List.map (fun (page, context, key) -> page, context, key, tryReadPage key)
+                let cachedPages = pageStates |> List.choose (fun (_, _, _, cached) -> cached)
+                let missingPages = pageStates |> List.choose (fun (page, context, key, cached) -> if cached.IsNone then Some(page, context, key) else None)
                 let mutable completed = cachedPages.Length
                 reportProgress "Checking documentation pages" completed pages.Length
 
-                // Only projects selected by cache misses need compiler evaluation. This is the
-                // key incremental property: unchanged pages do not even require an FCS project.
-                let selectedProjects = missingPages |> List.map _.SelectedProject |> List.distinct
-                let evaluated = selectedProjects |> List.map (fun path -> path, DocumentationCompiler.evaluateProject path)
-                let builtAssemblies =
-                    resolvedProjects
-                    |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
-                    |> List.filter (String.IsNullOrWhiteSpace >> not)
                 let packageByAssembly =
                     resolvedProjects
                     |> List.map (fun projectPath ->
                         Path.GetFileNameWithoutExtension(ProjectResolver.resolveAssemblyPath projectPath), SymbolLister.packageName projectPath)
                     |> Map.ofList
                 let packageForAssembly assembly = Map.tryFind assembly packageByAssembly
-                // References must never be unioned across frameworks. A page without a pinned
-                // targetFramework compiles against its own selected project's references, just as
-                // the pinned path below does.
-                let evaluatedProjects =
-                    evaluated
-                    |> List.map (fun (path, project) ->
-                        let references =
-                            project.References @ builtAssemblies
-                            |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
-                        path, { project with References = references })
-                    |> Map.ofList
 
-                // A page that pins a target framework must compile against that framework's
-                // reference assemblies alone. Concatenating the default framework's references
-                // (netstandard2.1 beside net8.0, say) makes inline SRTP overloads resolve
-                // differently, so the framework's own built project assemblies are gathered here.
-                let frameworkBuiltAssemblies = Collections.Generic.Dictionary<string, string list>()
-
-                let builtAssembliesFor framework =
-                    match frameworkBuiltAssemblies.TryGetValue framework with
-                    | true, assemblies -> assemblies
-                    | _ ->
-                        let assemblies =
-                            resolvedProjects
-                            |> List.map (fun projectPath ->
-                                // A project may not declare the page's framework; its default build is
-                                // still compatible with it, so fall back rather than reject the page.
-                                let target =
-                                    try
-                                        (ProjectResolver.documentationBuildFor (Some framework) projectPath).TargetPath
-                                    with :? InvalidOperationException ->
-                                        None
-
-                                match target with
-                                | Some path -> path
-                                | None -> ProjectResolver.resolveAssemblyPath projectPath)
-                            |> List.filter (String.IsNullOrWhiteSpace >> not)
-                        frameworkBuiltAssemblies.[framework] <- assemblies
-                        assemblies
-
-                let writePageCache page artifact =
-                    let path = pageCachePath page
+                let writePageCache key page artifact =
+                    let path = pageCachePath key
                     let work =
                         flow {
                             do! FileSystem.createDirectory (Path.GetDirectoryName path)
@@ -455,34 +541,25 @@ module internal DocAnalysis =
                         }
                     Run.orRaise FileSystemError.describe $"Could not write semantic page cache {path}" work
 
-                let evaluationFor (selectedProject, targetFramework) =
-                    match targetFramework with
-                    | None -> evaluatedProjects.[selectedProject]
-                    | Some framework ->
-                        let selected = DocumentationCompiler.evaluateProjectFor (Some framework) selectedProject
-                        let references =
-                            selected.References @ builtAssembliesFor framework
-                            |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
-                        { selected with References = references }
-
                 let projectGroups =
                     missingPages
-                    |> List.groupBy (fun page -> page.SelectedProject, page.TargetFramework)
+                    |> List.groupBy (fun (page, _, _) -> page.SelectedProject, page.TargetFramework)
 
                 // One generated F# project amortizes reference imports and lets FCS reuse its
                 // project graph. Shards bound the check-result graph retained before semantic
                 // records are projected and persisted page by page.
                 let checkedPages =
                     [ for projectKey, projectPages in projectGroups do
-                          let selectedEvaluation = evaluationFor projectKey
+                          let selectedEvaluation = evaluations |> Map.find projectKey
                           for shard in projectPages |> List.chunkBySize 32 do
                               let requests =
-                                  shard |> List.map (fun page -> page.Relative, page.Prelude, page.Blocks)
+                                  shard |> List.map (fun (page, _, _) -> page.Relative, page.Prelude, page.Blocks)
+                              onCheck (fst projectKey, snd projectKey, selectedEvaluation)
                               let checkedByPage =
                                   DocumentationCompiler.checkPagesWithProject selectedEvaluation requests
                                   |> Async.RunSynchronously
 
-                              for page in shard do
+                              for page, _, key in shard do
                                   let checkedUnits = checkedByPage |> Map.tryFind page.Relative |> Option.defaultValue []
                                   let errors =
                                       checkedUnits
@@ -502,7 +579,7 @@ module internal DocAnalysis =
                                   let semantic =
                                       if errors.IsEmpty then
                                           let artifact = SemanticExtractor.artifact packageForAssembly (checkedUnits @ transcriptUnits)
-                                          writePageCache page artifact
+                                          writePageCache key page artifact
                                           Some artifact
                                       else None
                                   completed <- completed + 1
@@ -540,19 +617,23 @@ module internal DocAnalysis =
             pages projectPaths package
             |> List.map (fun page -> { page with Prelude = prelude })
 
-        analyzePagesWithProgress reportProgress prelude projectPaths projectFingerprint package legacyPages
+        analyzePagesWithProgress reportProgress (fun _ -> ()) prelude projectPaths projectFingerprint package legacyPages
 
-    let analyzeDocsSetsWithProgress reportProgress (sets: DocsSet list) projectPaths projectFingerprint package =
+    let analyzeDocsSetsWithObserver reportProgress onCheck (sets: DocsSet list) projectPaths projectFingerprint package =
         let fallbackPrelude =
             sets |> List.tryHead |> Option.bind _.FSharpPrelude |> Option.defaultValue ""
 
         analyzePagesWithProgress
             reportProgress
+            onCheck
             fallbackPrelude
             projectPaths
             projectFingerprint
             package
             (pagesForDocsSets sets projectPaths package)
+
+    let analyzeDocsSetsWithProgress reportProgress (sets: DocsSet list) projectPaths projectFingerprint package =
+        analyzeDocsSetsWithObserver reportProgress (fun _ -> ()) sets projectPaths projectFingerprint package
 
     let analyze prelude projectPaths projectFingerprint package =
         analyzeWithProgress (fun _ _ _ -> ()) prelude projectPaths projectFingerprint package

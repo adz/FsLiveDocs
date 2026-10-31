@@ -595,31 +595,31 @@ module IntegrationTests =
             Path.Combine(baseDir, "Library.fs"),
             "namespace FrameworkReferenceOnly\n\nopen System.Threading.Tasks\nopen Microsoft.AspNetCore.Http\n\n/// <summary>Lowers a codec to an <see cref=\"T:Microsoft.AspNetCore.Http.IResult\" />.</summary>\ntype Result(codec: int) =\n    interface IResult with\n        member _.ExecuteAsync(context: HttpContext) = Task.CompletedTask\n\n/// <summary>Exposes the ASP.NET Core request shape.</summary>\ntype Env<'app> =\n    { AppEnvironment: 'app\n      Request: HttpRequest }\n\nmodule Api =\n    /// <summary>Builds <see cref=\"T:Microsoft.AspNetCore.Http.HttpRequest\" /> values.</summary>\n    let result (request: HttpRequest) : IResult = Results.Ok()\n\n    /// <summary>Projects a request.</summary>\n    let raw (projection: HttpRequest -> 'input) : 'input = Unchecked.defaultof<'input>\n")
 
-        runProcess baseDir "dotnet" [ "build"; project; "--nologo" ] |> ignore
+        try
+            runProcess baseDir "dotnet" [ "build"; project; "--nologo" ] |> ignore
 
-        let! package = SymbolLister.extractFromProject project
+            let! package = SymbolLister.extractFromProject project
 
-        let rec allEntities (entities: EntityModel list) =
-            [ for entity in entities do
-                  yield entity
-                  yield! allEntities entity.Entities ]
+            let rec allEntities (entities: EntityModel list) =
+                [ for entity in entities do
+                      yield entity
+                      yield! allEntities entity.Entities ]
 
-        let entities = package.Entities |> allEntities
-        let ids = entities |> List.map _.Id
-        Assert.Contains(ids, fun id -> id.StartsWith("FrameworkReferenceOnly", StringComparison.Ordinal))
-        Assert.DoesNotContain(ids, fun id -> id.StartsWith("Microsoft.", StringComparison.Ordinal))
-        Assert.DoesNotContain(ids, fun id -> id.StartsWith("System.", StringComparison.Ordinal))
-        let result = entities |> List.find (fun entity -> entity.Id = "FrameworkReferenceOnly.Api")
-        let memberInfo = result.Members |> List.find (fun memberInfo -> memberInfo.Id = "FrameworkReferenceOnly.Api.result")
-        Assert.Contains(memberInfo.Parameters, fun parameter -> parameter.Name = "request" && parameter.Type = "HttpRequest")
-        Assert.Equal("IResult", memberInfo.ReturnType)
+            let entities = package.Entities |> allEntities
+            let ids = entities |> List.map _.Id
+            Assert.Contains(ids, fun id -> id.StartsWith("FrameworkReferenceOnly", StringComparison.Ordinal))
+            Assert.DoesNotContain(ids, fun id -> id.StartsWith("Microsoft.", StringComparison.Ordinal))
+            Assert.DoesNotContain(ids, fun id -> id.StartsWith("System.", StringComparison.Ordinal))
+            let result = entities |> List.find (fun entity -> entity.Id = "FrameworkReferenceOnly.Api")
+            let memberInfo = result.Members |> List.find (fun memberInfo -> memberInfo.Id = "FrameworkReferenceOnly.Api.result")
+            Assert.Contains(memberInfo.Parameters, fun parameter -> parameter.Name = "request" && parameter.Type = "HttpRequest")
+            Assert.Equal("IResult", memberInfo.ReturnType)
+        finally
+            if Directory.Exists baseDir then Directory.Delete(baseDir, true)
     }
 
     [<Fact>]
-    let ``unpinned documentation pages use their own target framework references`` () = async {
-        // A net8-only project evaluated before a netstandard2.1 page used to union both
-        // frameworks' System.Runtime references into that page. The page then resolved
-        // System.IO against net8's facade and lost DirectoryInfo.
+    let ``unpinned documentation pages use their exact selected compiler references`` () = async {
         let root = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", "UnpinnedFrameworks-" + Guid.NewGuid().ToString("N"))
         let docs = Path.Combine(root, "docs")
         Directory.CreateDirectory(docs) |> ignore
@@ -639,7 +639,6 @@ module IntegrationTests =
             Directory.SetCurrentDirectory root
             let first = writeProject "First" "netstandard2.1"
             let second = writeProject "Second" "net8.0"
-            // Evaluate the net8 project first, but leave the guide unpinned so it selects First.
             File.WriteAllText(
                 Path.Combine(docs, "00-pinned.md"),
                 String.concat "\n" [ "---"; $"project: {second}"; "---"; "# Pinned"; ""; "```fsharp"; "let value = 1"; "```"; "" ])
@@ -666,9 +665,57 @@ module IntegrationTests =
                       { Name = "Second"; EntityIds = []; Description = None } ]
                   Organization = ApiOrganizationModel.empty }
 
-            let analysis = DocAnalysis.analyzeDocsSets [ set ] [ first; second ] "" package
+            let builtAssemblies =
+                [ first; second ]
+                |> List.map (ProjectResolver.resolve >> _.AssemblyPath)
+                |> List.filter (String.IsNullOrWhiteSpace >> not)
+            let builtAssembliesFor framework =
+                [ first; second ]
+                |> List.map (fun projectPath ->
+                    let target =
+                        try (ProjectResolver.documentationBuildFor (Some framework) projectPath).TargetPath
+                        with :? InvalidOperationException -> None
+                    target |> Option.defaultWith (fun () -> ProjectResolver.resolveAssemblyPath projectPath))
+                |> List.filter (String.IsNullOrWhiteSpace >> not)
+            let expectedReferences requested projectPath =
+                let project =
+                    match requested with
+                    | None -> DocumentationCompiler.evaluateProject projectPath
+                    | Some framework -> DocumentationCompiler.evaluateProjectFor (Some framework) projectPath
+                let additions =
+                    match requested with
+                    | None -> builtAssemblies
+                    | Some framework -> builtAssembliesFor framework
+                (project.References @ additions)
+                |> List.distinctBy (Path.GetFileName >> _.ToUpperInvariant())
+
+            let events = ResizeArray<string * string option * EvaluatedProject>()
+            let analysis =
+                DocAnalysis.analyzeDocsSetsWithObserver
+                    (fun _ _ _ -> ())
+                    (fun event -> events.Add event)
+                    [ set ]
+                    [ first; second ]
+                    ""
+                    package
 
             Assert.Empty analysis.Errors
+            Assert.NotEmpty events
+            Assert.Equal(Path.GetFullPath second, events.[0] |> fun (selected, _, _) -> selected)
+            Assert.Equal(None, events.[0] |> fun (_, requested, _) -> requested)
+            let selected, requested, evaluated = events |> Seq.find (fun (selected, _, _) -> selected = Path.GetFullPath first)
+            Assert.Equal(None, requested)
+            let expected = expectedReferences requested selected
+            Assert.Equal<string list>(expected, evaluated.References)
+
+            let systemRuntime (references: string list) =
+                references
+                |> List.filter (fun path -> Path.GetFileName(path).Equals("System.Runtime.dll", StringComparison.OrdinalIgnoreCase))
+            let firstRuntime = systemRuntime (DocumentationCompiler.evaluateProject first).References
+            let secondRuntime = systemRuntime (DocumentationCompiler.evaluateProjectFor (Some "net8.0") second).References
+            Assert.NotEqual<string list>(firstRuntime, secondRuntime)
+            Assert.Contains(firstRuntime, fun path -> evaluated.References |> List.contains path)
+            Assert.DoesNotContain(secondRuntime, fun path -> evaluated.References |> List.contains path)
         finally
             Directory.SetCurrentDirectory originalDirectory
             if Directory.Exists root then Directory.Delete(root, true)

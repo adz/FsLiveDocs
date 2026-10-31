@@ -12,6 +12,7 @@ open FsLiveDocs.Core
 type EvaluatedProject = {
     ProjectPath: string
     TargetFramework: string
+    Configuration: string
     References: string list
     Defines: string list
     LanguageVersion: string option
@@ -71,7 +72,7 @@ module DocumentationCompiler =
                 fullPath
                 (build.Arguments
                  @ [ "-target:ResolveReferences"
-                     "-getProperty:TargetFramework,TargetPath,LangVersion,DefineConstants,NoWarn,WarningsAsErrors"
+                     "-getProperty:TargetFramework,Configuration,TargetPath,LangVersion,DefineConstants,NoWarn,WarningsAsErrors"
                      "-getItem:ReferencePath" ])
         let property name = tryProperty json "Properties" |> Option.bind (fun properties -> readString properties name)
         let references =
@@ -101,6 +102,7 @@ module DocumentationCompiler =
         {
             ProjectPath = fullPath
             TargetFramework = property "TargetFramework" |> Option.defaultValue ""
+            Configuration = property "Configuration" |> Option.defaultValue ""
             References = references
             Defines = defines
             LanguageVersion = property "LangVersion"

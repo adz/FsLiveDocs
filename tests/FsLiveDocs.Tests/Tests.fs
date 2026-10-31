@@ -53,16 +53,50 @@ module private Codecs =
 
 module AnalysisCacheTests =
 
+    let private pageKeyWith setId project framework compiler source prelude blocks =
+        AnalysisCache.pageKey "compiler|project|package" setId project framework compiler source prelude blocks
+
+    let private pageKey () =
+        pageKeyWith "docs" "/work/A.fsproj" (Some "net10.0") "compiler-input" "first.md" "open Example" [ "first#0|aaa" ]
+
     [<Fact>]
     let ``changing one page preserves another page semantic cache identity`` () =
-        let common = "compiler|project|package"
-        let first = AnalysisCache.pageKey common "docs/first.md" "net10.0" "open Example" [ "first#0|aaa" ]
-        let second = AnalysisCache.pageKey common "docs/second.md" "net10.0" "open Example" [ "second#0|bbb" ]
-        let changedFirst = AnalysisCache.pageKey common "docs/first.md" "net10.0" "open Example" [ "first#0|changed" ]
-        let unchangedSecond = AnalysisCache.pageKey common "docs/second.md" "net10.0" "open Example" [ "second#0|bbb" ]
+        let first = pageKey ()
+        let second = pageKeyWith "docs" "/work/A.fsproj" (Some "net10.0") "compiler-input" "second.md" "open Example" [ "second#0|bbb" ]
+        let changedFirst = pageKeyWith "docs" "/work/A.fsproj" (Some "net10.0") "compiler-input" "first.md" "open Example" [ "first#0|changed" ]
+        let unchangedSecond = pageKeyWith "docs" "/work/A.fsproj" (Some "net10.0") "compiler-input" "second.md" "open Example" [ "second#0|bbb" ]
 
         Assert.False(String.Equals(first, changedFirst, StringComparison.Ordinal))
         Assert.Equal<string>(second, unchangedSecond)
+
+    [<Fact>]
+    let ``page identity covers set project framework compiler input prelude and source`` () =
+        let baseline = pageKey ()
+        let mutations =
+            [ pageKeyWith "other-docs" "/work/A.fsproj" (Some "net10.0") "compiler-input" "first.md" "open Example" [ "first#0|aaa" ]
+              pageKeyWith "docs" "/work/B.fsproj" (Some "net10.0") "compiler-input" "first.md" "open Example" [ "first#0|aaa" ]
+              pageKeyWith "docs" "/work/A.fsproj" (Some "net8.0") "compiler-input" "first.md" "open Example" [ "first#0|aaa" ]
+              pageKeyWith "docs" "/work/A.fsproj" None "compiler-input" "first.md" "open Example" [ "first#0|aaa" ]
+              pageKeyWith "docs" "/work/A.fsproj" (Some "net10.0") "different-compiler-input" "first.md" "open Example" [ "first#0|aaa" ]
+              pageKeyWith "docs" "/work/A.fsproj" (Some "net10.0") "compiler-input" "other.md" "open Example" [ "first#0|aaa" ]
+              pageKeyWith "docs" "/work/A.fsproj" (Some "net10.0") "compiler-input" "first.md" "" [ "first#0|aaa" ]
+              pageKeyWith "docs" "/work/A.fsproj" (Some "net10.0") "compiler-input" "first.md" "open Example" [ "first#0|changed" ]
+              pageKeyWith "docs" "/work/A.fsproj" (Some "net10.0") "compiler-input" "first.md" "open Example" [] ]
+        Assert.All(mutations, fun mutation -> Assert.NotEqual<string>(baseline, mutation))
+        Assert.Equal<string>(baseline, pageKey ())
+        Assert.NotEqual<string>(
+            pageKeyWith "docs" "/work/A.fsproj" None "compiler-input" "first.md" "open Example" [ "first#0|aaa" ],
+            pageKeyWith "docs" "/work/A.fsproj" (Some "") "compiler-input" "first.md" "open Example" [ "first#0|aaa" ])
+
+    [<Fact>]
+    let ``artifact identity is derived from ordered page identities`` () =
+        let first = pageKey ()
+        let second = pageKeyWith "docs" "/work/A.fsproj" (Some "net10.0") "compiler-input" "second.md" "open Example" [ "second#0|bbb" ]
+        let baseline = AnalysisCache.artifactKey "common" "default-prelude" [ first; second ]
+        Assert.Equal<string>(baseline, AnalysisCache.artifactKey "common" "default-prelude" [ first; second ])
+        Assert.NotEqual<string>(baseline, AnalysisCache.artifactKey "common" "other-prelude" [ first; second ])
+        Assert.NotEqual<string>(baseline, AnalysisCache.artifactKey "common" "default-prelude" [ second; first ])
+        Assert.NotEqual<string>(baseline, AnalysisCache.artifactKey "common" "default-prelude" [ first ])
 
     [<Fact>]
     let ``documentation changes preserve project extraction identity but invalidate verification`` () =
