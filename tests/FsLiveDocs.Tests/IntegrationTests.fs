@@ -7,6 +7,7 @@ open FsLiveDocs.Core
 open FsLiveDocs.Cli
 open FsLiveDocs.Runner
 
+[<Collection("Working directory")>]
 module IntegrationTests =
 
     let private coreProject = ProjectResolver.resolveProjectPath "FsLiveDocs.Core.fsproj"
@@ -616,12 +617,13 @@ module IntegrationTests =
 
     [<Fact>]
     let ``unpinned documentation pages use their own target framework references`` () = async {
-        // A net8-only project added to a set whose first project targets netstandard2.1 used to
-        // union both frameworks' System.Runtime references into every unpinned page. The page
-        // then resolved System.IO against net8's facade and lost DirectoryInfo.
+        // A net8-only project evaluated before a netstandard2.1 page used to union both
+        // frameworks' System.Runtime references into that page. The page then resolved
+        // System.IO against net8's facade and lost DirectoryInfo.
         let root = Path.Combine(Path.GetTempPath(), "FsLiveDocsTests", "UnpinnedFrameworks-" + Guid.NewGuid().ToString("N"))
         let docs = Path.Combine(root, "docs")
         Directory.CreateDirectory(docs) |> ignore
+        let originalDirectory = Directory.GetCurrentDirectory()
         let writeProject name framework =
             let directory = Path.Combine(root, name)
             Directory.CreateDirectory(directory) |> ignore
@@ -633,35 +635,44 @@ module IntegrationTests =
             runProcess directory "dotnet" [ "build"; project; "--nologo" ] |> ignore
             project
 
-        let first = writeProject "First" "net8.0"
-        let second = writeProject "Second" "netstandard2.1"
-        File.WriteAllText(
-            Path.Combine(docs, "guide.md"),
-            String.concat "\n" [ "# Guide"; ""; "```fsharp"; "open System.IO"; "let info : DirectoryInfo = DirectoryInfo(\".\")"; "```"; "" ])
+        try
+            Directory.SetCurrentDirectory root
+            let first = writeProject "First" "netstandard2.1"
+            let second = writeProject "Second" "net8.0"
+            // Evaluate the net8 project first, but leave the guide unpinned so it selects First.
+            File.WriteAllText(
+                Path.Combine(docs, "00-pinned.md"),
+                String.concat "\n" [ "---"; $"project: {second}"; "---"; "# Pinned"; ""; "```fsharp"; "let value = 1"; "```"; "" ])
+            File.WriteAllText(
+                Path.Combine(docs, "guide.md"),
+                String.concat "\n" [ "# Guide"; ""; "```fsharp"; "open System.IO"; "let info : DirectoryInfo = DirectoryInfo(\".\")"; "```"; "" ])
 
-        let source = Path.GetRelativePath(Directory.GetCurrentDirectory(), docs).Replace('\\', '/')
-        let set =
-            { Id = "docs"
-              Title = "Docs"
-              Source = source
-              Path = ""
-              Projects = [ first; second ]
-              IsDefault = true
-              Sidebar = true
-              Api = true
-              FSharpPrelude = None }
-        let package : PackageModel =
-            { Version = "1.0"
-              Entities = []
-              Scenarios = []
-              Packages =
-                [ { Name = "First"; EntityIds = []; Description = None }
-                  { Name = "Second"; EntityIds = []; Description = None } ]
-              Organization = ApiOrganizationModel.empty }
+            let set =
+                { Id = "docs"
+                  Title = "Docs"
+                  Source = "docs"
+                  Path = ""
+                  Projects = [ first; second ]
+                  IsDefault = true
+                  Sidebar = true
+                  Api = true
+                  FSharpPrelude = None }
+            let package : PackageModel =
+                { Version = "1.0"
+                  Entities = []
+                  Scenarios = []
+                  Packages =
+                    [ { Name = "First"; EntityIds = []; Description = None }
+                      { Name = "Second"; EntityIds = []; Description = None } ]
+                  Organization = ApiOrganizationModel.empty }
 
-        let analysis = DocAnalysis.analyzeDocsSets [ set ] [ first; second ] "" package
+            let analysis = DocAnalysis.analyzeDocsSets [ set ] [ first; second ] "" package
 
-        Assert.Empty analysis.Errors
+            Assert.Empty analysis.Errors
+        finally
+            Directory.SetCurrentDirectory originalDirectory
+            if Directory.Exists root then Directory.Delete(root, true)
+
     }
 
     [<Fact>]
