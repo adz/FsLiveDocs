@@ -624,17 +624,20 @@ module IntegrationTests =
         let library = Path.Combine(root, "External.Library")
         let consumer = Path.Combine(root, "Consumer")
         let feed = Path.Combine(root, "feed")
+        // A unique version prevents a previously cached External.Library/1.0.0 from standing in
+        // for the package packed by this test.
+        let packageVersion = "1.0." + string (DateTimeOffset.UtcNow.ToUnixTimeSeconds())
         Directory.CreateDirectory(library) |> ignore
         Directory.CreateDirectory(consumer) |> ignore
         Directory.CreateDirectory(feed) |> ignore
         let libraryProject = Path.Combine(library, "External.Library.fsproj")
         File.WriteAllText(
             libraryProject,
-            """<Project Sdk="Microsoft.NET.Sdk">
+            $"""<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <PackageId>External.Library</PackageId>
-    <Version>1.0.0</Version>
+    <Version>{packageVersion}</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
@@ -647,14 +650,14 @@ module IntegrationTests =
         let consumerProject = Path.Combine(consumer, "Consumer.fsproj")
         File.WriteAllText(
             consumerProject,
-            """<Project Sdk="Microsoft.NET.Sdk">
+            $"""<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Library.fs" />
-    <PackageReference Include="External.Library" Version="1.0.0" />
+    <PackageReference Include="External.Library" Version="{packageVersion}" />
   </ItemGroup>
 </Project>""")
         File.WriteAllText(

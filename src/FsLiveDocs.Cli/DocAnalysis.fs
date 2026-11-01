@@ -444,22 +444,27 @@ module internal DocAnalysis =
             pages
             |> List.map (fun page -> page.SelectedProject, page.TargetFramework)
             |> List.distinct
-            |> List.map (fun key -> key, evaluationFor key)
+            |> List.map (fun key ->
+                let evaluation = evaluationFor key
+                // Hash each grouped evaluation once; reference lists can be large and every page
+                // that selects the same project/framework shares the same compiler snapshot.
+                key, (evaluation, compilerInputHash evaluation))
             |> Map.ofList
 
-        let evaluatedFor (page: Page) = evaluations |> Map.find (page.SelectedProject, page.TargetFramework)
+        let evaluatedFor (page: Page) =
+            evaluations |> Map.find (page.SelectedProject, page.TargetFramework)
 
         let pageEntries =
             pages
             |> List.map (fun page ->
-                let evaluation = evaluatedFor page
+                let evaluation, inputHash = evaluatedFor page
                 let context: AnalysisCache.PageCompilerContext =
                     { SetId = page.SetId
                       SelectedProject = page.SelectedProject
                       RequestedFramework = page.TargetFramework
                       EffectiveFramework = evaluation.TargetFramework
                       Configuration = evaluation.Configuration
-                      CompilerInputHash = compilerInputHash evaluation }
+                      CompilerInputHash = inputHash }
                 let blockIdentities =
                     page.Blocks |> List.map (fun block -> $"{block.Id}|{block.SourceHash}")
                 let key =
@@ -550,7 +555,7 @@ module internal DocAnalysis =
                 // records are projected and persisted page by page.
                 let checkedPages =
                     [ for projectKey, projectPages in projectGroups do
-                          let selectedEvaluation = evaluations |> Map.find projectKey
+                          let selectedEvaluation = evaluations |> Map.find projectKey |> fst
                           for shard in projectPages |> List.chunkBySize 32 do
                               let requests =
                                   shard |> List.map (fun (page, _, _) -> page.Relative, page.Prelude, page.Blocks)

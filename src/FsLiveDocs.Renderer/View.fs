@@ -261,7 +261,6 @@ module View =
     /// organization metadata; child edges come only from the surviving owned entities in `entities`.
     type private SidebarProjection =
         { FamilyOf: EntityModel -> string
-          MembersByFamily: Map<string, EntityModel list>
           FirstMemberByFamily: Map<string, EntityModel>
           ChildFamilies: Map<string, (string * EntityModel) list>
           Descendants: Map<string, Set<string>> }
@@ -272,7 +271,6 @@ module View =
             |> Option.map _.Id
             |> Option.defaultValue entity.Id
         let all = Presentation.flattenEntities entities
-        let membersByFamily = all |> List.groupBy familyOf |> Map.ofList
         let firstMemberByFamily =
             all
             |> List.fold (fun (families: Map<string, EntityModel>) entity ->
@@ -288,6 +286,9 @@ module View =
                     entity.Entities
                     |> List.fold (fun (seen: Set<string>, additions: (string * EntityModel) list) child ->
                         let childFamily = familyOf child
+                        // A companion type and module share one family. An entity whose child maps
+                        // back to that same family is the intentional companion collapse, not a
+                        // cycle in the transient navigation graph.
                         if childFamily = family || seen.Contains childFamily then
                             seen, additions
                         else
@@ -295,6 +296,30 @@ module View =
                     |> snd
                     |> List.rev
                 families.Add(family, existing @ additions)) Map.empty
+        let validateAcyclic () =
+            let rec visit (path: string list) (active: Set<string>) (visited: Set<string>) family =
+                if active.Contains family then
+                    let pathText = String.concat " -> " (List.rev path @ [ family ])
+                    invalidOp $"API sidebar family graph contains a cycle: {pathText}."
+                elif visited.Contains family then
+                    visited
+                else
+                    let next =
+                        childFamilies
+                        |> Map.tryFind family
+                        |> Option.defaultValue []
+                        |> List.map fst
+                    let visited =
+                        next
+                        |> List.fold (fun seen child -> visit (family :: path) (active.Add family) seen child) visited
+                    visited.Add family
+            firstMemberByFamily
+            |> Map.toList
+            |> List.fold (fun visited (family, _) -> visit [] Set.empty visited family) Set.empty
+            |> ignore
+        // Root elimination cannot run on a cyclic graph: every candidate is reachable from another
+        // one, so it would silently remove them all instead of asking for a renderable input.
+        validateAcyclic ()
         let descendants =
             let rec reachable (family: string) =
                 let rec walk (seen: Set<string>) (pending: string list) =
@@ -315,7 +340,6 @@ module View =
             |> List.map (fun (family, _) -> family, reachable family)
             |> Map.ofList
         { FamilyOf = familyOf
-          MembersByFamily = membersByFamily
           FirstMemberByFamily = firstMemberByFamily
           ChildFamilies = childFamilies
           Descendants = descendants }
