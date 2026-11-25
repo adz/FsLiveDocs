@@ -4,7 +4,7 @@ open Axial
 open Axial.Console
 open Axial.FileSystem
 open Axial.HttpClient
-open Axial.PlatformService
+open Axial.Configuration
 open Axial.Process
 
 /// The one live environment every effect-migrated FsLiveDocs module runs its Flows against.
@@ -14,15 +14,15 @@ type LiveEnvironment =
     { FileSystem: IFileSystem
       Process: IProcess
       Http: IHttp
-      EnvironmentVariables: IEnvironmentVariables }
+      Config: IConfig }
     interface IHasFileSystem with
         member this.FileSystem = this.FileSystem
     interface IHasProcess with
         member this.Process = this.Process
     interface IHasHttp with
         member this.Http = this.Http
-    interface IHasEnvironmentVariables with
-        member this.EnvironmentVariables = this.EnvironmentVariables
+    interface IHasConfig with
+        member this.Config = this.Config
 
 [<RequireQualifiedAccess>]
 module LiveEnvironment =
@@ -31,8 +31,14 @@ module LiveEnvironment =
     // pattern) exhausts sockets under load.
     let private sharedHttpClient = new System.Net.Http.HttpClient()
 
+    // The process environment, read once when the tool starts.
+    let private environmentConfig : IConfig =
+        match Config.loadData [ ConfigSource.environment None ] |> Flow.run () with
+        | Exit.Success config -> config
+        | Exit.Failure cause -> invalidOp $"Could not read the process environment: {cause}"
+
     let instance : LiveEnvironment =
         { FileSystem = FileSystem.live
-          Process = Process.live Clock.live FileSystem.live Console.live
-          Http = Http.live Clock.live sharedHttpClient
-          EnvironmentVariables = EnvironmentVariables.live }
+          Process = Process.live FileSystem.live Console.live
+          Http = Http.live sharedHttpClient
+          Config = environmentConfig }

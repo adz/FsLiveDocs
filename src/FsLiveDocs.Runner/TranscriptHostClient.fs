@@ -168,13 +168,14 @@ module TranscriptHostClient =
 
             let specification =
                 Process.commandArgs (dotnetHost ()) [ "exec"; worker ]
-                |> Process.stdin (InputSource.Text request)
-                |> Process.stderr (OutputTarget.CaptureTail stderrTailBytes)
+                |> Process.stdinFromText request
+                |> Process.captureStderrTail stderrTailBytes
                 |> Process.encoding (UTF8Encoding false)
                 // The worker exits 1 after writing a response that explains what failed.
                 |> Process.successCodes [ 0; 1 ]
                 |> Process.timeout limit
-                |> Process.capture
+                |> Process.captureAll
+                |> Process.toFlow
 
             match specification |> Flow.run LiveEnvironment.instance with
             | Exit.Success result ->
@@ -198,6 +199,8 @@ module TranscriptHostClient =
                     List.ofArray (Array.zip response.Outputs response.Timings)
             | Exit.Failure(Cause.Fail(ProcessError.StageFailed stageFailure)) ->
                 failure $"exit code {stageFailure.Result.ExitCode}." stageFailure.Result.StdErr
+            | Exit.Failure(Cause.Fail(ProcessError.StageTimedOut timedOut)) ->
+                failure $"it timed out after {timedOut.Timeout} and was stopped." ""
             | Exit.Failure(Cause.Fail processError) -> failure (ProcessError.describe processError) ""
             | Exit.Failure cause -> failure (string cause) ""
 

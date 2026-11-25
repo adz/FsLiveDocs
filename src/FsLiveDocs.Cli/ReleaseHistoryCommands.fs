@@ -6,7 +6,7 @@ open System.Text.RegularExpressions
 open Axial
 open Axial.FileSystem
 open Axial.HttpClient
-open Axial.PlatformService
+open Axial.Configuration
 open Reified
 open Reified.SchemaDSL
 open FsLiveDocs.Core
@@ -119,9 +119,11 @@ module ReleaseHistoryCommands =
         // client-configured-once-then-paginated shape.
         let work =
             flow {
-                let! token =
-                    EnvironmentVariables.tryGet "GH_TOKEN"
-                    |> Flow.map (Option.filter (String.IsNullOrWhiteSpace >> not))
+                let! environment = Flow.env
+                let token =
+                    Config.tryFind "GH_TOKEN" environment.Config
+                    |> Result.defaultValue None
+                    |> Option.filter (String.IsNullOrWhiteSpace >> not)
 
                 let rec load page accumulated =
                     flow {

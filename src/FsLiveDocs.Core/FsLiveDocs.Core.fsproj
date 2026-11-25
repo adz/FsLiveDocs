@@ -49,14 +49,14 @@
     <PackageReference Include="FSharp.Formatting" Version="22.0.0" />
     <PackageReference Include="Markdig" Version="1.2.0" />
     <PackageReference Include="YamlDotNet" Version="17.1.0" />
-    <PackageReference Include="Axial" Version="0.9.1" />
-    <PackageReference Include="Axial.Process" Version="0.9.1" />
-    <PackageReference Include="Axial.Console" Version="0.9.1" />
-    <PackageReference Include="Axial.FileSystem" Version="0.9.1" />
-    <PackageReference Include="Axial.PlatformService" Version="0.9.1" />
-    <PackageReference Include="Axial.HttpClient" Version="0.9.1" />
-    <PackageReference Include="Reified.Constraint" Version="0.8.0" />
-    <PackageReference Include="Reified.Schema" Version="0.8.0" />
+    <PackageReference Include="Axial" Version="0.16.0" />
+    <PackageReference Include="Axial.Process" Version="0.16.0" />
+    <PackageReference Include="Axial.Console" Version="0.16.0" />
+    <PackageReference Include="Axial.FileSystem" Version="0.16.0" />
+    <PackageReference Include="Axial.HttpClient" Version="0.16.0" />
+    <PackageReference Include="Axial.Configuration" Version="0.16.0" />
+    <PackageReference Include="Reified.Constraint" Version="0.14.0" />
+    <PackageReference Include="Reified.Schema" Version="0.14.0" />
   </ItemGroup>
 
 </Project>

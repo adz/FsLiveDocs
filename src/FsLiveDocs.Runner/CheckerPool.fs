@@ -1,7 +1,6 @@
 namespace FsLiveDocs.Runner
 
 open Axial
-open Axial.Layers
 open FSharp.Compiler.CodeAnalysis
 
 /// A small, pooled set of live F# compiler checkers. Hides how they're provisioned and

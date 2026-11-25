@@ -15,7 +15,8 @@ module internal Git =
         let specification =
             Process.commandArgs "git" [ "rev-parse"; "HEAD" ]
             |> Process.workingDirectory workingDirectory
-            |> Process.capture
+            |> Process.captureAll
+            |> Process.toFlow
         let revision = Run.orFallback (specification |> Flow.map (fun result -> result.StdOut.Trim())) ""
         if System.String.IsNullOrWhiteSpace revision then
             invalidOp "Release capture requires a Git commit so the capsule can record source provenance."

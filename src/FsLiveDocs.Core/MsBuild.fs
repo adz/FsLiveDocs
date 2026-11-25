@@ -32,7 +32,8 @@ module MsBuild =
         let specification =
             Process.commandArgs "dotnet" ([ "msbuild"; fullPath ] @ arguments @ [ "-nologo" ])
             |> Process.workingDirectory (Path.GetDirectoryName(fullPath))
-            |> Process.capture
+            |> Process.captureAll
+            |> Process.toFlow
         match specification |> Flow.run LiveEnvironment.instance with
         | Exit.Success result -> JsonNode.Parse(result.StdOut).AsObject()
         | Exit.Failure(Cause.Fail(ProcessError.StageFailed stageFailure)) ->

@@ -31,10 +31,7 @@
 
   <ItemGroup>
     <PackageReference Include="FSharp.Compiler.Service" Version="43.12.201" />
-    <!-- Axial/Axial.Process/Axial.Console/Axial.FileSystem/Axial.PlatformService come transitively
-         from FsLiveDocs.Core, which owns the shared FsLiveDocs.Core.Effects module. Axial.Layers
-         is the one Axial package genuinely local to this project (CheckerPool.fs's pool). -->
-    <PackageReference Include="Axial.Layers" Version="0.9.1" />
+    <!-- Axial comes transitively from FsLiveDocs.Core, which owns the shared FsLiveDocs.Core.Effects module. -->
   </ItemGroup>
 
 </Project>
