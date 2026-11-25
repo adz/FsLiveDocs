@@ -16,6 +16,10 @@ module DocAnalysisCacheTests =
         startInfo.RedirectStandardOutput <- true
         startInfo.RedirectStandardError <- true
         startInfo.UseShellExecute <- false
+        // A reusable MSBuild node or build server would outlive the command holding its output pipes, and
+        // reading the output to the end would then wait for it.
+        startInfo.Environment["MSBUILDDISABLENODEREUSE"] <- "1"
+        startInfo.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] <- "0"
         for argument in arguments do startInfo.ArgumentList.Add argument
         use child = Diagnostics.Process.Start startInfo
         let output = child.StandardOutput.ReadToEnd()

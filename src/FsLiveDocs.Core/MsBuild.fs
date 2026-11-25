@@ -30,7 +30,8 @@ module MsBuild =
     /// so it matches on it directly rather than going through Run.orRaise's single-message form.
     let evaluate (fullPath: string) (arguments: string list) : JsonObject =
         let specification =
-            Process.commandArgs "dotnet" ([ "msbuild"; fullPath ] @ arguments @ [ "-nologo" ])
+            // A reusable MSBuild node would outlive this call holding its output pipes, and the run waits for them to close.
+            Process.commandArgs "dotnet" ([ "msbuild"; fullPath ] @ arguments @ [ "-nologo"; "-nodeReuse:false" ])
             |> Process.workingDirectory (Path.GetDirectoryName(fullPath))
             |> Process.captureAll
             |> Process.toFlow
