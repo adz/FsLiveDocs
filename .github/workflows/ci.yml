@@ -46,7 +46,8 @@ jobs:
         run: dotnet build FsLiveDocs.slnx --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test FsLiveDocs.slnx --configuration Release --no-build
+        # A test host that makes no progress for 10 minutes is killed and the hanging test is named.
+        run: dotnet test FsLiveDocs.slnx --configuration Release --no-build --blame-hang-timeout 10m --blame-hang-dump-type none
 
       - name: Verify documentation
         run: dotnet artifacts/bin/FsLiveDocs.Cli/release/livedocs.dll test --interactive false --banner false
